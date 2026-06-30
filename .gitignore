@@ -1,0 +1,44 @@
+# Personal data
+cv.md
+story-bank.md
+bullet-bank.md
+article-digest.md
+applications.md
+config/profile.yml
+CLAUDE.md
+data/job-status.json
+data/seen-jobs.json
+data/radar.json
+data/mock-sessions.json
+data/api-usage.json
+data/company-cache.json
+output/
+# LinkedIn research — instruction files tracked, personal data excluded
+linkedin-research/current_job.json
+linkedin-research/current_company.json
+linkedin-research/*.csv
+linkedin-research/*_connections.md
+linkedin-research/*_network_summary.md
+linkedin-research/*_research_notes.md
+batch/
+get-google-token.mjs
+handoff.md
+
+# Environment
+.env
+.env.local
+.env*.local
+
+# Dependencies
+node_modules/
+
+# Vercel
+.vercel/
+
+# Claude Code
+.claude/
+
+# OS
+.DS_Store
+**/.DS_Store
+Thumbs.db

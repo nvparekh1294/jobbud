@@ -1,0 +1,9 @@
+{
+  "name": "jobbud-api",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "mammoth": "^1.8.0",
+    "pdf-parse": "^1.1.1"
+  }
+}

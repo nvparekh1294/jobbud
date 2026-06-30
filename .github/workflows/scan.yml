@@ -1,0 +1,144 @@
+name: JobBud Job Scanner
+
+on:
+  # Scheduled runs are ACTIVE: the daily 6am UTC scan and Monday 9am UTC pipeline
+  # digest run automatically via the cron lines below.
+  schedule:
+    - cron: '0 14 * * *'   # Daily 2pm UTC / 7am PT (daily portal scan + reminders)
+    - cron: '0 9 * * 1'    # Every Monday 9am UTC (weekly pipeline digest)
+  workflow_dispatch:
+    inputs:
+      scan_mode:
+        description: 'Scan mode'
+        required: false
+        default: 'standard'
+        type: choice
+        options:
+          - standard
+          - full
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: jobbud-scan
+      cancel-in-progress: false   # queue a new trigger; never abort a scan mid-scoring
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'   # controls the scanner runtime — must stay 20, independent of the action wrapper versions above
+
+      - name: Cache node_modules
+        uses: actions/cache@v5
+        with:
+          path: node_modules
+          key: node-modules-${{ hashFiles('package-lock.json') }}
+          restore-keys: node-modules-
+
+      - name: Install dependencies
+        run: npm install
+        working-directory: .
+
+      - name: Restore seen-jobs cache
+        uses: actions/cache/restore@v5
+        with:
+          path: data/seen-jobs.json
+          key: seen-jobs-${{ github.run_id }}
+          restore-keys: |
+            seen-jobs-
+
+      - name: Restore company cache
+        uses: actions/cache/restore@v5
+        with:
+          path: data/company-cache.json
+          key: company-cache-${{ github.run_id }}
+          restore-keys: |
+            company-cache-
+
+      - name: Restore API usage cache
+        uses: actions/cache/restore@v5
+        with:
+          path: data/api-usage.json
+          key: api-usage-${{ github.run_id }}
+          restore-keys: |
+            api-usage-
+
+      - name: Run scanner
+        if: github.event.schedule != '0 9 * * 1'
+        env:
+          SCAN_MODE: standard
+          SCAN_SOURCES: portals   # Daily scan is portals-only; API sources (JSearch/Adzuna) run in weekly-api-scan.yml
+          RADAR_CADENCE: daily    # Include Company Radar (data/radar.json) companies set to 'daily'. The Monday 9am radar step below sets this to 'weekly'.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          VERCEL_URL: ${{ secrets.VERCEL_URL }}
+          DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: node scanner/index.mjs
+
+      - name: Run reminders
+        # Separated from scanner so a remind.mjs failure never marks the scan step failed.
+        # remind.mjs itself no longer calls process.exit(1), but || true is belt-and-suspenders.
+        if: github.event.schedule != '0 9 * * 1'
+        env:
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          VERCEL_URL: ${{ secrets.VERCEL_URL }}
+          DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: node scanner/remind.mjs || true
+
+      - name: Run weekly Company Radar scan (Mondays 9am UTC, before digest)
+        # Closes the weekly-cadence gap: the daily scan above only includes radar
+        # companies set to scanFrequency 'daily'. This step scans the 'weekly' ones
+        # and runs right before the digest, so any new weekly-radar jobs land in the
+        # same Monday digest. SCAN_SOURCES=portals also re-sweeps portals.yml (zero
+        # API quota, fully deduped); RADAR_CADENCE=weekly limits radar to weekly companies.
+        if: github.event.schedule == '0 9 * * 1'
+        env:
+          SCAN_MODE: standard
+          SCAN_SOURCES: portals
+          RADAR_CADENCE: weekly
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          VERCEL_URL: ${{ secrets.VERCEL_URL }}
+          DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: node scanner/index.mjs
+
+      - name: Run weekly digest (Mondays 9am UTC)
+        # weeklyDigest.mjs itself no longer calls process.exit(1), but || true is belt-and-suspenders.
+        if: github.event.schedule == '0 9 * * 1'
+        env:
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          VERCEL_URL: ${{ secrets.VERCEL_URL }}
+          DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: node scanner/weeklyDigest.mjs || true
+
+      - name: Save seen-jobs cache
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: data/seen-jobs.json
+          key: seen-jobs-${{ github.run_id }}
+
+      - name: Save company cache
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: data/company-cache.json
+          key: company-cache-${{ github.run_id }}
+
+      - name: Save API usage cache
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: data/api-usage.json
+          key: api-usage-${{ github.run_id }}

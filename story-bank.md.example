@@ -1,0 +1,62 @@
+# Story Bank
+<!--
+STORY FORMAT GUIDE:
+Each story follows the STAR+R framework: Situation, Action, Result, plus a 30-second version.
+
+Fields:
+- ### [Story Title] — descriptive, used for retrieval
+- **Competencies:** tags for skills this story demonstrates (e.g. [leadership] [conflict] [strategy])
+- **Role types:** which job types this story is most relevant for
+- **Situation:** the context and challenge, written in first person
+- **Action:** what you specifically did — own it, do not hedge
+- **Result:** the outcome, with metrics where possible
+- **30-second version:** a compressed version for screening calls
+
+Copy this file to story-bank.md and replace the examples below with your real stories.
+story-bank.md is gitignored and will never be committed.
+-->
+
+---
+
+### Leading a Cross-Functional Product Launch Under a Tight Deadline
+
+**Competencies:** [execution] [leadership] [cross-functional] [communication]
+**Role types:** [product] [ops] [chief-of-staff] [general-management]
+
+**Situation:** At Acme Corp, our flagship product was scheduled for a major release in Q4. Six weeks before launch, the engineering lead flagged a critical dependency on a third-party API that had not been scoped into the timeline. The sales team had already begun demoing the feature to enterprise prospects.
+
+**Action:** I called an immediate cross-functional sync with engineering, sales, and legal to understand the full blast radius. I negotiated a 72-hour extension with our top two enterprise prospects by reframing the delay as a stability investment. In parallel, I worked with the engineering lead to identify a simplified fallback that could ship on time, and I personally rewrote the external-facing release notes to accurately reflect the scope change without alarming customers.
+
+**Result:** We shipped on the original date with the fallback implementation. Neither enterprise prospect churned. Three months later, the full feature shipped and both converted to paid contracts worth $420k combined ARR. The cross-functional sync format became a standing weekly ritual adopted by the whole product org.
+
+**30-second version:** At Acme, an undiscoped API dependency threatened to blow a critical product launch six weeks out. I ran a rapid cross-functional sync, bought time with key prospects by repositioning the delay, and found a fallback path that let us ship on time. Both enterprise accounts converted, and the incident became the foundation for a standing cross-functional ritual that improved coordination across the org.
+
+---
+
+### Rebuilding Trust After a Team Communication Breakdown
+
+**Competencies:** [leadership] [conflict] [culture] [management]
+**Role types:** [ops] [chief-of-staff] [general-management] [people-management]
+
+**Situation:** I inherited a team of four at Globex Inc where two senior members had developed a pattern of going directly to the VP to escalate issues, bypassing the team's agreed process. This was creating confusion and eroding trust across the group.
+
+**Action:** I had direct one-on-ones with both individuals first — not to reprimand, but to understand their reasoning. One had lost confidence that team-level decisions would be acted on quickly. The other had a longstanding relationship with the VP that predated my tenure. I addressed the first by introducing a lightweight weekly decision log that was shared with the VP, making team-level decisions visible without creating bureaucracy. For the second, I invited the VP to briefly join a monthly team retrospective so the relationship channel became part of the official structure rather than a workaround.
+
+**Result:** Direct escalations dropped to near zero within two months. The decision log became a tool the whole team valued for context-setting in cross-team meetings. Both individuals remained strong contributors and one was later promoted.
+
+**30-second version:** At Globex, two senior team members were consistently bypassing team process to escalate directly to the VP. Rather than treating it as a policy violation, I diagnosed the underlying cause for each person and addressed it structurally — a decision log for one, a formalized VP touchpoint for the other. Escalations dropped off, both people stayed engaged, and one was promoted.
+
+---
+
+### Identifying and Scoping a New Revenue Opportunity
+
+**Competencies:** [strategy] [initiative] [analysis] [communication]
+**Role types:** [strategy] [biz-ops] [corpdev] [product] [chief-of-staff]
+
+**Situation:** At Initech, our core product served mid-market companies but the sales team kept fielding inbound interest from enterprise accounts with fundamentally different needs. There was no formal product track or pricing for them, and these deals kept stalling or closing at heavy discounts.
+
+**Action:** I pulled 18 months of CRM data to quantify the pattern, then interviewed six of the stalled accounts to understand their specific objections. I synthesized the findings into a two-page brief that identified three enterprise-specific requirements: SSO, audit logs, and dedicated SLAs. I presented the brief to the CEO and CPO with a recommended sequencing for adding these capabilities and a rough revenue model showing $2.1M in ARR opportunity from the existing pipeline alone.
+
+**Result:** The brief became the basis for a formal enterprise tier, which launched eight months later. Within the first year, it contributed $1.6M in new ARR. My analysis was cited in the board deck for our Series C.
+
+**30-second version:** At Initech, the sales team kept losing enterprise deals but nobody had mapped why. I pulled CRM data, ran customer interviews, and identified three capability gaps blocking the segment. My brief to the CEO turned into the product roadmap for a new enterprise tier that drove $1.6M ARR in year one and was cited in the Series C board deck.

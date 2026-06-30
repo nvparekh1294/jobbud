@@ -1,0 +1,337 @@
+# Portal Scanner Configuration
+# Last verified: May 2026
+#
+# ats:         greenhouse | ashby | lever | workday | custom
+# ats_id:      slug used by the ATS (e.g. boards-api.greenhouse.io/v1/boards/{ats_id}/jobs)
+# keywords:    if non-empty, only roles whose title contains ≥1 keyword are returned
+#              (use for broad companies like Google, Meta, Microsoft to avoid noise)
+# stealth:     true = skip this company entirely (no public ATS yet)
+# category:    vc | ai_lab | tech | robotics — informational only
+
+companies:
+
+  # ── Venture Capital ──────────────────────────────────────────────────────────
+
+  - name: "Sequoia Capital"
+    careers_url: "https://jobs.ashbyhq.com/sequoia"
+    ats: "ashby"
+    ats_id: "sequoia"
+    keywords: []
+    stealth: false
+    category: "vc"
+
+  - name: "Thrive Capital"
+    careers_url: "https://jobs.ashbyhq.com/thrivecapital"
+    ats: "ashby"
+    ats_id: "thrivecapital"
+    keywords: []
+    stealth: false
+    category: "vc"
+
+  - name: "First Round Capital"
+    careers_url: "https://jobs.ashbyhq.com/firstround"
+    ats: "ashby"
+    ats_id: "firstround"
+    keywords: []
+    stealth: false
+    category: "vc"
+
+  - name: "Benchmark Capital"
+    careers_url: "https://www.benchmark.com"
+    ats: "custom"
+    ats_id: null
+    keywords: []
+    stealth: false
+    category: "vc"
+    # Very small fund (~8 GPs), rarely hires publicly — custom scrape unlikely to find roles
+
+  - name: "Creandum"
+    careers_url: "https://careers.creandum.com/jobs"
+    ats: "custom"
+    ats_id: null
+    keywords: []
+    stealth: false
+    category: "vc"
+
+  - name: "Headline"
+    careers_url: "https://jobs.ashbyhq.com/headline"
+    ats: "ashby"
+    ats_id: "headline"
+    keywords: []
+    stealth: false
+    category: "vc"
+
+  - name: "Eclipse Ventures"
+    careers_url: "https://eclipse.vc/careers"
+    ats: "custom"
+    jsRendered: true
+    ats_id: null
+    keywords: []
+    stealth: false
+    category: "vc"
+
+  - name: "Boldstart Ventures"
+    careers_url: "https://boldstart.vc"
+    ats: "custom"
+    ats_id: null
+    keywords: []
+    stealth: false
+    category: "vc"
+    # Very small fund, no public ATS — custom scrape may return 0
+
+  - name: "Menlo Ventures"
+    careers_url: "https://jobs.ashbyhq.com/menlo"
+    ats: "ashby"
+    ats_id: "menlo"
+    keywords: []
+    stealth: false
+    category: "vc"
+
+  - name: "Primary Venture Partners"
+    careers_url: "https://jobs.ashbyhq.com/primary"
+    ats: "ashby"
+    ats_id: "primary"
+    keywords: []
+    stealth: false
+    category: "vc"
+
+  - name: "GV"
+    careers_url: "https://gv.com/jobs"
+    ats: "custom"
+    ats_id: null
+    keywords: []
+    stealth: false
+    category: "vc"
+
+  # ── Frontier AI Labs ─────────────────────────────────────────────────────────
+
+  - name: "OpenAI"
+    careers_url: "https://jobs.ashbyhq.com/openai"
+    ats: "ashby"
+    ats_id: "openai"
+    keywords: []
+    stealth: false
+    category: "ai_lab"
+
+  - name: "Anthropic"
+    careers_url: "https://boards-api.greenhouse.io/v1/boards/anthropic/jobs"
+    ats: "greenhouse"
+    ats_id: "anthropic"
+    keywords: []
+    stealth: false
+    category: "ai_lab"
+
+  - name: "Thinking Machines Lab"
+    careers_url: "https://boards-api.greenhouse.io/v1/boards/thinkingmachines/jobs"
+    ats: "greenhouse"
+    ats_id: "thinkingmachines"
+    keywords: []
+    stealth: false
+    category: "ai_lab"
+
+  - name: "SSI"
+    careers_url: "https://jobs.ashbyhq.com/ssi"
+    ats: "ashby"
+    ats_id: "ssi"
+    keywords: []
+    stealth: false
+    category: "ai_lab"
+
+  - name: "World Labs"
+    careers_url: "https://boards-api.greenhouse.io/v1/boards/worldlabs/jobs"
+    ats: "greenhouse"
+    ats_id: "worldlabs"
+    keywords: []
+    stealth: false
+    category: "ai_lab"
+
+  - name: "Physical Intelligence"
+    careers_url: "https://jobs.ashbyhq.com/physicalintelligence"
+    ats: "ashby"
+    ats_id: "physicalintelligence"
+    keywords: []
+    stealth: false
+    category: "ai_lab"
+
+  - name: "Skild AI"
+    careers_url: "https://www.skild.ai/careers"
+    ats: "custom"
+    jsRendered: true
+    ats_id: null
+    keywords: []
+    stealth: false
+    category: "ai_lab"
+
+  - name: "Project Prometheus"
+    careers_url: null
+    ats: "custom"
+    ats_id: null
+    keywords: []
+    stealth: true  # Stealth — no public careers page yet. Check monthly.
+    category: "ai_lab"
+
+  # ── Big Tech (AI strategy/ops roles only) ────────────────────────────────────
+
+  - name: "Google DeepMind"
+    careers_url: "https://deepmind.google/careers/"
+    ats: "custom"
+    jsRendered: true
+    ats_id: null
+    keywords: ["strategy", "operations", "business", "corporate", "chief of staff", "partnerships", "growth", "head of"]
+    stealth: false
+    category: "tech"
+
+  - name: "Google X"
+    careers_url: "https://x.company/careers"
+    ats: "custom"
+    jsRendered: true
+    ats_id: null
+    keywords: ["strategy", "operations", "business", "corporate", "chief of staff", "partnerships", "growth", "head of"]
+    stealth: false
+    category: "tech"
+
+  - name: "Waymo"
+    careers_url: "https://careers.withwaymo.com"
+    ats: "greenhouse"
+    ats_id: "waymo"
+    keywords: ["strategy", "operations", "business", "corporate", "finance", "partnerships", "growth", "chief of staff"]
+    stealth: false
+    category: "tech"
+
+  - name: "Meta"
+    careers_url: "https://www.metacareers.com/jobs/"
+    ats: "custom"
+    jsRendered: true
+    ats_id: null
+    keywords: ["strategy", "operations", "business", "corporate", "ai", "chief of staff", "partnerships", "growth", "head of"]
+    stealth: false
+    category: "tech"
+
+  - name: "Microsoft"
+    careers_url: "https://jobs.careers.microsoft.com/global/en/search"
+    ats: "custom"
+    jsRendered: true
+    ats_id: null
+    keywords: ["strategy", "operations", "business", "corporate", "ai", "chief of staff", "partnerships", "growth", "head of"]
+    stealth: false
+    category: "tech"
+
+  - name: "NVIDIA"
+    careers_url: "https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite"
+    ats: "workday"
+    workday_tenant: "nvidia"
+    workday_site: "NVIDIAExternalCareerSite"
+    keywords: ["strategy", "operations", "business", "corporate", "chief of staff", "partnerships", "growth", "head of"]
+    stealth: false
+    category: "tech"
+
+  # ── Enterprise Software & Fintech ────────────────────────────────────────────
+
+  - name: "Databricks"
+    careers_url: "https://boards-api.greenhouse.io/v1/boards/databricks/jobs"
+    ats: "greenhouse"
+    ats_id: "databricks"
+    keywords: []
+    stealth: false
+    category: "tech"
+
+  - name: "Rippling"
+    careers_url: "https://www.rippling.com/careers"
+    ats: "custom"
+    jsRendered: true
+    ats_id: null
+    keywords: []
+    stealth: false
+    category: "tech"
+
+  - name: "Ramp"
+    careers_url: "https://jobs.ashbyhq.com/ramp"
+    ats: "ashby"
+    ats_id: "ramp"
+    keywords: []
+    stealth: false
+    category: "tech"
+
+  # ── AI-Native Startups ───────────────────────────────────────────────────────
+
+  - name: "Rhoda AI"
+    careers_url: "https://jobs.ashbyhq.com/rhoda-ai"
+    ats: "ashby"
+    ats_id: "rhoda-ai"
+    keywords: []
+    stealth: false
+    category: "ai_lab"
+
+  - name: "Sunday AI"
+    careers_url: "https://jobs.ashbyhq.com/sunday"
+    ats: "ashby"
+    ats_id: "sunday"
+    keywords: []
+    stealth: false
+    category: "ai_lab"
+
+  # ── Robotics & Autonomous Systems ────────────────────────────────────────────
+
+  - name: "Zipline"
+    careers_url: "https://boards-api.greenhouse.io/v1/boards/flyzipline/jobs"
+    ats: "greenhouse"
+    ats_id: "flyzipline"
+    keywords: []
+    stealth: false
+    category: "robotics"
+
+  - name: "FieldAI"
+    careers_url: "https://www.fieldai.com/careers"
+    ats: "custom"
+    ats_id: null
+    keywords: []
+    stealth: false
+    category: "robotics"
+
+  - name: "Bedrock Robotics"
+    careers_url: "https://jobs.ashbyhq.com/bedrock-robotics"
+    ats: "ashby"
+    ats_id: "bedrock-robotics"
+    keywords: []
+    stealth: false
+    category: "robotics"
+
+  - name: "Mind Robotics"
+    careers_url: "https://jobs.ashbyhq.com/mindrobotics"
+    ats: "ashby"
+    ats_id: "mindrobotics"
+    keywords: []
+    stealth: false
+    category: "robotics"
+
+  - name: "Carbon Robotics"
+    careers_url: "https://boards-api.greenhouse.io/v1/boards/carbonrobotics/jobs"
+    ats: "greenhouse"
+    ats_id: "carbonrobotics"
+    keywords: []
+    stealth: false
+    category: "robotics"
+
+  - name: "Mytra"
+    careers_url: "https://mytra.ai/careers"
+    ats: "custom"
+    ats_id: null
+    keywords: []
+    stealth: false
+    category: "robotics"
+
+  - name: "Mesh Optical"
+    careers_url: "https://boards-api.greenhouse.io/v1/boards/meshopticaltechnologies/jobs"
+    ats: "greenhouse"
+    ats_id: "meshopticaltechnologies"
+    keywords: []
+    stealth: false
+    category: "robotics"
+
+  - name: "Foundry Robotics"
+    careers_url: "https://jobs.ashbyhq.com/foundry-robotics"
+    ats: "ashby"
+    ats_id: "foundry-robotics"
+    keywords: []
+    stealth: false
+    category: "robotics"

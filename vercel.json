@@ -1,0 +1,39 @@
+{
+  "cleanUrls": true,
+  "rewrites": [
+    { "source": "/dashboard",  "destination": "/dashboard/index.html" },
+    { "source": "/dashboard/", "destination": "/dashboard/index.html" }
+  ],
+  "env": {
+    "ANTHROPIC_API_KEY": {
+      "description": "Your Anthropic API key. Required.",
+      "required": true
+    },
+    "GH_TOKEN": {
+      "description": "GitHub personal access token with repo scope. Required.",
+      "required": true
+    },
+    "GH_REPO": {
+      "description": "Your GitHub repo in the format username/jobbud. Required.",
+      "required": true
+    },
+    "DASHBOARD_PASSWORD": {
+      "description": "Optional password to gate the dashboard. Leave blank to disable.",
+      "required": false
+    }
+  },
+  "functions": {
+    "api/action.js": {
+      "maxDuration": 120
+    },
+    "api/add-job.js": {
+      "maxDuration": 60
+    },
+    "api/jobs.js": {
+      "maxDuration": 10
+    },
+    "api/coach.js": {
+      "maxDuration": 120
+    }
+  }
+}

@@ -1,0 +1,87 @@
+# config/profile.yml.example
+# Copy this file to config/profile.yml and fill in your own values.
+# config/profile.yml is gitignored — it will never be committed.
+
+name: Jane Smith  # Your full name
+
+location: San Francisco, CA  # Your current city. Include remote/relocation preferences.
+# Example: "New York, NY — open to relocation; target cities are NYC, SF; remote preferred"
+
+target_roles: |
+  # Describe the roles you are targeting. Be specific about function, seniority, and scope.
+  # Example:
+  Senior Product Manager, Director of Product, Head of Product (B2B SaaS)
+  Open to VP-level at Series B+ companies.
+  Not interested in consumer or gaming.
+
+industries_of_interest: |
+  # List industries you want to work in, with any conditions.
+  # Example:
+  Highest conviction:
+  - Developer tools and infrastructure
+  - AI-native SaaS
+  Interested with conditions:
+  - Enterprise software — only at companies with strong growth signal
+  - Fintech — high bar, must be genuinely differentiated
+
+industries_to_avoid: |
+  # Industries or verticals you want to filter out entirely.
+  # Example: No ad-tech. No crypto unless applied to real-world use case.
+
+company_types: |
+  # What kinds of companies do you want to work at?
+  # Example: Tier-one VC-backed startups preferred. Open to public companies in AI/infrastructure.
+  # Venture roles: top-tier firms only.
+
+company_size_preference: |
+  # Minimum funding stage, headcount range, or other size preferences.
+  # Example: Series A minimum. Pre-seed only with exceptional founder signal.
+
+compensation_target: |
+  # Your target compensation range and structure.
+  # Be specific: base, total cash, equity expectations, bonus.
+  # Example:
+  # Base: $180k+ target; show all roles at $150k+
+  # Equity: required at early stage
+  # Bonus: nice to have
+
+work_arrangement: Remote preferred, open to hybrid  # Remote / Hybrid / In-office
+
+years_of_experience: 8 years  # Approximate total years of relevant experience
+
+core_skills: |
+  # Your top 5-8 skills, written as you would describe them to a recruiter.
+  # Example:
+  - Product strategy and roadmap ownership
+  - Stakeholder alignment and executive communication
+  - Data-driven prioritization (SQL, analytics tools)
+  - Cross-functional leadership (eng, design, marketing, sales)
+  - 0-to-1 product development
+
+education: BS Computer Science, State University — 2016  # Degree, institution, graduation year
+
+career_history_summary: |
+  # 3-5 sentence narrative of your career arc. This feeds into cover letters and evaluations.
+  # Example:
+  Started in software engineering, transitioned to product after leading a 0-to-1 internal tool
+  that became a core product line. Spent 5 years at mid-stage startups (Series B–D), most recently
+  as lead PM for an AI-powered analytics platform. Looking for a senior IC or first-line management
+  role where I can combine technical depth with product strategy.
+
+current_situation: Actively searching, available immediately  # Describe your availability and urgency
+
+deal_breakers: |
+  # Hard stops — these disqualify a role automatically regardless of other signals.
+  # Example:
+  - Roles that require relocation to cities not on my list
+  - Pure engineering roles (I am a PM, not an engineer)
+  - Companies with visible founder misconduct or toxic culture signals
+  - Comp below $150k base
+
+nice_to_haves: |
+  # Positive signals that increase a job's score but are not required.
+  # Example:
+  - Reports directly to CEO or CPO
+  - Strong engineering culture
+  - Remote-first team
+  - Equity with real upside potential

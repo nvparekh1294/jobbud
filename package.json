@@ -1,0 +1,19 @@
+{
+  "name": "jobbud-scanner",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "scan": "node scanner/index.mjs",
+    "scan-standard": "SCAN_MODE=standard node scanner/index.mjs",
+    "scan-full": "SCAN_MODE=full node scanner/index.mjs",
+    "dry-run": "DRY_RUN=true node scanner/index.mjs"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.56.0",
+"pdf-parse": "^1.1.1",
+    "yaml": "^2.9.0"
+  }
+}

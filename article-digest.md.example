@@ -1,0 +1,29 @@
+# Article Digest
+<!--
+ARTICLE DIGEST FORMAT GUIDE:
+This file gives the AI context about your professional interests,
+sector knowledge, and the themes you follow. It is used to
+personalize outreach drafts and application packages.
+
+This file is optional. Without it, the AI generates outreach
+and application content without sector or interest context.
+
+Copy this file to article-digest.md and replace the placeholder
+content with your own. article-digest.md is gitignored and will
+never be committed.
+-->
+
+## Sectors I Follow
+- AI infrastructure and developer tools
+- Climate tech and energy transition
+- Fintech and financial infrastructure
+
+## Themes I Find Interesting
+- The intersection of AI and knowledge work
+- How frontier models are changing software development
+- Vertical SaaS displacing horizontal incumbents
+
+## Recent Reading
+- [Add articles, papers, or topics you have been following]
+- [These help the AI ground outreach in genuine shared interests]
+- [rather than generic flattery]

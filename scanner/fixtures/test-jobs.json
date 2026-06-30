@@ -1,0 +1,205 @@
+[
+  {
+    "_fingerprint": "dry-run-001",
+    "source": "fixture",
+    "title": "Head of Strategy & Operations",
+    "company": "Aperture AI",
+    "location": "San Francisco, CA",
+    "isRemote": false,
+    "description": "Aperture AI is an applied AI company building tools for modern teams. We are seeking a Head of Strategy & Operations to serve as a key thought partner to our CEO and leadership team. In this role, you will drive company-wide strategic planning, own our OKR process, and lead cross-functional initiatives that span research, product, and go-to-market. You will be responsible for identifying and eliminating organizational bottlenecks, supporting executive recruiting, and ensuring our most important programs land with excellence. This is a high-visibility, high-impact role requiring 8+ years of experience in strategy, operations, or chief of staff functions at a high-growth technology company. Experience with AI or machine learning organizations strongly preferred. Compensation: $175,000-$215,000 base plus equity.",
+    "url": "https://boards.greenhouse.io/apertureai/jobs/12345",
+    "score": 4.5,
+    "whyFit": [
+      "Directly matches a background in CEO-adjacent strategic operating roles at a high-growth company",
+      "OKR ownership aligns with experience building goal-setting systems from scratch at scale",
+      "AI-native company context suits a candidate with operating experience in technology"
+    ],
+    "watchOuts": [
+      "A well-known company like this likely attracts strong internal candidates"
+    ],
+    "recommendedAction": "Apply now",
+    "seniority": "good fit",
+    "jobType": "operating",
+    "oneLineSummary": "Head of Strategy & Ops role at Aperture AI - CEO partnership, OKR ownership, cross-functional leadership.",
+    "companyDescription": "Aperture AI is a growing applied AI company building productivity tools; well-funded and scaling.",
+    "aiExposureRisk": "low",
+    "aiExposureRationale": "Role is centered on judgment, cross-functional coordination, and CEO partnership - highly resistant to AI displacement.",
+    "fundingSnapshot": {
+      "round": "Series E",
+      "amount": "$500M",
+      "investors": ["Harbor Capital", "Northgate Partners", "Summit Ventures"],
+      "sourceUrl": "https://example.com/companies/aperture-ai",
+      "source": "fixture"
+    },
+    "salary": { "min": 175000, "max": 215000, "currency": "USD", "period": "annual" }
+  },
+  {
+    "_fingerprint": "dry-run-002",
+    "source": "fixture",
+    "title": "VP of Business Operations",
+    "company": "Lumen Labs",
+    "location": "New York, NY",
+    "isRemote": false,
+    "description": "Lumen Labs is building open-weight large language models for developers. As VP of Business Operations, you will own our North America operational infrastructure, scaling our go-to-market motion, enterprise sales operations, and corporate development function. You will work directly with our CEO and US leadership to define priorities and ensure execution. Key responsibilities include: driving annual planning, owning our board-level reporting cadence, leading M&A pipeline evaluation and diligence, and building the operational backbone for a rapidly scaling AI company. We're looking for someone with 7-12 years of experience combining corporate development or finance with operating experience at a high-growth tech company. Strong financial modeling and strategic analysis skills required. NYC-based preferred with occasional HQ travel. Base $190,000-$240,000 plus equity.",
+    "url": "https://jobs.lever.co/lumenlabs/vp-biz-ops-nyc",
+    "score": 4.2,
+    "whyFit": [
+      "Combines analytical rigor with hands-on operating experience - a hybrid background this role appears to value",
+      "M&A pipeline and diligence work maps to a background spanning deal evaluation and corporate development",
+      "Board-level reporting and CEO partnership aligns with prior operating responsibilities at a high-growth company"
+    ],
+    "watchOuts": [
+      "Occasional HQ travel requirement may add friction",
+      "Competitive fundraising environment - equity value less certain than larger peers"
+    ],
+    "recommendedAction": "Apply now",
+    "seniority": "good fit",
+    "jobType": "operating",
+    "oneLineSummary": "VP BizOps at Lumen Labs NYC - CEO partnership, M&A, board reporting, scaling North America operations.",
+    "companyDescription": "Lumen Labs is an AI lab building competitive open-weight LLMs and commercial API products.",
+    "aiExposureRisk": "low",
+    "aiExposureRationale": "VP-level operations role requiring M&A judgment and stakeholder management - well-insulated from AI automation.",
+    "fundingSnapshot": {
+      "round": "Series B",
+      "amount": "$300M",
+      "investors": ["Northgate Partners", "Evergreen Growth", "Lattice Capital"],
+      "sourceUrl": "https://example.com/companies/lumen-labs",
+      "source": "fixture"
+    },
+    "salary": { "min": 190000, "max": 240000, "currency": "USD", "period": "annual" }
+  },
+  {
+    "_fingerprint": "dry-run-003",
+    "source": "fixture",
+    "title": "Director of Strategic Finance",
+    "company": "Vantage AI",
+    "location": "San Francisco, CA",
+    "isRemote": false,
+    "description": "Vantage AI is redefining search through conversational AI. We're hiring a Director of Strategic Finance to partner closely with our CFO and CEO on long-range financial planning, investor relations support, corporate development, and strategic analysis. You will own our financial model, build board materials, evaluate potential M&A and partnership opportunities, and support our next fundraising process. This is a highly visible role at one of the fastest-growing AI companies in the world. Requirements: 6-10 years of experience in finance or strategic operations at a high-growth technology company. Strong financial modeling skills essential. Experience building financial infrastructure from scratch at a scaling company preferred. Compensation: $185,000-$230,000 base plus equity.",
+    "url": "https://jobs.ashbyhq.com/vantageai/director-strategic-finance",
+    "score": 3.8,
+    "whyFit": [
+      "Financial modeling depth from a finance and strategy background is directly applicable",
+      "CFO partnership and board materials experience aligns with prior operating responsibilities",
+      "M&A and fundraising support aligns with prior corporate development and deal work"
+    ],
+    "watchOuts": [
+      "Comp floor may be below target depending on the candidate's expectations - worth negotiating",
+      "Role is narrower than ideal; primarily finance-scoped vs. a full BizOps mandate"
+    ],
+    "recommendedAction": "Apply with tailored resume",
+    "seniority": "good fit",
+    "jobType": "operating",
+    "oneLineSummary": "Director of Strategic Finance at Vantage AI - CFO partnership, M&A, fundraising support, financial modeling.",
+    "companyDescription": "Vantage AI is a fast-growing AI search company known for its conversational answer engine, backed by top-tier investors.",
+    "aiExposureRisk": "medium",
+    "aiExposureRationale": "Strategic finance roles have growing AI-assisted components for modeling and reporting, though judgment and relationships remain human.",
+    "fundingSnapshot": {
+      "round": "Series B",
+      "amount": "$350M",
+      "investors": ["Northgate Partners", "Crestline Ventures", "Pinnacle Growth"],
+      "sourceUrl": "https://example.com/companies/vantage-ai",
+      "source": "fixture"
+    },
+    "salary": { "min": 185000, "max": 230000, "currency": "USD", "period": "annual" }
+  },
+  {
+    "_fingerprint": "dry-run-004",
+    "source": "fixture",
+    "title": "Chief of Staff to CEO",
+    "company": "Beacon AI",
+    "location": "New York, NY",
+    "isRemote": true,
+    "description": "Beacon AI is building enterprise AI infrastructure for the world's leading companies. We are looking for a strategic Chief of Staff to the CEO to help scale our company through the next phase of growth. You will serve as a force multiplier for the CEO - running special projects, driving operating cadence, managing board and investor relationships, and acting as a trusted advisor across all major decisions. Key areas of ownership: company OKRs, executive team communications, M&A and strategic partnerships, and organizational design. This role requires someone who thrives in ambiguity, operates with extreme discretion, and can move from strategy to execution seamlessly. 7+ years of experience in consulting, operations, or leadership required. Remote-first with quarterly travel. Compensation: $170,000-$210,000 base plus equity.",
+    "url": "https://jobs.lever.co/beaconai/chief-of-staff",
+    "score": 3.6,
+    "whyFit": [
+      "CEO-adjacent scope and OKR ownership aligns with prior strategic operating experience",
+      "M&A and strategic partnership work maps to a corporate development background",
+      "Remote-first is a strong fit"
+    ],
+    "watchOuts": [
+      "Comp floor is below target - negotiate up or pass",
+      "Crowded enterprise AI space; trajectory less certain than larger labs"
+    ],
+    "recommendedAction": "Investigate further",
+    "seniority": "good fit",
+    "jobType": "operating",
+    "oneLineSummary": "Chief of Staff at Beacon AI - CEO partnership, OKRs, M&A, org design at a Series C enterprise AI company.",
+    "companyDescription": "Beacon AI builds large language model APIs and enterprise AI products for large enterprises.",
+    "aiExposureRisk": "low",
+    "aiExposureRationale": "Chief of Staff role is fundamentally about CEO judgment and relationships - highly resistant to AI displacement.",
+    "fundingSnapshot": {
+      "round": "Series C",
+      "amount": "$260M",
+      "investors": ["Meridian Global", "Cloudline Ventures", "Index Peak"],
+      "sourceUrl": "https://example.com/companies/beacon-ai",
+      "source": "fixture"
+    },
+    "salary": { "min": 170000, "max": 210000, "currency": "USD", "period": "annual" }
+  },
+  {
+    "_fingerprint": "dry-run-005",
+    "source": "fixture",
+    "title": "Principal, AI & Venture Investments",
+    "company": "Meridian Ventures",
+    "location": "San Francisco, CA",
+    "isRemote": false,
+    "description": "Meridian Ventures is seeking a Principal to join our AI and technology investment team. In this role, you will source and evaluate investment opportunities across Series A through C stages, with a particular focus on AI infrastructure, applied AI, and enterprise software. You will build relationships with founders well ahead of financing events, conduct deep market research, and support portfolio companies as an active board observer. Strong preference for candidates with prior investing experience at a venture or growth equity fund and operational experience at an AI or enterprise technology company. Carry participation and co-investment rights included. Compensation: $230,000-$330,000 base plus carry.",
+    "url": "https://boards.greenhouse.io/meridianventures/principal-ai-ventures",
+    "score": 3.7,
+    "whyFit": [
+      "A background in technology investing with sourcing and board observer experience is a strong match",
+      "Operating experience at an AI company adds a differentiated operator lens that most investing candidates lack",
+      "AI sector focus aligns directly with current domain expertise and operating context"
+    ],
+    "watchOuts": [
+      "Top-tier funds run a long, rigorous process",
+      "Carry timeline is long; financial upside is back-loaded"
+    ],
+    "recommendedAction": "Apply now",
+    "seniority": "good fit",
+    "jobType": "investing",
+    "oneLineSummary": "Principal at Meridian Ventures - AI and enterprise investing, Series A-C, board observer role, carry-included comp.",
+    "companyDescription": "Meridian Ventures is a venture capital firm with a portfolio spanning consumer, enterprise, and AI companies.",
+    "aiExposureRisk": "low",
+    "aiExposureRationale": "Investing is fundamentally about founder judgment and pattern recognition - AI tools augment rather than replace the core work.",
+    "fundingSnapshot": null,
+    "salary": { "min": 230000, "max": 330000, "currency": "USD", "period": "annual" }
+  },
+  {
+    "_fingerprint": "dry-run-006",
+    "source": "fixture",
+    "title": "COO",
+    "company": "Stealth AI Company",
+    "location": "Remote",
+    "isRemote": true,
+    "description": "A well-funded stealth AI company backed by top-tier investors is looking for a founding COO to scale operations from 30 to 150 employees over the next 18 months. You will own all non-product functions including recruiting, finance, legal, and go-to-market. You will be the CEO's primary operating partner and will have significant equity as an early executive. This is a rare opportunity to join at the Series A stage with a strong founding team and existing traction. Relevant experience: prior COO, Head of Operations, or Chief of Staff experience at a high-growth startup, combined with strong financial acumen and comfort with ambiguity. Compensation: $175,000-$235,000 base plus 0.5-1.5% equity.",
+    "url": null,
+    "score": 4.1,
+    "whyFit": [
+      "Founding COO scope matches a background built around owning operating functions end-to-end",
+      "CEO operating partner role aligns with prior responsibilities at a high-growth company",
+      "Strong equity and early-stage upside potential"
+    ],
+    "watchOuts": [
+      "Stealth - no public information to validate company quality or founder backgrounds",
+      "No URL available - cannot review role details before actioning"
+    ],
+    "recommendedAction": "Investigate further",
+    "seniority": "good fit",
+    "jobType": "operating",
+    "oneLineSummary": "Founding COO at stealth AI company - CEO partnership, scaling 30 to 150 people, strong equity.",
+    "companyDescription": "Well-funded stealth AI company at Series A with existing traction and a top-tier investor syndicate.",
+    "aiExposureRisk": "low",
+    "aiExposureRationale": "COO at an early-stage startup is almost entirely relationship, judgment, and execution - not automatable.",
+    "fundingSnapshot": {
+      "round": "Series A",
+      "amount": null,
+      "investors": [],
+      "sourceUrl": null,
+      "skip": true
+    },
+    "salary": { "min": 175000, "max": 235000, "currency": "USD", "period": "annual" }
+  }
+]

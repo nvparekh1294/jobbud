@@ -1,0 +1,98 @@
+name: JobBud Weekly API Scan
+
+# API-only scan (JSearch + Adzuna). The daily scan.yml is portals-only and runs no
+# API calls, so APIs only burn quota here, once a week. Feeds the same two-stage
+# scoring + persist + digest pipeline (scanner/index.mjs) as the daily scan.
+
+on:
+  # STAGED BUT OFF pending a clean manual verification run — mirrors scan.yml.
+  # Uncomment to enable the weekly Monday 6am UTC API scan.
+  # schedule:
+  #   - cron: '0 6 * * 1'    # Every Monday at 6am UTC
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: jobbud-scan        # shares the daily scan's group so the two never overlap
+      cancel-in-progress: false     # queue a new trigger; never abort a scan mid-scoring
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+
+      - name: Cache node_modules
+        uses: actions/cache@v5
+        with:
+          path: node_modules
+          key: node-modules-${{ hashFiles('package-lock.json') }}
+          restore-keys: node-modules-
+
+      - name: Install dependencies
+        run: npm install
+        working-directory: .
+
+      # No Playwright install — this workflow runs API sources only, never the portal scanner.
+
+      - name: Restore seen-jobs cache
+        uses: actions/cache/restore@v5
+        with:
+          path: data/seen-jobs.json
+          key: seen-jobs-${{ github.run_id }}
+          restore-keys: |
+            seen-jobs-
+
+      - name: Restore company cache
+        uses: actions/cache/restore@v5
+        with:
+          path: data/company-cache.json
+          key: company-cache-${{ github.run_id }}
+          restore-keys: |
+            company-cache-
+
+      - name: Restore API usage cache
+        uses: actions/cache/restore@v5
+        with:
+          path: data/api-usage.json
+          key: api-usage-${{ github.run_id }}
+          restore-keys: |
+            api-usage-
+
+      - name: Run API scanner
+        env:
+          SCAN_MODE: standard
+          SCAN_SOURCES: api            # API sources only; portal scan is skipped
+          MAX_JOBS_TO_EVALUATE: '250'  # Stage 1 Haiku filter is the quality gate, not the count
+          JSEARCH_API_KEY: ${{ secrets.JSEARCH_API_KEY }}
+          ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
+          ADZUNA_API_KEY: ${{ secrets.ADZUNA_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          VERCEL_URL: ${{ secrets.VERCEL_URL }}
+          DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: node scanner/index.mjs
+
+      - name: Save seen-jobs cache
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: data/seen-jobs.json
+          key: seen-jobs-${{ github.run_id }}
+
+      - name: Save company cache
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: data/company-cache.json
+          key: company-cache-${{ github.run_id }}
+
+      - name: Save API usage cache
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: data/api-usage.json
+          key: api-usage-${{ github.run_id }}

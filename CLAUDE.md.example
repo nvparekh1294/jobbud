@@ -1,0 +1,107 @@
+# CLAUDE.md — JobBud AI Job Search Assistant
+
+## What this file is for
+
+This file configures how the AI assistant behaves in this project. When you open this project in Claude Code (or another AI coding CLI), the assistant reads this file at the start of every session and uses it to understand your job search goals, preferences, and operating rules.
+
+Rename this file to CLAUDE.md to activate it. CLAUDE.md is gitignored — it will never be committed to your repo.
+
+---
+
+## Your Profile
+
+Before using the assistant, fill in your profile at config/profile.yml. The assistant reads that file to understand:
+- What roles you are targeting
+- What industries and company types you want
+- Your compensation target
+- Your deal-breakers and nice-to-haves
+
+Copy config/profile.yml.example to config/profile.yml and fill in your own values.
+
+---
+
+## Your Resume
+
+Place your resume at cv.md in the project root. This is the canonical version the assistant uses for all tailoring and evaluation. It should be in plain Markdown with standard sections: Summary, Experience, Education, Skills.
+
+cv.md is gitignored — it will never be committed.
+
+---
+
+## Your Bullet Bank
+
+The file bullet-bank.md holds a curated library of strong, metric-backed achievement bullets from your career. The AI uses these when generating tailored resume sections and outreach messages.
+
+This file is optional — if it doesn't exist, the AI falls back to cv.md. But a well-maintained bullet bank significantly improves the quality of application packages and outreach drafts.
+
+Use bullet-bank.md.example as a starting point. Copy it to bullet-bank.md and replace the examples with your own bullets. bullet-bank.md is gitignored and will never be committed.
+
+---
+
+## Your Background File
+
+The file article-digest.md is the richest context the AI has access to. It goes deeper than cv.md by capturing role narrative, key proof points, tailoring guidance per role type, and rules about what the AI should never fabricate or misrepresent about you.
+
+This file significantly improves output quality for application packages, outreach drafts, and interview prep. Without it the AI works from cv.md and bullet-bank.md only — outputs will be accurate but less tailored.
+
+There is no fixed format. Good things to include:
+- Role context beyond what is on your resume — what you actually did, confidential context, what made the role unusual
+- Metrics and proof points with notes on which to use when
+- Tailoring guidance per role type (what to emphasize for different kinds of roles)
+- Things the AI should never say or fabricate about you
+- Sensitive context for interview prep only — not for resumes
+
+The onboarding flow generates a starter version. Enrich it over time as your situation changes.
+article-digest.md is gitignored and will never be committed.
+See article-digest.md.example for a starter template.
+
+---
+
+## Your Story Bank
+
+The file story-bank.md holds your prepared interview stories in STAR format (Situation, Task, Action, Result). The assistant pulls from these when generating interview prep, cover letter content, and application form answers.
+
+Use story-bank.md.example as a starting point. Copy it to story-bank.md and replace the fictional examples with your real stories.
+
+story-bank.md is gitignored — it will never be committed.
+
+---
+
+## The Coach Library (Tip-of-Day / Coaching Context)
+
+The assistant has a built-in job search coaching library that covers topics like resume writing, interview preparation, offer negotiation, and networking. You do not need to configure anything for this — it activates automatically when relevant.
+
+---
+
+## Job Scanning Preferences
+
+The scanner checks job boards and company career pages on a schedule. To configure it:
+
+1. Configure your scan keywords and target companies in scanner/config.mjs
+2. Set environment variables for API keys (see .env.example)
+3. Run `node scanner/index.mjs` to trigger a manual scan
+
+Results are stored in data/job-status.json and emailed to NOTIFICATION_EMAIL if configured.
+
+---
+
+## Environment Variables
+
+Copy .env.example to .env and fill in your keys. Required for full functionality:
+
+- ANTHROPIC_API_KEY — for AI evaluation and coaching
+- GH_TOKEN + GH_REPO — for persisting job data to GitHub
+- GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET + GOOGLE_REFRESH_TOKEN — optional, for automatic Google Drive saving of prep docs. Keep your OAuth app in Production mode or tokens expire after 7 days.
+- SENDGRID_API_KEY + SENDGRID_FROM_EMAIL + NOTIFICATION_EMAIL — optional, for email digests
+- TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID — optional, for push notifications via Telegram
+- FIRECRAWL_API_KEY — optional, for scanning company career pages that require JavaScript rendering (e.g. Meta, Microsoft, Google DeepMind). Standard ATS platforms like Ashby, Greenhouse, and Lever work without it.
+
+.env is gitignored — it will never be committed.
+
+---
+
+## Hard Rules (do not remove these)
+
+- The assistant will never submit an application without your explicit approval in the current session.
+- The assistant will never fabricate experience, credentials, or achievements on your behalf.
+- The assistant will always explain what it did and why, alongside any code or output it produces.

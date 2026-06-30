@@ -1,0 +1,73 @@
+# Bullet Bank
+<!--
+This file is normally generated automatically during onboarding
+(or when you refresh your profile in the Coach tab), based on
+your resume and conversation. You usually won't write this by
+hand from scratch.
+
+If you want to manually add or edit a bullet, follow the format
+below — the AI reads this format when selecting bullets for a
+tailored resume or outreach message.
+
+bullet-bank.md is gitignored and will never be committed.
+
+FORMAT:
+- Bullets are organized by company, then grouped by theme within
+  each company
+- Each bullet is tagged with role-type tags (defined by you or
+  generated based on your target roles) plus a priority:
+  [primary] (strongest, most broadly applicable), [alt] (use if
+  primary doesn't fit the job description), [optional] (only if
+  the job description specifically calls for it)
+- Bullets are written in their final, polished form — the AI
+  uses them verbatim, it does not rewrite or paraphrase them
+- The same achievement can have multiple bullet variants tagged
+  for different role types if it should be framed differently
+  depending on the job
+-->
+
+## How to Use This File
+
+**Role type tags (example — define your own based on your target roles):**
+- `[ops]` = Business Operations, Chief of Staff, Head of Operations
+- `[strategy]` = Strategy, Corporate Development, Business Strategy
+- `[finance]` = Finance, FP&A, Strategic Finance
+
+**Priority tags:**
+- `[primary]` = use this version first
+- `[alt]` = use only if primary doesn't fit the job description
+- `[optional]` = include only if the job description specifically calls for it
+
+---
+
+## Acme Corp | Senior Operations Manager
+San Francisco, CA | January 2022 – Present
+
+### Theme: Cross-Functional Process Improvement
+
+- Redesigned the quarterly planning process across 6 business units, reducing cycle time by 40% and improving cross-functional alignment between product, sales, and finance `[ops][strategy][primary]`
+
+- Led a cross-functional initiative spanning engineering, sales, and finance to redesign quarterly planning, cutting cycle time by 40% `[ops][alt]`
+
+### Theme: Financial Planning
+
+- Built a zero-to-one financial model for a new product line that informed a $12M investment decision and became the standard planning template for two subsequent launches `[finance][strategy][primary]`
+
+- Partnered with finance leadership to build the company's first rolling 12-month forecast model, replacing static annual budgeting `[finance][alt]`
+
+---
+
+## Beta Industries | Strategy Associate
+New York, NY | June 2019 – December 2021
+
+### Theme: Market Analysis
+
+- Built a market sizing model that reframed total addressable market for a Series B fundraise, contributing to a successful $40M raise `[strategy][finance][primary]`
+
+- Conducted competitive analysis across 30+ companies in the vertical, identifying a positioning gap that informed the company's next two years of product roadmap `[strategy][optional]`
+
+### Theme: Team Leadership
+
+- Hired and onboarded a team of 5 analysts across 2 functions in 4 months during a period of rapid company growth `[ops][primary]`
+
+- Coached 2 direct reports to promotion within 18 months through structured weekly 1:1s and stretch project assignments `[ops][optional]`
