@@ -3,7 +3,7 @@
   <p>A self-hosted, AI-powered job search dashboard for people who want their tools working for them.</p>
 
   [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-  [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/nvparekh1294/jobbud)
+  [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/nvparekh1294/jobbud&env=ANTHROPIC_API_KEY,GH_TOKEN,GH_REPO&envDescription=Required%20API%20keys%20for%20JobBud%20-%20see%20README%20for%20setup%20instructions&envLink=https://github.com/nvparekh1294/jobbud%23getting-started)
 </div>
 
 ---
@@ -103,7 +103,7 @@ Click **Fork** at the top of this page. This creates your own copy at `your-user
 
 ### 2. Deploy to Vercel
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/nvparekh1294/jobbud)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/nvparekh1294/jobbud&env=ANTHROPIC_API_KEY,GH_TOKEN,GH_REPO&envDescription=Required%20API%20keys%20for%20JobBud%20-%20see%20README%20for%20setup%20instructions&envLink=https://github.com/nvparekh1294/jobbud%23getting-started)
 
 During deploy, Vercel will prompt for three required environment variables:
 
