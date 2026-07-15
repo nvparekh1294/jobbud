@@ -41,6 +41,12 @@ The app supports PDF and plain text paste only. PRs adding DOCX upload will not 
 
 Do not submit PRs that include real names, email addresses, API keys, job records, or any other personal information. Check your diff before opening a PR.
 
+### The `data/` seed stubs
+
+The JSON files in `data/` are committed as intentionally empty stubs (`[]` or `{}`) so that a fresh self-hosted install starts with valid, empty seed files. These same files are also listed in `.gitignore`, which means they are tracked-but-ignored on purpose: once you have the stubs, Git will not surface any local changes to them. This is deliberate — it lets the app write your real job data into `data/` while keeping that data out of version control.
+
+Never commit real data into `data/`. Leave the stubs as `[]` / `{}` in any PR. If you need to change the shape of a seed file, open an issue first.
+
 ## Questions
 
 Open an issue or start a discussion. Response time may vary — this is a solo-maintained project.
