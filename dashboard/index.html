@@ -673,6 +673,12 @@
     .mock-progress-bar-fill { height: 100%; background: #2D5A3D; border-radius: 6px; transition: width 0.4s ease; }
     @keyframes mock-shake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-8px)} 40%{transform:translateX(8px)} 60%{transform:translateX(-6px)} 80%{transform:translateX(6px)} }
     .mock-shake { animation: mock-shake 0.4s ease; }
+    /* Voice dictation button (Web Speech API; Chrome/Edge only). */
+    @keyframes mock-record-pulse { 0%,100%{box-shadow:0 0 0 0 rgba(180,40,40,0.5)} 50%{box-shadow:0 0 0 7px rgba(180,40,40,0)} }
+    .mock-record-btn { background:#EAF0E8; color:#2D5A3D; border:none; border-radius:10px; padding:12px 18px; font-family:'Hanken Grotesk',sans-serif; font-size:15px; font-weight:600; cursor:pointer; }
+    .mock-record-btn.recording { background:#B42828; color:#fff; animation: mock-record-pulse 1.4s ease-in-out infinite; }
+    .mock-record-hint { width:100%; margin-top:2px; font-family:'Hanken Grotesk',sans-serif; font-size:13px; color:#8a9085; }
+    .mock-record-hint.error { color:#B42828; }
     .star-badge { display:inline-block; font-size:11px; font-weight:700; padding:2px 8px; border-radius:10px; }
     .star-badge.strong { background: var(--green-bg); color: var(--green); }
     .star-badge.partial { background: #fef9c3; color: #854d0e; }
@@ -1458,9 +1464,11 @@
 
           <div style="display:flex;align-items:center;gap:14px;margin-top:18px;flex-wrap:wrap;">
             <button class="coach-new-btn" id="mock-submit-btn" onclick="submitMockAnswer()" style="padding:12px 24px;font-size:15px;border-radius:10px;">Submit Answer</button>
-            <button style="background:#EAF0E8;color:#2D5A3D;border:none;border-radius:10px;padding:12px 18px;font-family:'Hanken Grotesk',sans-serif;font-size:15px;font-weight:600;cursor:pointer;">● Record</button>
+            <!-- Voice dictation: hidden on browsers without the Web Speech API (see initMockRecording). -->
+            <button type="button" id="mock-record-btn" class="mock-record-btn" onclick="toggleMockRecording()">● Record</button>
             <button id="mock-skip-btn" onclick="skipMockQuestion()"
               style="background:transparent;border:none;font-family:'Hanken Grotesk',sans-serif;font-size:14.5px;font-weight:500;color:#8a9085;cursor:pointer;margin-left:auto;">Skip question →</button>
+            <div id="mock-record-hint" class="mock-record-hint"></div>
           </div>
 
           <!-- Feedback panel -->
@@ -1906,6 +1914,14 @@
   function switchToTab(tabName) {
     if (onboardingGenerationInProgress) {
       if (!confirm('Profile update in progress. Leaving this tab may interrupt it. Continue anyway?')) return;
+    }
+    // Privacy: recognition runs in continuous mode, so navigating away without
+    // stopping it would keep the microphone capturing. Shut it down (and clear
+    // the listening hint) whenever we leave, mirroring exitMock(). Guarded on
+    // mockRecording so a normal tab switch is a no-op.
+    if (mockRecording) {
+      stopMockRecording();
+      setMockRecordHint('', false);
     }
     document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
@@ -2398,6 +2414,7 @@
     document.getElementById('view-connections-overlay').addEventListener('click', e => {
       if (e.target === document.getElementById('view-connections-overlay')) closeViewConnectionsModal();
     });
+    initMockRecording();
   });
 
   // ── Toast ────────────────────────────────────────────────────────────────
@@ -4994,6 +5011,8 @@
     const compEl = document.getElementById('mock-competency-text');
     compEl.textContent = q.competency || '';
     compEl.style.display = q.competency ? 'inline-block' : 'none';
+    stopMockRecording();
+    setMockRecordHint('', false);
     document.getElementById('mock-answer-textarea').value = '';
     document.getElementById('mock-feedback-panel').style.display = 'none';
     document.getElementById('mock-feedback-unavailable').style.display = 'none';
@@ -5112,7 +5131,139 @@
   }
 
   function exitMock() {
+    stopMockRecording();
+    setMockRecordHint('', false);
     switchCoachView('library');
+  }
+
+  // ── Voice dictation (mock interview answers) ─────────────────────────────
+  // Speech-to-text via the browser's built-in Web Speech API — free, fully
+  // client-side, no backend and no API key. Only Chromium browsers (Chrome,
+  // Edge) ship it today; on Firefox/most Safari we hide the Record button and
+  // the flow stays 100% usable by typing. Recording never auto-submits — the
+  // transcript lands in the textarea for the user to edit first.
+  const MockSpeech = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let mockRecognition = null;
+  let mockRecording = false;
+  let mockRecordBaseText = '';   // textarea contents captured when recording began
+  let mockLastPainted = '';      // last value we wrote to the textarea, to detect user edits mid-recording
+
+  function mockRecordSupported() {
+    // getUserMedia (and thus speech) requires a secure context.
+    return !!MockSpeech && window.isSecureContext;
+  }
+
+  // Hide the Record button on browsers without speech support so the answer
+  // flow degrades cleanly to typing. Safe to call once the DOM is ready.
+  function initMockRecording() {
+    const btn = document.getElementById('mock-record-btn');
+    if (!btn) return;
+    if (!mockRecordSupported()) {
+      btn.style.display = 'none';
+      const textarea = document.getElementById('mock-answer-textarea');
+      if (textarea) textarea.placeholder = 'Type your answer…';
+      return;
+    }
+    btn.title = 'Dictate your answer (Chrome or Edge). You can edit the text before submitting.';
+  }
+
+  function setMockRecordHint(msg, isError) {
+    const hint = document.getElementById('mock-record-hint');
+    if (!hint) return;
+    hint.textContent = msg || '';
+    hint.classList.toggle('error', !!isError);
+  }
+
+  function toggleMockRecording() {
+    if (!mockRecordSupported()) return;
+    if (mockRecording) { stopMockRecording(); return; }
+    startMockRecording();
+  }
+
+  function startMockRecording() {
+    const textarea = document.getElementById('mock-answer-textarea');
+    if (!textarea) return;
+    mockRecognition = new MockSpeech();
+    mockRecognition.lang = 'en-US';
+    mockRecognition.interimResults = true;
+    mockRecognition.continuous = true;
+
+    // Keep whatever's already typed; spoken words are appended after it.
+    mockRecordBaseText = textarea.value;
+    mockLastPainted = textarea.value;
+
+    mockRecognition.onresult = (event) => {
+      // If the user typed into the textarea since our last paint, their edit is
+      // now the source of truth — adopt it as the new base so keystrokes made
+      // mid-recording aren't clobbered when we repaint below.
+      if (textarea.value !== mockLastPainted) {
+        mockRecordBaseText = textarea.value;
+      }
+      let finalText = '';
+      let interimText = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const chunk = event.results[i][0].transcript;
+        if (event.results[i].isFinal) finalText += chunk;
+        else interimText += chunk;
+      }
+      // Commit finalized speech onto the base so it survives later events;
+      // interim words show live but aren't committed until finalized.
+      if (finalText) mockRecordBaseText = joinSpoken(mockRecordBaseText, finalText);
+      const painted = interimText ? joinSpoken(mockRecordBaseText, interimText) : mockRecordBaseText;
+      textarea.value = painted;
+      mockLastPainted = painted;
+    };
+
+    mockRecognition.onerror = (event) => {
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+        setMockRecordHint('Microphone access is blocked. Allow it in your browser to dictate — or just type your answer.', true);
+      } else if (event.error === 'no-speech') {
+        setMockRecordHint("Didn't catch any speech. Tap Record to try again, or type your answer.", true);
+      } else if (event.error !== 'aborted') {
+        setMockRecordHint('Voice input hit a snag. You can keep typing your answer.', true);
+      }
+    };
+
+    // Fires on stop, on error, or when the engine times out — always reset UI.
+    mockRecognition.onend = () => { finalizeMockRecordingUI(); };
+
+    try {
+      mockRecognition.start();
+    } catch (err) {
+      console.error('[mock] could not start speech recognition:', err);
+      setMockRecordHint('Voice input could not start. You can keep typing your answer.', true);
+      mockRecognition = null;
+      return;
+    }
+
+    mockRecording = true;
+    const btn = document.getElementById('mock-record-btn');
+    if (btn) { btn.classList.add('recording'); btn.textContent = '■ Stop'; }
+    setMockRecordHint('Listening… speak your answer, then tap Stop. You can edit it before submitting.', false);
+  }
+
+  function stopMockRecording() {
+    if (mockRecognition) {
+      try { mockRecognition.stop(); } catch (err) { /* already stopped */ }
+    }
+  }
+
+  function finalizeMockRecordingUI() {
+    mockRecording = false;
+    mockRecognition = null;
+    const btn = document.getElementById('mock-record-btn');
+    if (btn) { btn.classList.remove('recording'); btn.textContent = '● Record'; }
+    // Clear the "Listening…" note but leave any error message visible.
+    const hint = document.getElementById('mock-record-hint');
+    if (hint && !hint.classList.contains('error')) hint.textContent = '';
+  }
+
+  // Join existing text and newly spoken text with a single space, avoiding a
+  // double space when the base is empty or already ends in whitespace.
+  function joinSpoken(base, addition) {
+    if (!base) return addition;
+    if (/\s$/.test(base)) return base + addition;
+    return base + ' ' + addition;
   }
 
   async function saveMockSession() {
