@@ -1733,7 +1733,7 @@
         </div>
         <select id="filter-status">
           <option value="">All statuses ⌄</option>
-          <!-- Status options are populated from JOB_STATUSES (single source of truth, M3.7) -->
+          <!-- Status options are populated from JOB_STATUSES (single source of truth) -->
         </select>
         <select id="filter-ai">
           <option value="">All AI risk ⌄</option>
@@ -1816,7 +1816,7 @@
   const ACTION_FLOOR = 3.5;
   const ACT_NOW_MIN  = 4.0;
 
-  // ── Canonical job statuses — single source of truth (M3.7) ─────────────────
+  // ── Canonical job statuses — single source of truth ─────────────────
   // Every status list, label, badge, and pill in the dashboard derives from this
   // map, so adding or renaming a status is a one-line change. Key order drives the
   // All-Jobs filter dropdown; `stage` marks pipeline columns; `archiveEl` marks
