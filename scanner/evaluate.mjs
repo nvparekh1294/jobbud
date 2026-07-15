@@ -1,8 +1,7 @@
 import { enrichCompany } from './enrich.mjs';
-import { HAIKU_MODEL, SONNET_MODEL } from './config.mjs';
+import { HAIKU_MODEL, SONNET_MODEL, loadProfileYml } from './config.mjs';
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
-const GITHUB_API_BASE   = 'https://api.github.com';
 const IS_DRY_RUN = process.argv.includes('--dry-run') || process.env.DRY_RUN === 'true';
 
 // Rough public list prices in $/million tokens — used only for the per-scan cost
@@ -11,26 +10,6 @@ const PRICING = {
   haiku:  { input: 1.00, output: 5.00 },
   sonnet: { input: 3.00, output: 15.00, cacheWrite: 3.75, cacheRead: 0.30 },
 };
-
-// ── GitHub file helper (same pattern as coach.js / weeklyDigest.mjs) ─────────
-async function readGithubFile(githubToken, owner, repo, path) {
-  const url = `${GITHUB_API_BASE}/repos/${owner}/${repo}/contents/${path}`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${githubToken}`, Accept: 'application/vnd.github+json' },
-  });
-  if (res.status === 404) return '';
-  if (!res.ok) {
-    console.warn(`[evaluate] GitHub read ${path} failed: ${res.status}`);
-    return '';
-  }
-  const data = await res.json();
-  if (data.content) return Buffer.from(data.content, 'base64').toString('utf8');
-  if (data.download_url) {
-    const rawRes = await fetch(data.download_url, { headers: { Authorization: `Bearer ${githubToken}` } });
-    return rawRes.ok ? rawRes.text() : '';
-  }
-  return '';
-}
 
 // ── Stage 2 scoring rubric ──────────────────────────────────────────────────
 // Built once per scan run from config/profile.yml, then passed to every
@@ -92,10 +71,12 @@ Respond in valid JSON only.`;
 // Builds the full scoring rubric string once per scan run.
 // Reads config/profile.yml from the user's repo so the CANDIDATE PROFILE section
 // is always personalised without hardcoding any individual's background here.
-export async function buildScoringRubric(githubToken, owner, repo) {
-  const profileYml = githubToken && owner && repo
-    ? await readGithubFile(githubToken, owner, repo, 'config/profile.yml').catch(() => null)
-    : null;
+export async function buildScoringRubric(githubToken, owner, repo, preloadedYml) {
+  // Single profile.yml read path — shared with config.mjs's loadConfig. Callers
+  // that already read the profile this run pass it in to avoid a second fetch.
+  const profileYml = preloadedYml !== undefined
+    ? preloadedYml
+    : await loadProfileYml(githubToken, owner, repo);
 
   const candidateProfileSection = profileYml && profileYml.trim()
     ? `CANDIDATE PROFILE (for calibration):\n${profileYml.trim()}`
@@ -108,12 +89,16 @@ ${RUBRIC_SUFFIX}`;
 
 // ── Stage 1 hard-filter prompt ──────────────────────────────────────────────
 // Deliberately short. NO prompt caching — the write overhead would make the
-// cheap Haiku call slower for no benefit. The filter leans hard toward PASS: any
-// AI signal in the company or role passes, and traditional industries only fail
-// when the company is clearly non-AI AND the role has no AI component. Borderline
-// cases go to Stage 2, where Sonnet's HARD-CAP-at-2.5 rules suppress true non-fits
-// below the digest threshold. False negatives (dropping a good job) are worse than
-// false positives (passing a mediocre one to Sonnet) here.
+// cheap Haiku call slower for no benefit. The filter leans hard toward PASS and
+// fails only on unambiguous non-fits; borderline cases go to Stage 2, where the
+// Sonnet rubric's caps suppress true non-fits below the digest threshold. False
+// negatives (dropping a good job) are worse than false positives (passing a
+// mediocre one to Sonnet) here.
+//
+// Generic fallback used when the candidate's profile is not configured. It knows
+// nothing about any individual: it fails ONLY on universal non-fits (pure IC roles
+// with no leadership track, clearly junior roles, generic staffing-agency posts)
+// and biases hard toward PASS so Stage 2 does the nuanced scoring.
 export const STAGE1_SYSTEM = `You are a fast pre-filter for a professional job search. Decide ONLY whether a job is an UNAMBIGUOUS non-fit. Bias heavily toward PASS: whenever data is missing, ambiguous, or borderline, PASS it through. A false negative here silently drops a strong match -- the worst outcome. Fail ONLY on a clear, explicit disqualifier.
 
 Hard disqualifiers -- FAIL only if the job CLEARLY matches one:
@@ -124,6 +109,29 @@ Hard disqualifiers -- FAIL only if the job CLEARLY matches one:
 STAFFING / RECRUITING AGENCIES -- do NOT auto-fail just because the posting company is a recruiter or staffing firm. If the description names a specific client company or an identifiable employer, and that company/role sounds relevant, PASS to full scoring. FAIL only when the posting is generic: no named client, no identifiable employer, just the agency advertising for an unnamed company.
 
 If none of the disqualifiers clearly applies, PASS. When in doubt, PASS. Respond in valid JSON only.`;
+
+// Build the Stage-1 system prompt for a scan run. When the candidate's profile is
+// configured, it is injected so the filter judges role-family, location, and
+// industry fit against the user's OWN stated targets — not any preset. When no
+// profile is available, the generic fallback (STAGE1_SYSTEM) is used unchanged.
+export function buildStage1System(profileYml) {
+  if (!profileYml || !profileYml.trim()) return STAGE1_SYSTEM;
+  return `You are a fast pre-filter for the following candidate's job search. Decide ONLY whether a job is an UNAMBIGUOUS non-fit for THIS candidate. Bias heavily toward PASS: whenever data is missing, ambiguous, or borderline, PASS it through. A false negative here silently drops a strong match -- the worst outcome. Fail ONLY on a clear, explicit disqualifier.
+
+CANDIDATE PROFILE (their stated targets — judge fit against THIS, not any preset):
+${profileYml.trim()}
+
+Hard disqualifiers -- FAIL only if the job CLEARLY matches one, judged against the profile above:
+- title: a pure individual-contributor role plainly outside every target role family in the profile, with no leadership/strategy/operations/management scope.
+- seniority: clearly below the candidate's target seniority — entry-level, junior, or intern with no path to the ownership level they target.
+- location: clearly outside every location the profile lists, and not remote (only apply this if the profile states specific locations).
+- industry: an employer whose industry the profile marks as a deal-breaker AND a role with no angle onto the candidate's stated interests. Do NOT hard-ban by employer type alone — a role that fits the candidate's target function at an off-profile employer still PASSES.
+- staffing/recruiting agency: a staffing or recruiting firm advertising a GENERIC role with no named client and no identifiable employer (see STAFFING below).
+
+STAFFING / RECRUITING AGENCIES -- do NOT auto-fail just because the posting company is a recruiter or staffing firm. If the description names a specific client company or an identifiable employer, and that company/role sounds relevant, PASS to full scoring. FAIL only when the posting is generic: no named client, no identifiable employer, just the agency advertising for an unnamed company.
+
+If none of the disqualifiers clearly applies, PASS. When in doubt, PASS. Respond in valid JSON only.`;
+}
 
 export function classifyJobType(job) {
   const title   = (job.title   || '').toLowerCase();
@@ -327,7 +335,7 @@ async function runBatch(requests, config, label) {
 // parsed by parseStage1Message, so the SYNC path (haikuHardFilter) and the BATCH
 // path (evaluateJobsBatch) send byte-identical prompts and parse identically.
 
-export function buildStage1Request(job) {
+export function buildStage1Request(job, stage1System = STAGE1_SYSTEM) {
   const userMsg = `Assess this job:
 
 TITLE: ${job.title}
@@ -347,7 +355,7 @@ Respond with exactly this JSON:
   return {
     model: HAIKU_MODEL,
     max_tokens: 150,
-    system: STAGE1_SYSTEM,
+    system: stage1System,
     messages: [{ role: 'user', content: userMsg }],
   };
 }
@@ -376,9 +384,9 @@ const STAGE1_FAIL_OPEN = { pass: true, confidence: 0.5, reasonCategory: 'none', 
 
 // Returns { pass, confidence, reasonCategory, reason, usage }. Fails OPEN on any
 // error or parse failure (pass: true) — never silently drops a job.
-export async function haikuHardFilter(job, config) {
+export async function haikuHardFilter(job, config, stage1System = STAGE1_SYSTEM) {
   try {
-    const data = await callAnthropic(buildStage1Request(job), config, 'stage1');
+    const data = await callAnthropic(buildStage1Request(job, stage1System), config, 'stage1');
     return parseStage1Message(data);
   } catch (err) {
     // Fail OPEN — pass the job to Stage 2 rather than risk dropping a real match.
@@ -522,12 +530,14 @@ export async function evaluateJobsBatch(jobs, config) {
   const githubToken = process.env.GH_TOKEN;
   const githubRepo  = process.env.GH_REPO || '';
   const [owner, repo] = githubRepo.split('/');
-  const rubric = await buildScoringRubric(githubToken, owner, repo);
-  console.log(`[evaluate] Scoring rubric built (${rubric.length} chars, profile ${owner && repo ? 'loaded from repo' : 'not configured'})`);
+  const profileYml = await loadProfileYml(githubToken, owner, repo);
+  const rubric = await buildScoringRubric(githubToken, owner, repo, profileYml);
+  const stage1System = buildStage1System(profileYml);
+  console.log(`[evaluate] Scoring rubric built (${rubric.length} chars, profile ${profileYml ? 'loaded from repo' : 'not configured'})`);
 
   // ── Stage 1: one Haiku batch over ALL candidates (no cap) ──────────────────
   for (const job of jobs) job.location = sanitizeLocation(job.location);
-  const s1Requests = jobs.map((job, i) => ({ custom_id: `s1-${i}`, params: buildStage1Request(job) }));
+  const s1Requests = jobs.map((job, i) => ({ custom_id: `s1-${i}`, params: buildStage1Request(job, stage1System) }));
   const { batchId: s1BatchId, results: s1ById } = await runBatch(s1Requests, config, 'stage1-batch');
 
   const passers = [];   // { job, s1 } that cleared Stage 1
@@ -678,8 +688,10 @@ export async function evaluateJobs(jobs, config) {
   const githubToken = process.env.GH_TOKEN;
   const githubRepo  = process.env.GH_REPO || '';
   const [owner, repo] = githubRepo.split('/');
-  const rubric = await buildScoringRubric(githubToken, owner, repo);
-  console.log(`[evaluate] Scoring rubric built (${rubric.length} chars, profile ${owner && repo ? 'loaded from repo' : 'not configured'})`);
+  const profileYml = await loadProfileYml(githubToken, owner, repo);
+  const rubric = await buildScoringRubric(githubToken, owner, repo, profileYml);
+  const stage1System = buildStage1System(profileYml);
+  console.log(`[evaluate] Scoring rubric built (${rubric.length} chars, profile ${profileYml ? 'loaded from repo' : 'not configured'})`);
 
   const cap = config.maxJobsToEvaluate || 25;
 
@@ -690,7 +702,7 @@ export async function evaluateJobs(jobs, config) {
   // sequential loop — same sums, same passers/filtered order, same log lines.
   const s1Results = await mapWithConcurrency(jobs, 4, async (job) => {
     job.location = sanitizeLocation(job.location);
-    const s1 = await haikuHardFilter(job, config);
+    const s1 = await haikuHardFilter(job, config, stage1System);
     return { job, s1 };
   });
 

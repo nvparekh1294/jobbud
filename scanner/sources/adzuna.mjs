@@ -1,3 +1,5 @@
+import { resolveTargetRoles } from './queryHelpers.mjs';
+
 const BASE_URLS = {
   us: 'https://api.adzuna.com/v1/api/jobs/us/search',
   gb: 'https://api.adzuna.com/v1/api/jobs/gb/search',
@@ -29,17 +31,15 @@ export async function fetchAdzuna(config) {
 }
 
 function buildQueries(config) {
-  const queries = [];
+  // Adzuna's `what` param treats spaces as AND, so each target role is sent as its
+  // own single-term query (no OR-grouping). Terms come from the user's profile.
+  const searchTerms = resolveTargetRoles(config);
+  if (!searchTerms.length) {
+    console.warn('[adzuna] No target roles configured (set target_roles in config/profile.yml) -- skipping');
+    return [];
+  }
 
-  const searchTerms = [
-    'business operations',
-    'chief of staff',
-    'strategy operations',
-    'head of operations',
-    'strategic finance',
-    'corporate development',
-    'investment principal',
-  ];
+  const queries = [];
 
   for (const location of config.locations) {
     const country = location.country;

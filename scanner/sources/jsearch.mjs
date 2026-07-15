@@ -1,3 +1,5 @@
+import { resolveTargetRoles, buildRoleGroups } from './queryHelpers.mjs';
+
 const BASE_URL = 'https://jsearch.p.rapidapi.com/search';
 
 export async function fetchJSearch(config) {
@@ -23,14 +25,14 @@ export async function fetchJSearch(config) {
 }
 
 function buildQueries(config) {
-  const queries = [];
+  const roles = resolveTargetRoles(config);
+  if (!roles.length) {
+    console.warn('[jsearch] No target roles configured (set target_roles in config/profile.yml) -- skipping');
+    return [];
+  }
 
-  const roleGroups = [
-    'business operations OR biz ops OR chief of staff OR head of operations',
-    'strategy operations OR special projects OR strategic finance OR corporate development',
-    'COO OR chief operating officer OR growth operations',
-    'investment partner OR investment principal OR venture partner',
-  ];
+  const roleGroups = buildRoleGroups(roles);
+  const queries = [];
 
   for (const location of config.locations) {
     for (const roleGroup of roleGroups) {
@@ -39,8 +41,9 @@ function buildQueries(config) {
   }
 
   if (config.includeRemote) {
-    queries.push('business operations OR chief of staff OR strategy operations remote');
-    queries.push('COO OR strategic finance OR corporate development remote');
+    for (const roleGroup of roleGroups) {
+      queries.push(`${roleGroup} remote`);
+    }
   }
 
   return queries;

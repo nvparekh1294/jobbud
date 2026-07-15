@@ -1638,7 +1638,7 @@
                 <textarea id="onboarding-refresh-resume-input" class="onboarding-paste-area" style="min-height:100px" placeholder="Paste updated resume text here..."></textarea>
               </div>
             </div>
-            <div style="font-size:12px;color:var(--muted);margin-top:12px;margin-bottom:12px;line-height:1.5">⚠️ This takes 1–3 minutes to update all four files. Please don't close this tab or navigate to another section of the dashboard while it's running — doing so may interrupt the update.</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:12px;margin-bottom:12px;line-height:1.5">⚠️ This takes 1–3 minutes to update all five files. Please don't close this tab or navigate to another section of the dashboard while it's running — doing so may interrupt the update.</div>
             <button class="draft-save-btn" onclick="onboardingStartGenerateFromNotes()">Update My Profile</button>
           </div>
         </div>
@@ -1665,6 +1665,9 @@
             </div>
             <div class="onboarding-file-row" id="gen-row-digest" style="font-size:14px;margin:8px 0;color:var(--text)">
               <span id="gen-status-digest">⏳</span> article-digest.md
+            </div>
+            <div class="onboarding-file-row" id="gen-row-profile" style="font-size:14px;margin:8px 0;color:var(--text)">
+              <span id="gen-status-profile">⏳</span> config/profile.yml
             </div>
           </div>
         </div>
@@ -1703,12 +1706,17 @@
             <button class="onboarding-dl-btn" id="onboarding-dl-cv" onclick="onboardingDownload('cv.md', 'cvMd')">⬇ Download cv.md</button>
             <button class="onboarding-dl-btn" id="onboarding-dl-bulletbank" onclick="onboardingDownload('bullet-bank.md', 'bulletBankMd')">⬇ Download bullet-bank.md</button>
             <button class="onboarding-dl-btn" id="onboarding-dl-digest" onclick="onboardingDownload('article-digest.md', 'articleDigestMd')">⬇ Download article-digest.md</button>
+            <button class="onboarding-dl-btn" id="onboarding-dl-profile" onclick="onboardingDownload('config/profile.yml', 'profileYml')">⬇ Download config/profile.yml</button>
             <div class="onboarding-instruction-box">
-              Download all four files and add them to the root of your JobBud repo, then commit them. Once committed, your scanner and application generator will use them automatically.<br><br>
-              <strong>Priority order:</strong> CLAUDE.md and cv.md are required. bullet-bank.md and article-digest.md are optional but significantly improve output quality — add them when you can.<br><br>
+              Download all five files. Add CLAUDE.md, cv.md, bullet-bank.md, and article-digest.md to the root of your JobBud repo. Add config/profile.yml to the config/ folder. Commit all five — your scanner and application generator will use them automatically.<br><br>
+              <strong>Priority order:</strong> CLAUDE.md and cv.md are required. bullet-bank.md, article-digest.md, and config/profile.yml are optional but significantly improve output quality — add them when you can.<br><br>
               <strong>article-digest.md</strong> is a starter file — enrich it over time by adding role context, proof points, and tailoring guidance specific to your background.
             </div>
-            <div style="margin-top:20px">
+            <div class="onboarding-instruction-box" style="margin-top:14px">
+              <strong>Prefer not to download?</strong> Save all five straight to your repo. This commits them for you — but only if your repo is <strong>private</strong>. A public repo is refused, since these files contain your real background.
+            </div>
+            <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">
+              <button class="draft-save-btn" id="onboarding-save-repo-btn" onclick="onboardingSaveToRepo()">Save to my repo</button>
               <button class="draft-save-btn" onclick="onboardingDone()">Done — Go to Dashboard</button>
             </div>
           </div>
@@ -5437,6 +5445,7 @@
       'cv.md': 'cvMd',
       'bullet-bank.md': 'bulletBankMd',
       'article-digest.md': 'articleDigestMd',
+      'profile.yml': 'profileYml',
     };
 
     const loaded = {};
@@ -5463,8 +5472,9 @@
       cvMd: loaded.cvMd || null,
       bulletBankMd: loaded.bulletBankMd || null,
       articleDigestMd: loaded.articleDigestMd || null,
+      profileYml: loaded.profileYml || null,
     };
-    const names = Object.entries({ 'CLAUDE.md': loaded.claudeMd, 'cv.md': loaded.cvMd, 'bullet-bank.md': loaded.bulletBankMd, 'article-digest.md': loaded.articleDigestMd })
+    const names = Object.entries({ 'CLAUDE.md': loaded.claudeMd, 'cv.md': loaded.cvMd, 'bullet-bank.md': loaded.bulletBankMd, 'article-digest.md': loaded.articleDigestMd, 'config/profile.yml': loaded.profileYml })
       .filter(([, v]) => v).map(([k]) => k);
     const statusEl = document.getElementById('onboarding-existing-status');
     if (statusEl) statusEl.textContent = names.length ? `Loaded: ${names.join(', ')}` : 'No recognized files found (.md filenames must match exactly).';
@@ -5861,7 +5871,27 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
       const articleDigestMd = d4.articleDigestMd || '';
       setStatus('gen-status-digest', '✓');
 
-      onboardingResult = { claudeMd, cvMd, bulletBankMd, articleDigestMd };
+      // Step 5 — config/profile.yml (non-blocking: a failure shows a toast but
+      // still proceeds to download, since the other files are the required ones).
+      let profileYml = '';
+      try {
+        const r5 = await fetch('/api/coach?action=generate-profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
+          body: JSON.stringify(body),
+        });
+        const d5 = await r5.json();
+        if (d5.error) {
+          showToast(`config/profile.yml: ${d5.error}`);
+        } else {
+          profileYml = d5.profileYml || '';
+        }
+      } catch (e) {
+        showToast('config/profile.yml generation failed — other files are ready.');
+      }
+      setStatus('gen-status-profile', profileYml ? '✓' : '⚠️');
+
+      onboardingResult = { claudeMd, cvMd, bulletBankMd, articleDigestMd, profileYml };
       switchOnboardingStep('download');
     } catch (err) {
       showToast('Generation failed. Please try again.');
@@ -5887,6 +5917,36 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  }
+
+  // Save the generated files straight to the user's repo. The server refuses if
+  // the repo is public (these files hold personal background), so a public-repo
+  // response surfaces a clear message and the download buttons remain available.
+  async function onboardingSaveToRepo() {
+    if (!onboardingResult) {
+      showToast('No content to save. Please generate your profile first.');
+      return;
+    }
+    const btn = document.getElementById('onboarding-save-repo-btn');
+    const pw = sessionStorage.getItem('co_pw') || '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+    try {
+      const r = await fetch('/api/coach?action=save-onboarding', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
+        body: JSON.stringify(onboardingResult),
+      });
+      const d = await r.json();
+      if (r.ok && d.success) {
+        showToast(`Saved to your repo: ${(d.saved || []).join(', ')}`);
+      } else {
+        showToast(d.error || 'Could not save to your repo. Use the download buttons instead.');
+      }
+    } catch (e) {
+      showToast('Could not save to your repo. Use the download buttons instead.');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Save to my repo'; }
+    }
   }
 
   function onboardingDone() {

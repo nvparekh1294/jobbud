@@ -74,7 +74,11 @@ async function run() {
   // (e.g. a half-applied secret rotation) can be diffed against the Vercel logs.
   console.log(`action-token key: source=${actionKeySource()} fp=${actionKeyFingerprint()}`);
 
-  const config = await loadConfig();
+  // Pass the run's repo so loadConfig can layer the user's config/profile.yml over
+  // the generic defaults. Vercel/CI set GH_TOKEN + GH_REPO; absent them, loadConfig
+  // returns the neutral defaults.
+  const [cfgOwner, cfgRepo] = (process.env.GH_REPO || '').split('/');
+  const config = await loadConfig(process.env.GH_TOKEN, cfgOwner, cfgRepo);
 
   // ── Dry run path ──────────────────────────────────────────────────────────
   if (IS_DRY_RUN) {

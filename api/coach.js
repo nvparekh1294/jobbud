@@ -3,7 +3,7 @@
 // Route by GET/POST + ?action query param.
 
 import { generateInterviewPrepDoc } from '../scanner/interviewPackage.mjs';
-import { readGithubText, writeGithubFile } from '../lib/github.js';
+import { readGithubText, writeGithubFile, assertRepoPrivate, RepoPublicError } from '../lib/github.js';
 import { safeEqual } from '../lib/auth.mjs';
 
 const SONNET_MODEL    = 'claude-sonnet-4-6';
@@ -318,13 +318,17 @@ async function handleSaveStory(req, res, githubToken, owner, repo) {
     const separator = existingContent && !existingContent.endsWith('\n\n') ? '\n\n' : '';
     const updatedContent = existingContent + separator + storyMarkdown.trim() + '\n';
 
-    await writeGithubFile(
-      githubToken, owner, repo, 'story-bank.md', updatedContent,
-      'feat: add interview story [skip ci]', { logTag: 'coach' },
+    // Guarded write: writeStoryBankContent refuses public repos (fails closed).
+    await writeStoryBankContent(
+      githubToken, owner, repo, updatedContent, 'feat: add interview story [skip ci]',
     );
 
     return res.status(200).json({ success: true });
   } catch (err) {
+    if (err instanceof RepoPublicError) {
+      console.warn(`[coach] save-story refused: ${err.message}`);
+      return res.status(403).json({ error: err.message, code: 'REPO_PUBLIC' });
+    }
     console.error('[coach] save-story error:', err);
     return res.status(500).json({ status: 500, message: 'Something went wrong. Please try again.' });
   }
@@ -333,6 +337,11 @@ async function handleSaveStory(req, res, githubToken, owner, repo) {
 // ── Shared: write updated story-bank.md via Git Data API ─────────────────────
 
 async function writeStoryBankContent(githubToken, owner, repo, updatedContent, commitMessage) {
+  // story-bank.md holds the user's personal interview stories — never publish it
+  // to a public repo. This is the single choke point EVERY story-bank write passes
+  // through (save/update/delete), so the visibility guard lives here and cannot be
+  // bypassed. Fails closed (refuses) if visibility can't be determined.
+  await assertRepoPrivate(githubToken, owner, repo);
   await writeGithubFile(
     githubToken, owner, repo, 'story-bank.md', updatedContent, commitMessage,
     { logTag: 'coach' },
@@ -382,6 +391,10 @@ async function handleDeleteStory(req, res, githubToken, owner, repo) {
     console.log(`[coach] action=delete-story storyId=${storyId}`);
     return res.status(200).json({ success: true });
   } catch (err) {
+    if (err instanceof RepoPublicError) {
+      console.warn(`[coach] delete-story refused: ${err.message}`);
+      return res.status(403).json({ error: err.message, code: 'REPO_PUBLIC' });
+    }
     console.error('[coach] delete-story error:', err);
     return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
@@ -413,6 +426,10 @@ async function handleUpdateStory(req, res, githubToken, owner, repo) {
     console.log(`[coach] action=update-story storyId=${storyId}`);
     return res.status(200).json({ success: true });
   } catch (err) {
+    if (err instanceof RepoPublicError) {
+      console.warn(`[coach] update-story refused: ${err.message}`);
+      return res.status(403).json({ error: err.message, code: 'REPO_PUBLIC' });
+    }
     console.error('[coach] update-story error:', err);
     return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
@@ -494,7 +511,7 @@ async function handleMockStart(req, res, githubToken, owner, repo) {
 
     const roleDesc = jobContext
       ? `${jobContext.role || 'the role'}${jobContext.level ? ` (${jobContext.level})` : ''} at ${jobContext.company || 'the company'}`
-      : 'a senior Director/VP-level strategy and operations role';
+      : "the user's target role";
 
     const jdBlock = jobContext?.jobDescription
       ? `\n\nJOB DESCRIPTION (for question calibration):\n${jobContext.jobDescription.slice(0, 2000)}`
@@ -630,7 +647,7 @@ ${claudeMd || 'No profile provided.'}
 STORY BANK (candidate's prepared stories):
 ${storyBank || 'No stories yet.'}${jdBlock}
 
-Generate exactly 6 interview questions: ${jobContext ? '5 behavioral/competency questions tailored to this role and company' : '5 Director/VP-level behavioral questions for strategy and operations roles'}, plus 1 curveball question.
+Generate exactly 6 interview questions: ${jobContext ? '5 behavioral/competency questions tailored to this role and company' : "5 behavioral questions appropriate to the user's target seniority and function"}, plus 1 curveball question.
 
 Curveball rules:
 - NOT a standard behavioral question
@@ -1161,6 +1178,147 @@ Be specific and grounded only in what the user told you. Use placeholders for mi
   }
 }
 
+// ── Route: POST ?action=generate-profile ─────────────────────────────────────
+// Generates config/profile.yml — the structured file scanner/config.mjs reads at
+// runtime to drive search keywords, locations, salary floor, and deal-breakers,
+// plus narrative sections the AI scoring/coaching read. Populated only from what
+// the user provided; anything missing is a [placeholder], never fabricated.
+
+async function handleGenerateProfile(req, res) {
+  const { anthropicKey, resumeText, transcriptText, existingFiles, updatePrefix } = buildOnboardingShared(req);
+  if (!anthropicKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  console.log('[coach] action=generate-profile');
+  try {
+    const existingBlock = existingFiles?.profileYml
+      ? `EXISTING config/profile.yml:\n${existingFiles.profileYml}\n\n`
+      : null;
+    const baseContent = resumeText
+      ? `RESUME:\n${resumeText}\n\nCONVERSATION:\n${transcriptText || '(No conversation yet.)'}`
+      : `CONVERSATION:\n${transcriptText || '(No conversation yet.)'}`;
+    const userContent = existingBlock ? `${existingBlock}${baseContent}` : baseContent;
+    const data = await anthropicFetch(anthropicKey, {
+      model: SONNET_MODEL,
+      max_tokens: 3000,
+      system: `${updatePrefix}You are generating a structured config/profile.yml file for a job search automation system. This file is read by the scanner at runtime to configure search keywords, locations, salary filters, and deal-breakers. It must be valid YAML.
+
+Generate the file with exactly this structure — populate each field from the resume and conversation. Use placeholders like [ADD: value] for anything not provided. Never fabricate values.
+
+# JobBud Profile
+name: [full name]
+location: [current city, state]
+email: [email if provided, otherwise leave blank]
+
+# Scanner configuration — parsed at runtime by scanner/config.mjs
+target_roles:
+  - [role title 1 — exact phrase, lowercase]
+  - [role title 2]
+  - [add more as needed]
+
+exclude_titles:
+  - coordinator
+  - analyst
+  - intern
+  - assistant
+  - specialist
+  - [add any the user mentioned]
+
+target_locations:
+  - city: [city name]
+    region: [state/region code or null]
+    country: [2-letter country code]
+    radius_miles: [30 for US cities, 15 for international]
+  - [add more locations as needed]
+
+include_remote: [true or false based on stated preference]
+
+min_salary: [annual base salary floor as integer, e.g. 150000. Use 0 if not specified.]
+
+deal_breaker_industries:
+  - [industry 1 — only if explicitly stated]
+  - [add more as needed]
+
+deal_breaker_keywords:
+  - [keyword 1 — only if explicitly stated]
+
+# Narrative sections — read by AI scoring and coaching
+target_role_description: |
+  [2-3 sentences describing target roles, seniority, and scope]
+
+industries_of_interest: |
+  [industries and company types the user is targeting]
+
+company_types: |
+  [preferred company stage, size, backing, culture]
+
+career_history_summary: |
+  [3-4 sentences summarizing career arc and background]
+
+current_situation: [one line — e.g. 'Actively searching, available immediately' or 'Currently employed, selectively exploring']
+
+deal_breakers: |
+  [explicit deal-breakers stated by the user, or 'None stated']
+
+nice_to_haves: |
+  [nice-to-haves stated by the user, or 'None stated']
+
+Output valid YAML only. No preamble, no explanation, no markdown code fences. Start directly with # JobBud Profile.`,
+      messages: [{ role: 'user', content: userContent }],
+    });
+    return res.status(200).json({ profileYml: data.content?.[0]?.text ?? '' });
+  } catch (err) {
+    console.error('[coach] generate-profile error:', err);
+    return res.status(200).json({ error: 'Something went wrong. Please try again.' });
+  }
+}
+
+// ── Route: POST ?action=save-onboarding ──────────────────────────────────────
+// Commits the onboarding-generated files to the user's repo — the "Save to my
+// repo" alternative to downloading each file by hand. These files carry the
+// user's real name, background, and history, so the save is GATED on a
+// repo-visibility check: if the target repo is PUBLIC, it is refused outright (no
+// override). The download buttons remain the review-first path.
+
+// filename → the field the dashboard sends it under.
+const ONBOARDING_FILE_MAP = [
+  { path: 'CLAUDE.md',           key: 'claudeMd' },
+  { path: 'cv.md',               key: 'cvMd' },
+  { path: 'bullet-bank.md',      key: 'bulletBankMd' },
+  { path: 'article-digest.md',   key: 'articleDigestMd' },
+  { path: 'config/profile.yml',  key: 'profileYml' },
+];
+
+async function handleSaveOnboarding(req, res, githubToken, owner, repo) {
+  const files = req.body || {};
+  const toWrite = ONBOARDING_FILE_MAP.filter(
+    f => typeof files[f.key] === 'string' && files[f.key].trim(),
+  );
+  if (!toWrite.length) {
+    return res.status(400).json({ error: 'No generated files to save. Generate your profile first.' });
+  }
+  console.log(`[coach] action=save-onboarding files=${toWrite.map(f => f.path).join(', ')}`);
+  try {
+    // CRITICAL: refuse to publish personal files to a public repo. Fails closed.
+    await assertRepoPrivate(githubToken, owner, repo);
+
+    const saved = [];
+    for (const f of toWrite) {
+      await writeGithubFile(
+        githubToken, owner, repo, f.path, files[f.key],
+        `chore: save ${f.path} from onboarding [skip ci]`, { logTag: 'coach' },
+      );
+      saved.push(f.path);
+    }
+    return res.status(200).json({ success: true, saved });
+  } catch (err) {
+    if (err instanceof RepoPublicError) {
+      console.warn(`[coach] save-onboarding refused: ${err.message}`);
+      return res.status(403).json({ error: err.message, code: 'REPO_PUBLIC' });
+    }
+    console.error('[coach] save-onboarding error:', err);
+    return res.status(500).json({ error: 'Could not save your files. Please try again, or use the download buttons.' });
+  }
+}
+
 // ── Mock session persistence ─────────────────────────────────────────────────
 
 async function writeMockSessions(githubToken, owner, repo, content) {
@@ -1239,6 +1397,8 @@ export default async function handler(req, res) {
     if (req.method === 'POST' && action === 'generate-cv')             return handleGenerateCv(req, res);
     if (req.method === 'POST' && action === 'generate-bulletbank')     return handleGenerateBulletBank(req, res);
     if (req.method === 'POST' && action === 'generate-articledigest')  return handleGenerateArticleDigest(req, res);
+    if (req.method === 'POST' && action === 'generate-profile')         return handleGenerateProfile(req, res);
+    if (req.method === 'POST' && action === 'save-onboarding')          return handleSaveOnboarding(req, res, githubToken, owner, repo);
     if (req.method === 'GET'  && action === 'get-mock-sessions')       return handleGetMockSessions(req, res, githubToken, owner, repo);
     if (req.method === 'POST' && action === 'save-mock-session')   return handleSaveMockSession(req, res, githubToken, owner, repo);
     return res.status(400).json({ error: `Unknown action: ${action}` });
