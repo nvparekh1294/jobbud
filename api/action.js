@@ -1,5 +1,7 @@
-import crypto from 'crypto';
 import { generateAndSendPackage } from '../scanner/applicationPackage.mjs';
+import { esc } from '../scanner/html.mjs';
+import { readGithubFile, writeGithubFile } from '../lib/github.js';
+import { safeEqual, verifyActionToken, actionTokenSecret, actionKeySource, actionKeyFingerprint } from '../lib/auth.mjs';
 
 const VALID_STATUSES = [
   'saved',
@@ -75,164 +77,37 @@ const SNOOZE_MESSAGE = (company, title) => `
   <p>Got it. JobBud will nudge you tomorrow about <strong>${title}</strong> at <strong>${company}</strong>.</p>
 `;
 
-// Email action tokens carry a Unix timestamp (seconds) so they can expire.
-// The token signs jobId+status+ts; the ts travels in the URL so we can both
-// re-derive the HMAC and reject anything older than 72 hours.
-const TOKEN_MAX_AGE_SECONDS = 72 * 60 * 60; // 72 hours
-
-function verifyToken(jobId, status, token, ts, password) {
-  // ts must be present and numeric
-  if (!ts || !/^\d+$/.test(String(ts))) return false;
-  const tsNum = parseInt(String(ts), 10);
-  const ageSeconds = Math.floor(Date.now() / 1000) - tsNum;
-  // Reject expired tokens and tokens dated in the future (clock skew / tampering)
-  if (ageSeconds < 0 || ageSeconds > TOKEN_MAX_AGE_SECONDS) return false;
-
-  const expected = crypto
-    .createHmac('sha256', password)
-    .update(jobId + status + tsNum)
-    .digest('hex')
-    .slice(0, 16);
-  return token === expected;
-}
+// Email-action tokens carry a Unix timestamp (seconds) so they can expire.
+// Signing/verification — the 72h expiry, future-ts rejection, widened digest,
+// constant-time compare, and the dedicated ACTION_TOKEN_SECRET (falling back to
+// DASHBOARD_PASSWORD) — live in ../lib/auth.mjs so the generators that mint tokens
+// and this verifier can never drift apart.
 
 async function getJobStatus(githubToken, owner, repo) {
-  const url = `https://api.github.com/repos/${owner}/${repo}/contents/data/job-status.json`;
-  console.log(`[action] GET ${url}`);
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${githubToken}`,
-      Accept: 'application/vnd.github+json',
-    },
-  });
-  console.log(`[action] GET response status: ${res.status}`);
-  if (!res.ok) {
-    const body = await res.text();
-    console.error(`[action] GET failed body: ${body}`);
-    throw new Error(`GitHub GET failed: ${res.status} — ${body}`);
-  }
-  const data = await res.json();
-
-  // GitHub Contents API returns content:"" for files > 1 MB; use download_url instead.
-  let rawJson;
-  if (data.content) {
-    rawJson = Buffer.from(data.content, 'base64').toString('utf8');
-    console.log(`[action] GET success (inline content)`);
-  } else if (data.download_url) {
-    console.log(`[action] File exceeds GitHub Contents API limit — fetching via download_url`);
-    const rawRes = await fetch(data.download_url, {
-      headers: { Authorization: `Bearer ${githubToken}` },
-    });
-    if (!rawRes.ok) {
-      const body = await rawRes.text();
-      console.error(`[action] download_url fetch failed: ${rawRes.status} — ${body}`);
-      throw new Error(`GitHub download_url fetch failed: ${rawRes.status} — ${body}`);
-    }
-    rawJson = await rawRes.text();
-    console.log(`[action] GET success (download_url)`);
-  } else {
-    throw new Error('GitHub Contents API returned neither content nor download_url');
-  }
-
-  const content = JSON.parse(rawJson);
-  return { content };
+  const { exists, content } = await readGithubFile(githubToken, owner, repo, 'data/job-status.json');
+  if (!exists) throw new Error('GitHub GET failed: data/job-status.json not found (404)');
+  return { content: JSON.parse(content) };
 }
 
-// Write job-status.json via the Git Data API — works for files of any size.
-// The Contents API PUT endpoint rejects files > 1 MB with a 422, so we bypass
-// it entirely: create a blob, build a new tree, create a commit, update the ref.
-async function putJobStatus(githubToken, owner, repo, content) {
-  const GITHUB_GIT = `https://api.github.com/repos/${owner}/${repo}/git`;
-  const authHeaders = {
-    Authorization: `Bearer ${githubToken}`,
-    Accept: 'application/vnd.github+json',
-    'Content-Type': 'application/json',
-  };
-
-  const contentBase64 = Buffer.from(JSON.stringify(content, null, 2)).toString('base64');
-
-  // Step 1 — create blob
-  console.log(`[action] Git Data API: creating blob...`);
-  const blobRes = await fetch(`${GITHUB_GIT}/blobs`, {
-    method: 'POST',
-    headers: authHeaders,
-    body: JSON.stringify({ content: contentBase64, encoding: 'base64' }),
-  });
-  if (!blobRes.ok) {
-    const body = await blobRes.text();
-    console.error(`[action] blob create failed: ${blobRes.status} — ${body}`);
-    throw new Error(`GitHub blob create failed: ${blobRes.status} — ${body}`);
-  }
-  const { sha: blobSha } = await blobRes.json();
-  console.log(`[action] blob created: ${blobSha}`);
-
-  // Step 2 — get HEAD commit SHA
-  const refRes = await fetch(`${GITHUB_GIT}/ref/heads/main`, { headers: authHeaders });
-  if (!refRes.ok) {
-    const body = await refRes.text();
-    console.error(`[action] get ref failed: ${refRes.status} — ${body}`);
-    throw new Error(`GitHub get ref failed: ${refRes.status} — ${body}`);
-  }
-  const { object: { sha: commitSha } } = await refRes.json();
-  console.log(`[action] HEAD commit: ${commitSha}`);
-
-  // Step 3 — get tree SHA from commit
-  const commitRes = await fetch(`${GITHUB_GIT}/commits/${commitSha}`, { headers: authHeaders });
-  if (!commitRes.ok) {
-    const body = await commitRes.text();
-    console.error(`[action] get commit failed: ${commitRes.status} — ${body}`);
-    throw new Error(`GitHub get commit failed: ${commitRes.status} — ${body}`);
-  }
-  const { tree: { sha: treeSha } } = await commitRes.json();
-  console.log(`[action] current tree: ${treeSha}`);
-
-  // Step 4 — create new tree with updated file
-  const newTreeRes = await fetch(`${GITHUB_GIT}/trees`, {
-    method: 'POST',
-    headers: authHeaders,
-    body: JSON.stringify({
-      base_tree: treeSha,
-      tree: [{ path: 'data/job-status.json', mode: '100644', type: 'blob', sha: blobSha }],
-    }),
-  });
-  if (!newTreeRes.ok) {
-    const body = await newTreeRes.text();
-    console.error(`[action] create tree failed: ${newTreeRes.status} — ${body}`);
-    throw new Error(`GitHub create tree failed: ${newTreeRes.status} — ${body}`);
-  }
-  const { sha: newTreeSha } = await newTreeRes.json();
-  console.log(`[action] new tree: ${newTreeSha}`);
-
-  // Step 5 — create commit
-  const newCommitRes = await fetch(`${GITHUB_GIT}/commits`, {
-    method: 'POST',
-    headers: authHeaders,
-    body: JSON.stringify({
-      message: 'chore: update job status [skip ci]',
-      tree: newTreeSha,
-      parents: [commitSha],
-    }),
-  });
-  if (!newCommitRes.ok) {
-    const body = await newCommitRes.text();
-    console.error(`[action] create commit failed: ${newCommitRes.status} — ${body}`);
-    throw new Error(`GitHub create commit failed: ${newCommitRes.status} — ${body}`);
-  }
-  const { sha: newCommitSha } = await newCommitRes.json();
-  console.log(`[action] new commit: ${newCommitSha}`);
-
-  // Step 6 — advance branch ref
-  const updateRefRes = await fetch(`${GITHUB_GIT}/refs/heads/main`, {
-    method: 'PATCH',
-    headers: authHeaders,
-    body: JSON.stringify({ sha: newCommitSha }),
-  });
-  if (!updateRefRes.ok) {
-    const body = await updateRefRes.text();
-    console.error(`[action] update ref failed: ${updateRefRes.status} — ${body}`);
-    throw new Error(`GitHub update ref failed: ${updateRefRes.status} — ${body}`);
-  }
-  console.log(`[action] job-status.json updated via Git Data API`);
+// Field-safe update of a single job in job-status.json.
+// `applyChange(job)` mutates only the target job's fields. The write goes through
+// writeGithubFile's builder form, which re-reads the file on every attempt and
+// re-applies applyChange on top of the current data — so a concurrent status
+// change to a DIFFERENT job (from the scanner or another dashboard action) is
+// preserved rather than erased by a stale whole-file overwrite.
+async function updateJobStatus(githubToken, owner, repo, jobId, applyChange) {
+  await writeGithubFile(
+    githubToken, owner, repo, 'data/job-status.json',
+    (current) => {
+      const doc = current ? JSON.parse(current) : { jobs: {} };
+      if (!doc.jobs) doc.jobs = {};
+      if (!doc.jobs[jobId]) doc.jobs[jobId] = {};
+      applyChange(doc.jobs[jobId]);
+      return JSON.stringify(doc, null, 2);
+    },
+    'chore: update job status [skip ci]',
+    { logTag: 'action' },
+  );
 }
 
 function htmlPage(title, body, isError = false) {
@@ -266,11 +141,24 @@ function htmlPage(title, body, isError = false) {
 }
 
 export default async function handler(req, res) {
+  // /api/action is a state-changing endpoint reached by GET (email action links).
+  // Mark every response uncacheable so a click always hits the handler and mutates
+  // state, and so a confirmation page is never re-served from cache. Set once at the
+  // top so ALL paths inherit it — the 403/400 guards, the JSON dashboard responses,
+  // and the htmlPage confirmations.
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+
   const { jobId, status, token, ts, snooze } = req.query;
 
   const password = process.env.DASHBOARD_PASSWORD;
   const githubToken = process.env.GH_TOKEN;
-  const githubRepo = process.env.GH_REPO ;
+  const githubRepo = process.env.GH_REPO;
+
+  if (!githubRepo) {
+    return res.status(500).send(htmlPage('Error', '<h1>⚠ Not configured</h1><p>This action is temporarily unavailable. Please try again later.</p>', true));
+  }
+
   const [owner, repo] = githubRepo.split('/');
 
   // Env-var diagnostics — visible in Vercel function logs
@@ -286,22 +174,31 @@ export default async function handler(req, res) {
   //   1. X-Dashboard-Password header (dashboard fetch() calls) — no HMAC needed
   //   2. ?token= query param HMAC (email action links) — requires token in URL
   const headerPw = req.headers['x-dashboard-password'];
-  const isDashboardAuth = !!(headerPw && password && headerPw === password);
+  const isDashboardAuth = !!(headerPw && password && safeEqual(headerPw, password));
   console.log('[action] auth method:', isDashboardAuth ? 'X-Dashboard-Password' : 'HMAC token');
 
+  // ── Authorize FIRST — before validating or echoing any request parameter ────
+  // For the email-link path, the token signs jobId+status, so a missing or
+  // tampered param simply fails verification and returns Unauthorized. Tokens
+  // expire after 72h and are signed with ACTION_TOKEN_SECRET (falls back to
+  // DASHBOARD_PASSWORD); verification is constant-time.
+  if (!isDashboardAuth) {
+    if (!token || !actionTokenSecret() || !verifyActionToken(jobId, status, token, ts)) {
+      // Log the verify-side key source + fingerprint (never the token or secret) so a
+      // mint/verify key desync — the silent failure mode of a half-applied secret
+      // rotation — is diagnosable by diffing this against the scanner's startup line.
+      console.error(`action-token key: source=${actionKeySource()} fp=${actionKeyFingerprint()} jobId=${jobId}`);
+      return res.status(403).send(htmlPage('Error', '<h1>⛔ Unauthorized</h1><p>This link is invalid or has expired.</p>', true));
+    }
+  }
+
+  // ── Validate parameters only after auth is confirmed ────────────────────────
   if (!jobId || !status) {
     return res.status(400).send(htmlPage('Error', '<h1>⚠ Missing parameters</h1><p>This link is incomplete.</p>', true));
   }
 
   if (!VALID_STATUSES.includes(status)) {
-    return res.status(400).send(htmlPage('Error', `<h1>⚠ Invalid status</h1><p>"${status}" is not a valid status.</p>`, true));
-  }
-
-  if (!isDashboardAuth) {
-    // Fall back to HMAC token validation (email links). Tokens expire after 72h.
-    if (!token || !password || !verifyToken(jobId, status, token, ts, password)) {
-      return res.status(403).send(htmlPage('Error', '<h1>⛔ Unauthorized</h1><p>This link is invalid or has expired.</p>', true));
-    }
+    return res.status(400).send(htmlPage('Error', `<h1>⚠ Invalid status</h1><p>"${esc(status)}" is not a valid status.</p>`, true));
   }
 
   try {
@@ -313,18 +210,25 @@ export default async function handler(req, res) {
     const job = content.jobs[jobId];
     const company = job.company || 'Unknown company';
     const title = job.title || 'Unknown role';
+    // HTML-encoded copies for use in response markup. Keep the raw company/title
+    // for non-HTML uses (email/package subject line, log messages) where encoding
+    // would corrupt the value.
+    const companyHtml = esc(company);
+    const titleHtml = esc(title);
     const previousStatus = job.status;
 
     // ── Snooze handling (status=preparing&snooze=1) ──────────────────────────
     if (status === 'preparing' && snooze === '1') {
-      job.snoozedUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-      job.statusUpdatedAt = new Date().toISOString();
-      if (!job.statusHistory) job.statusHistory = [];
-      job.statusHistory.push({ status: 'snoozed_preparing', timestamp: new Date().toISOString() });
-
-      await putJobStatus(githubToken, owner, repo, content);
+      const nowIso = new Date().toISOString();
+      const snoozedUntil = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+      await updateJobStatus(githubToken, owner, repo, jobId, (j) => {
+        j.snoozedUntil = snoozedUntil;
+        j.statusUpdatedAt = nowIso;
+        if (!j.statusHistory) j.statusHistory = [];
+        j.statusHistory.push({ status: 'snoozed_preparing', timestamp: nowIso });
+      });
       res.setHeader('Content-Type', 'text/html');
-      return res.status(200).send(htmlPage('Snoozed', SNOOZE_MESSAGE(company, title)));
+      return res.status(200).send(htmlPage('Snoozed', SNOOZE_MESSAGE(companyHtml, titleHtml)));
     }
 
     // ── Reached-out logging (status=reached_out_logged) ──────────────────────
@@ -343,41 +247,46 @@ export default async function handler(req, res) {
         notes:         typeof b.notes === 'string' ? b.notes : '',
         loggedAt:      nowIso,
       };
-      if (!Array.isArray(job.outreachContacts)) job.outreachContacts = [];
-      job.outreachContacts.push(contact);
-      job.lastOutreachAt = nowIso;
-      if (!job.statusHistory) job.statusHistory = [];
-      job.statusHistory.push({ status: 'reached_out_logged', timestamp: nowIso });
-
-      await putJobStatus(githubToken, owner, repo, content);
+      let savedOutreachContacts = [];
+      await updateJobStatus(githubToken, owner, repo, jobId, (j) => {
+        if (!Array.isArray(j.outreachContacts)) j.outreachContacts = [];
+        j.outreachContacts.push(contact);
+        j.lastOutreachAt = nowIso;
+        if (!j.statusHistory) j.statusHistory = [];
+        j.statusHistory.push({ status: 'reached_out_logged', timestamp: nowIso });
+        savedOutreachContacts = j.outreachContacts;
+      });
 
       const wantJson = (req.headers['accept'] || '').includes('application/json');
       if (wantJson) {
-        return res.status(200).json({ success: true, outreachContacts: job.outreachContacts });
+        return res.status(200).json({ success: true, outreachContacts: savedOutreachContacts });
       }
       res.setHeader('Content-Type', 'text/html');
-      return res.status(200).send(htmlPage('Logged', `<h1>📬 Logged</h1><p>Outreach to <strong>${contact.name || 'a contact'}</strong> at <strong>${company}</strong> has been saved.</p>`));
+      return res.status(200).send(htmlPage('Logged', `<h1>📬 Logged</h1><p>Outreach to <strong>${esc(contact.name || 'a contact')}</strong> at <strong>${companyHtml}</strong> has been saved.</p>`));
     }
 
     // ── Normal status update ────────────────────────────────────────────────
-    job.status = status;
-    job.statusUpdatedAt = new Date().toISOString();
-
-    // Add status-specific timestamps
-    if (status === 'preparing') job.preparedAt = new Date().toISOString();
-    if (status === 'applied') job.appliedAt = new Date().toISOString();
-
-    if (!job.statusHistory) job.statusHistory = [];
-    job.statusHistory.push({ status, timestamp: new Date().toISOString() });
-
-    await putJobStatus(githubToken, owner, repo, content);
+    const nowIso = new Date().toISOString();
+    const applyStatusChange = (j) => {
+      j.status = status;
+      j.statusUpdatedAt = nowIso;
+      // Status-specific timestamps
+      if (status === 'preparing') j.preparedAt = nowIso;
+      if (status === 'applied') j.appliedAt = nowIso;
+      if (!j.statusHistory) j.statusHistory = [];
+      j.statusHistory.push({ status, timestamp: nowIso });
+    };
+    // Apply to the in-memory copy too, so the 'preparing' path below hands the
+    // updated job to generateAndSendPackage.
+    applyStatusChange(job);
+    await updateJobStatus(githubToken, owner, repo, jobId, applyStatusChange);
 
     // ── Non-preparing statuses: GitHub write is the ONLY side effect ─────────
     // reject, save, applied, interviewing, offer, ghosted → return here, done.
     // generateAndSendPackage must NEVER be reached from any of these paths.
     if (status !== 'preparing') {
       const messageFn = STATUS_MESSAGES[status];
-      const body = messageFn ? messageFn(company, title) : `<h1>✓ Updated</h1><p>Status set to <strong>${status}</strong>.</p>`;
+      const body = messageFn ? messageFn(companyHtml, titleHtml) : `<h1>✓ Updated</h1><p>Status set to <strong>${esc(status)}</strong>.</p>`;
       res.setHeader('Content-Type', 'text/html');
       return res.status(200).send(htmlPage('Done', body));
     }
@@ -409,14 +318,14 @@ export default async function handler(req, res) {
           const { pkg, docUrl } = await generateAndSendPackage(job, jobId, { roleTypes, additionalGuidance, applicationQuestions });
 
           // Persist docUrl (and the possibly-updated description) back to
-          // job-status.json so the dashboard can link to the Google Doc from the
-          // applied status indicator. The content object is still in memory from
-          // the earlier read; we write it as a second commit here.
+          // job-status.json as a second, field-safe commit so the dashboard can
+          // link to the Google Doc from the applied status indicator.
           if (docUrl) {
-            content.jobs[jobId].docUrl = docUrl;
-            if (jobDescription) content.jobs[jobId].description = jobDescription;
             try {
-              await putJobStatus(githubToken, owner, repo, content);
+              await updateJobStatus(githubToken, owner, repo, jobId, (j) => {
+                j.docUrl = docUrl;
+                if (jobDescription) j.description = jobDescription;
+              });
               console.log(`[action] docUrl persisted for ${jobId}`);
             } catch (writeErr) {
               // Non-fatal — doc was created, URL just won't show on the dashboard
@@ -437,7 +346,7 @@ export default async function handler(req, res) {
           });
         } catch (err) {
           console.error(`[action] Application package failed for ${company}: ${err.message}`);
-          return res.status(500).json({ success: false, error: err.message });
+          return res.status(500).json({ success: false, error: 'Something went wrong generating the application package. Please try again.' });
         }
       } else {
         // Email / browser path: fire and forget, respond immediately
@@ -448,13 +357,13 @@ export default async function handler(req, res) {
     }
 
     const messageFn = STATUS_MESSAGES[status];
-    const body = messageFn ? messageFn(company, title) : `<h1>✓ Updated</h1><p>Status set to <strong>${status}</strong>.</p>`;
+    const body = messageFn ? messageFn(companyHtml, titleHtml) : `<h1>✓ Updated</h1><p>Status set to <strong>${esc(status)}</strong>.</p>`;
 
     res.setHeader('Content-Type', 'text/html');
     return res.status(200).send(htmlPage('Done', body));
 
   } catch (err) {
     console.error('Action handler error:', err);
-    return res.status(500).send(htmlPage('Error', `<h1>⚠ Something went wrong</h1><p>${err.message}</p>`, true));
+    return res.status(500).send(htmlPage('Error', `<h1>⚠ Something went wrong</h1><p>Please try again, or head back to the dashboard.</p>`, true));
   }
 }

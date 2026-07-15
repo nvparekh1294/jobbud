@@ -16,6 +16,8 @@
  */
 
 import { haikuHardFilter, sonnetScore, classifyJobType, sanitizeLocation } from '../scanner/evaluate.mjs';
+import { readGithubFile, writeGithubFile } from '../lib/github.js';
+import { safeEqual } from '../lib/auth.mjs';
 
 const GITHUB_API = 'https://api.github.com';
 
@@ -101,46 +103,27 @@ async function scrapeJobPage(url) {
 // ── GitHub read/write (mirrors scanner/persistJobs.mjs) ───────────────────────
 
 async function loadJobStatus(githubToken, owner, repo) {
-  const url = `${GITHUB_API}/repos/${owner}/${repo}/contents/data/job-status.json`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${githubToken}`, Accept: 'application/vnd.github+json' },
-  });
-  if (res.status === 404) return { jobs: {} };
-  if (!res.ok) throw new Error(`GitHub GET failed: ${res.status}`);
-  const data = await res.json();
-
-  let rawJson;
-  if (data.content) {
-    rawJson = Buffer.from(data.content, 'base64').toString('utf8');
-  } else if (data.download_url) {
-    const raw = await fetch(data.download_url, { headers: { Authorization: `Bearer ${githubToken}` } });
-    if (!raw.ok) throw new Error(`download_url failed: ${raw.status}`);
-    rawJson = await raw.text();
-  } else {
-    throw new Error('GitHub API returned neither content nor download_url');
-  }
-  return JSON.parse(rawJson);
+  const { exists, content } = await readGithubFile(githubToken, owner, repo, 'data/job-status.json');
+  if (!exists) return { jobs: {} };
+  return JSON.parse(content);
 }
 
-async function writeJobStatus(jobStatus, githubToken, owner, repo) {
-  const GIT = `${GITHUB_API}/repos/${owner}/${repo}/git`;
-  const auth = { Authorization: `Bearer ${githubToken}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' };
-  const ok = async (r, label) => {
-    if (!r.ok) {
-      const body = await r.text().catch(() => '');
-      throw new Error(`GitHub ${label} failed: ${r.status} — ${body.slice(0, 200)}`);
-    }
-    return r.json();
-  };
-
-  const b64 = Buffer.from(JSON.stringify(jobStatus, null, 2)).toString('base64');
-  const { sha: blobSha }       = await ok(await fetch(`${GIT}/blobs`, { method: 'POST', headers: auth, body: JSON.stringify({ content: b64, encoding: 'base64' }) }), 'blob');
-  const { object: { sha: commitSha } } = await ok(await fetch(`${GIT}/ref/heads/main`, { headers: auth }), 'get ref');
-  const { tree: { sha: treeSha } }     = await ok(await fetch(`${GIT}/commits/${commitSha}`, { headers: auth }), 'get commit');
-  const { sha: newTreeSha }    = await ok(await fetch(`${GIT}/trees`, { method: 'POST', headers: auth, body: JSON.stringify({ base_tree: treeSha, tree: [{ path: 'data/job-status.json', mode: '100644', type: 'blob', sha: blobSha }] }) }), 'create tree');
-  const { sha: newCommitSha }  = await ok(await fetch(`${GIT}/commits`, { method: 'POST', headers: auth, body: JSON.stringify({ message: 'chore: add manual job entry [skip ci]', tree: newTreeSha, parents: [commitSha] }) }), 'create commit');
-  await ok(await fetch(`${GIT}/refs/heads/main`, { method: 'PATCH', headers: auth, body: JSON.stringify({ sha: newCommitSha }) }), 'update ref');
-  console.log(`[add-job] job-status.json updated (commit: ${newCommitSha})`);
+// Field-safe add: re-read job-status.json on every attempt and set only THIS entry,
+// so a concurrent status change to a different job (dashboard or scanner) is
+// preserved rather than erased by a stale whole-file overwrite.
+async function addJobRecord(githubToken, owner, repo, fingerprint, jobRecord) {
+  const commitSha = await writeGithubFile(
+    githubToken, owner, repo, 'data/job-status.json',
+    (current) => {
+      const doc = current ? JSON.parse(current) : { jobs: {} };
+      if (!doc.jobs) doc.jobs = {};
+      doc.jobs[fingerprint] = jobRecord; // add/replace only this job
+      return JSON.stringify(doc, null, 2);
+    },
+    'chore: add manual job entry [skip ci]',
+    { logTag: 'add-job' },
+  );
+  console.log(`[add-job] job-status.json updated (commit: ${commitSha})`);
 }
 
 // ── Stable fingerprint for manual entries ────────────────────────────────────
@@ -163,7 +146,7 @@ export default async function handler(req, res) {
   // Auth — same pattern as api/jobs.js
   const password = process.env.DASHBOARD_PASSWORD;
   const headerPw = req.headers['x-dashboard-password'];
-  if (!password || !headerPw || headerPw !== password) {
+  if (!password || !headerPw || !safeEqual(headerPw, password)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   if (req.method !== 'POST') {
@@ -184,7 +167,8 @@ export default async function handler(req, res) {
       }
       return res.status(200).json({ ok: true, ...fields });
     } catch (err) {
-      return res.status(200).json({ ok: false, error: err.message });
+      console.error('[add-job] scrape error:', err);
+      return res.status(200).json({ ok: false, error: 'Could not fetch the job page. Please try again or paste the details manually.' });
     }
   }
 
@@ -207,7 +191,8 @@ export default async function handler(req, res) {
   try {
     jobStatus = await loadJobStatus(githubToken, owner, repo);
   } catch (err) {
-    return res.status(500).json({ error: `Failed to load job-status.json: ${err.message}` });
+    console.error('[add-job] Failed to load job-status.json:', err);
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
   if (!jobStatus.jobs) jobStatus.jobs = {};
 
@@ -288,12 +273,11 @@ export default async function handler(req, res) {
     fundingSnapshot:   null,
   };
 
-  jobStatus.jobs[fingerprint] = jobRecord;
-
   try {
-    await writeJobStatus(jobStatus, githubToken, owner, repo);
+    await addJobRecord(githubToken, owner, repo, fingerprint, jobRecord);
   } catch (err) {
-    return res.status(500).json({ error: `Failed to write job-status.json: ${err.message}` });
+    console.error('[add-job] Failed to write job-status.json:', err);
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 
   return res.status(200).json({

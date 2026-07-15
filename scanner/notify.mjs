@@ -1,13 +1,5 @@
-import crypto from 'crypto';
-
-function generateToken(jobId, status, ts) {
-  const password = process.env.DASHBOARD_PASSWORD || '';
-  return crypto
-    .createHmac('sha256', password)
-    .update(jobId + status + ts)
-    .digest('hex')
-    .slice(0, 16);
-}
+import { esc, safeUrl } from './html.mjs';
+import { signActionToken } from '../lib/auth.mjs';
 
 function sanitizeLocation(str) {
   if (!str) return '';
@@ -18,7 +10,7 @@ function sanitizeLocation(str) {
 function actionUrl(jobId, status) {
   const base = process.env.VERCEL_URL || 'http://localhost:3000';
   const ts = Math.floor(Date.now() / 1000);
-  const token = generateToken(jobId, status, ts);
+  const token = signActionToken(jobId, status, ts);
   return `${base}/api/action?jobId=${encodeURIComponent(jobId)}&status=${status}&token=${token}&ts=${ts}`;
 }
 
@@ -170,9 +162,9 @@ function fundingLine(snapshot) {
   if (!snapshot || snapshot.skip || snapshot.unreliable) return '';
   const parts = [snapshot.round, snapshot.amount, snapshot.investors?.join(', ')].filter(Boolean);
   if (!parts.length) return '';
-  const text = `💰 ${parts.join(' · ')}`;
+  const text = esc(`💰 ${parts.join(' · ')}`);
   return snapshot.sourceUrl
-    ? `<div class="funding"><a href="${snapshot.sourceUrl}" style="color:#6366f1;text-decoration:none">${text}</a></div>`
+    ? `<div class="funding"><a href="${safeUrl(snapshot.sourceUrl)}" style="color:#6366f1;text-decoration:none">${text}</a></div>`
     : `<div class="funding">${text}</div>`;
 }
 
@@ -180,21 +172,21 @@ function card(job, type) {
   const jobId = job._fingerprint || '';
   const scoreClass = type === 'investing' ? 'purple' : type === 'review' ? 'amber' : '';
   const viewRoleBtn = job.url
-    ? `<a href="${job.url}" target="_blank" rel="noopener noreferrer" class="btn btn-apply">View Role →</a>`
+    ? `<a href="${safeUrl(job.url)}" target="_blank" rel="noopener noreferrer" class="btn btn-apply">View Role →</a>`
     : `<span class="btn btn-disabled">URL not available</span>`;
 
   return `<div class="card ${type}">
-    <div class="title"><a href="${job.url || '#'}">${job.title}</a></div>
-    <div class="meta">${job.company} · ${sanitizeLocation(job.location)}${job.isRemote ? ' · Remote' : ''}</div>
-    ${job.companyDescription ? `<div class="company-desc">${job.companyDescription}</div>` : ''}
+    <div class="title"><a href="${safeUrl(job.url)}">${esc(job.title)}</a></div>
+    <div class="meta">${esc(job.company)} · ${esc(sanitizeLocation(job.location))}${job.isRemote ? ' · Remote' : ''}</div>
+    ${job.companyDescription ? `<div class="company-desc">${esc(job.companyDescription)}</div>` : ''}
     ${fundingLine(job.fundingSnapshot)}
     <span class="score ${scoreClass}">${job.score?.toFixed(1)}/5.0</span>
-    <span style="font-size:12px;color:#666">${job.recommendedAction || ''}</span>
-    ${job.whyFit?.length ? `<ul class="reasons">${job.whyFit.map(r => `<li>${r}</li>`).join('')}</ul>` : ''}
-    ${job.watchOuts?.length ? `<div class="watchout">⚠ ${job.watchOuts[0]}</div>` : ''}
+    <span style="font-size:12px;color:#666">${esc(job.recommendedAction || '')}</span>
+    ${job.whyFit?.length ? `<ul class="reasons">${job.whyFit.map(r => `<li>${esc(r)}</li>`).join('')}</ul>` : ''}
+    ${job.watchOuts?.length ? `<div class="watchout">⚠ ${esc(job.watchOuts[0])}</div>` : ''}
     ${job.aiExposureRisk ? `<div class="ai-exposure">
       ${{ low: '🟢', medium: '🟡', high: '🔴' }[job.aiExposureRisk] || '⚪'}
-      AI exposure: <strong>${job.aiExposureRisk}</strong> — ${job.aiExposureRationale || ''}
+      AI exposure: <strong>${esc(job.aiExposureRisk)}</strong> — ${esc(job.aiExposureRationale || '')}
     </div>` : ''}
     <div style="margin-top:14px">${viewRoleBtn}</div>
     <div class="action-btns">

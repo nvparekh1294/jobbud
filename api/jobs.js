@@ -2,6 +2,8 @@
 // The dashboard fetches /api/jobs instead of raw.githubusercontent.com so it works
 // even though the repo is private.
 
+import { safeEqual } from '../lib/auth.mjs';
+
 export default async function handler(req, res) {
   const password = process.env.DASHBOARD_PASSWORD;
 
@@ -15,10 +17,12 @@ export default async function handler(req, res) {
   }
 
   // ── Auth ────────────────────────────────────────────────────────────────────
-  // Only enforced when DASHBOARD_PASSWORD is set. If unset, the dashboard is
-  // intentionally open (e.g. a self-hosted instance with no sensitive data).
+  // Fail closed: require the password unconditionally. If DASHBOARD_PASSWORD is
+  // unset (a misconfigured install) or the header is missing/wrong, return 401
+  // rather than serving private job data openly. The ?config=true probe above
+  // stays open so the frontend can still decide whether to show the gate.
   const headerPw = req.headers['x-dashboard-password'];
-  if (password && (!headerPw || headerPw !== password)) {
+  if (!password || !headerPw || !safeEqual(headerPw, password)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
@@ -27,6 +31,10 @@ export default async function handler(req, res) {
 
   if (!githubToken) {
     return res.status(500).json({ error: 'GH_TOKEN not configured' });
+  }
+
+  if (!githubRepo) {
+    return res.status(500).json({ error: 'GH_REPO not configured' });
   }
 
   const [owner, repo] = githubRepo.split('/');

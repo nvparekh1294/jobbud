@@ -1,9 +1,9 @@
-import crypto from 'crypto';
+import { esc, safeUrl } from './html.mjs';
+import { signActionToken } from '../lib/auth.mjs';
 
 const GITHUB_REPO = process.env.GH_REPO;
 const GITHUB_TOKEN = process.env.GH_TOKEN;
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
-const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || '';
 const VERCEL_URL = process.env.VERCEL_URL || 'http://localhost:3000';
 const RECIPIENT_EMAIL = process.env.NOTIFICATION_EMAIL || '';
 
@@ -19,23 +19,15 @@ const MS_21D = 21 * 24 * 60 * 60 * 1000;
 // threshold never appeared at all, so the user had no chance to action them.
 const MIN_SCORE_TO_REMIND = 4.0;
 
-function generateToken(jobId, status, ts) {
-  return crypto
-    .createHmac('sha256', DASHBOARD_PASSWORD)
-    .update(jobId + status + ts)
-    .digest('hex')
-    .slice(0, 16);
-}
-
 function actionUrl(jobId, status) {
   const ts = Math.floor(Date.now() / 1000);
-  const token = generateToken(jobId, status, ts);
+  const token = signActionToken(jobId, status, ts);
   return `${VERCEL_URL}/api/action?jobId=${encodeURIComponent(jobId)}&status=${status}&token=${token}&ts=${ts}`;
 }
 
 function snoozeUrl(jobId) {
   const ts = Math.floor(Date.now() / 1000);
-  const token = generateToken(jobId, 'preparing', ts);
+  const token = signActionToken(jobId, 'preparing', ts);
   return `${VERCEL_URL}/api/action?jobId=${encodeURIComponent(jobId)}&status=preparing&token=${token}&ts=${ts}&snooze=1`;
 }
 
@@ -120,10 +112,10 @@ function miniCard(id, job) {
   return `
     <div style="border:1px solid #e8e8e8;border-radius:8px;padding:14px 18px;margin-bottom:10px;">
       <div style="font-size:15px;font-weight:600;margin-bottom:2px;">
-        <a href="${job.url}" style="color:#111;text-decoration:none">${job.title}</a>
+        <a href="${safeUrl(job.url)}" style="color:#111;text-decoration:none">${esc(job.title)}</a>
       </div>
       <div style="font-size:11px;font-weight:700;color:#16a34a;margin-bottom:4px">Score: ${typeof job.score === 'number' ? job.score.toFixed(1) : '—'}</div>
-      <div style="font-size:12px;color:#888;margin-bottom:10px">${job.company} · ${job.location || ''}${job.isRemote ? ' · Remote' : ''}</div>
+      <div style="font-size:12px;color:#888;margin-bottom:10px">${esc(job.company)} · ${esc(job.location || '')}${job.isRemote ? ' · Remote' : ''}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <a href="${actionUrl(id, 'saved')}" style="display:inline-block;padding:6px 14px;background:#eff6ff;color:#2563eb;border-radius:6px;text-decoration:none;font-size:12px;font-weight:600">Save</a>
         <a href="${actionUrl(id, 'preparing')}" style="display:inline-block;padding:6px 14px;background:#111;color:white;border-radius:6px;text-decoration:none;font-size:12px;font-weight:600">Prepare to Apply</a>
@@ -136,10 +128,10 @@ function preparingCard(id, job) {
   return `
     <div style="border:1px solid #e8e8e8;border-left:3px solid #2563eb;border-radius:8px;padding:14px 18px;margin-bottom:10px;">
       <div style="font-size:15px;font-weight:600;margin-bottom:2px;">
-        <a href="${job.url}" style="color:#111;text-decoration:none">${job.title}</a>
+        <a href="${safeUrl(job.url)}" style="color:#111;text-decoration:none">${esc(job.title)}</a>
       </div>
       <div style="font-size:11px;font-weight:700;color:#16a34a;margin-bottom:4px">Score: ${typeof job.score === 'number' ? job.score.toFixed(1) : '—'}</div>
-      <div style="font-size:12px;color:#888;margin-bottom:10px">${job.company} · Started preparing ${new Date(job.preparedAt || job.statusUpdatedAt).toLocaleDateString()}</div>
+      <div style="font-size:12px;color:#888;margin-bottom:10px">${esc(job.company)} · Started preparing ${new Date(job.preparedAt || job.statusUpdatedAt).toLocaleDateString()}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <a href="${actionUrl(id, 'applied')}" style="display:inline-block;padding:6px 14px;background:#111;color:white;border-radius:6px;text-decoration:none;font-size:12px;font-weight:600">✓ I've Applied</a>
         <a href="${snoozeUrl(id)}" style="display:inline-block;padding:6px 14px;background:#eff6ff;color:#2563eb;border-radius:6px;text-decoration:none;font-size:12px;font-weight:600">Snooze 24h</a>
@@ -285,9 +277,9 @@ async function sendNudgeDigest(nudgeItems) {
     return `
       <div style="border:1px solid #e8e8e8;border-radius:8px;padding:14px 18px;margin-bottom:10px;">
         <div style="font-size:15px;font-weight:600;margin-bottom:2px;">
-          ${job.url ? `<a href="${job.url}" style="color:#111;text-decoration:none">${job.title}</a>` : job.title}
+          ${job.url ? `<a href="${safeUrl(job.url)}" style="color:#111;text-decoration:none">${esc(job.title)}</a>` : esc(job.title)}
         </div>
-        <div style="font-size:12px;color:#888;margin-bottom:10px">${job.company} · ${days} day${days !== 1 ? 's' : ''} since last action</div>
+        <div style="font-size:12px;color:#888;margin-bottom:10px">${esc(job.company)} · ${days} day${days !== 1 ? 's' : ''} since last action</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">${btns}</div>
       </div>`;
   };

@@ -351,6 +351,6 @@ Respond with exactly this JSON:
 
   } catch (err) {
     console.error('[outreach] Error:', err.message);
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }
