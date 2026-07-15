@@ -40,29 +40,11 @@ jobs:
         run: npm install
         working-directory: .
 
-      - name: Restore seen-jobs cache
-        uses: actions/cache/restore@v5
-        with:
-          path: data/seen-jobs.json
-          key: seen-jobs-${{ github.run_id }}
-          restore-keys: |
-            seen-jobs-
-
-      - name: Restore company cache
-        uses: actions/cache/restore@v5
-        with:
-          path: data/company-cache.json
-          key: company-cache-${{ github.run_id }}
-          restore-keys: |
-            company-cache-
-
-      - name: Restore API usage cache
-        uses: actions/cache/restore@v5
-        with:
-          path: data/api-usage.json
-          key: api-usage-${{ github.run_id }}
-          restore-keys: |
-            api-usage-
+      # Durable scanner state (seen-jobs.json, company-cache.json, api-usage.json)
+      # is git-tracked, so `actions/checkout` above already restored it. The
+      # committed copy is the source of truth — no cache restore, which could be
+      # evicted and silently reset dedup. State is committed back at the end of the
+      # run by the "Commit scanner state" step below.
 
       - name: Run scanner
         if: github.event.schedule != '0 9 * * 1'
@@ -122,23 +104,12 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: node scanner/weeklyDigest.mjs || true
 
-      - name: Save seen-jobs cache
+      - name: Commit scanner state
+        # Persist seen-jobs.json / company-cache.json / api-usage.json back to the
+        # repo so the committed copy stays the durable source of truth. Best-effort —
+        # never fails the run. Unchanged files are skipped.
         if: always()
-        uses: actions/cache/save@v5
-        with:
-          path: data/seen-jobs.json
-          key: seen-jobs-${{ github.run_id }}
-
-      - name: Save company cache
-        if: always()
-        uses: actions/cache/save@v5
-        with:
-          path: data/company-cache.json
-          key: company-cache-${{ github.run_id }}
-
-      - name: Save API usage cache
-        if: always()
-        uses: actions/cache/save@v5
-        with:
-          path: data/api-usage.json
-          key: api-usage-${{ github.run_id }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: node scanner/commitState.mjs || true

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { classifyJobType, sanitizeLocation, evaluateJobs } from '../scanner/evaluate.mjs';
+import { classifyJobType, sanitizeLocation, wasScoredOrFiltered, evaluateJobs } from '../scanner/evaluate.mjs';
 import { HAIKU_MODEL, SONNET_MODEL } from '../scanner/config.mjs';
 
 // ── classifyJobType ───────────────────────────────────────────────────────────
@@ -42,6 +42,36 @@ test('sanitizeLocation collapses runs of spaces to a single space', () => {
 test('sanitizeLocation edge case: empty/undefined input returns empty string', () => {
   assert.equal(sanitizeLocation(''), '');
   assert.equal(sanitizeLocation(undefined), '');
+});
+
+// ── wasScoredOrFiltered ───────────────────────────────────────────────────────
+// Guards the markScored set: a Stage-2 scoring FAILURE must be excluded (so it
+// retries next run) while a Stage-1-filtered non-fit stays marked (never re-scored).
+test('wasScoredOrFiltered excludes a Stage-2 scoring failure (score null, no stage1Filtered)', () => {
+  const stage2Failed = { _fingerprint: 'fp-fail', score: null, evaluation: null, fundingSnapshot: null };
+  assert.equal(wasScoredOrFiltered(stage2Failed), false);
+});
+
+test('wasScoredOrFiltered includes a Stage-1-filtered job (score null but stage1Filtered:true)', () => {
+  const stage1Filtered = { _fingerprint: 'fp-filtered', score: null, evaluation: null, stage1Filtered: true };
+  assert.equal(wasScoredOrFiltered(stage1Filtered), true);
+});
+
+test('wasScoredOrFiltered includes a successfully scored job', () => {
+  assert.equal(wasScoredOrFiltered({ _fingerprint: 'fp-ok', score: 4.2 }), true);
+  // A zero-adjacent score is still a real score, not a failure.
+  assert.equal(wasScoredOrFiltered({ _fingerprint: 'fp-low', score: 0 }), true);
+});
+
+test('wasScoredOrFiltered partitions a mixed evaluated batch correctly', () => {
+  const evaluated = [
+    { _fingerprint: 'a', score: 4.5 },                                    // scored
+    { _fingerprint: 'b', score: null, stage1Filtered: true },             // filtered
+    { _fingerprint: 'c', score: null },                                   // Stage-2 failure
+  ];
+  const toMark = evaluated.filter(wasScoredOrFiltered).map(j => j._fingerprint);
+  assert.deepEqual(toMark, ['a', 'b']);
+  assert.ok(!toMark.includes('c'), 'Stage-2 failure must not be marked scored');
 });
 
 // ── fetch-stubbed integration tests ───────────────────────────────────────────

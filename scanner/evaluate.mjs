@@ -442,3 +442,15 @@ export async function evaluateJobs(jobs, config) {
 
   return results.sort((a, b) => (b.score || 0) - (a.score || 0));
 }
+
+// Whether a job from evaluateJobs should be marked scored in seen-jobs.json —
+// i.e. never re-evaluated. TRUE for jobs that were successfully scored (numeric
+// score) and for jobs intentionally dropped by the Stage-1 hard filter (they
+// carry stage1Filtered:true and are clear non-fits — re-filtering them every run
+// wastes Haiku spend). FALSE only for a Stage-2 scoring FAILURE: score is null
+// AND there is no stage1Filtered marker (the score:null result.push above).
+// Leaving those unmarked lets a transient failure (e.g. a 429) retry next run
+// instead of silently dropping the job forever.
+export function wasScoredOrFiltered(job) {
+  return job.score != null || job.stage1Filtered === true;
+}

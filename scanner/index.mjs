@@ -20,12 +20,13 @@ import { fetchPortals } from './portalScanner.mjs';
 import { fetchRadar } from './radarSource.mjs';
 import { dedup, markScored } from './dedup.mjs';
 import { preFilter } from './filter.mjs';
-import { evaluateJobs } from './evaluate.mjs';
+import { evaluateJobs, wasScoredOrFiltered } from './evaluate.mjs';
 import { sendDigest } from './notify.mjs';
 import { sendDailyAlert } from './telegram.mjs';
 import { persistJobs } from './persistJobs.mjs';
 import { checkQuota, recordUsage } from './quota.mjs';
 import { loadConfig } from './config.mjs';
+import { actionKeySource, actionKeyFingerprint } from '../lib/auth.mjs';
 
 const SCAN_MODE = process.env.SCAN_MODE || 'standard';
 const IS_DRY_RUN = process.argv.includes('--dry-run') || process.env.DRY_RUN === 'true';
@@ -69,6 +70,9 @@ async function runDryRun(config) {
 
 async function run() {
   console.log(`[${new Date().toISOString()}] JobBud scan starting — mode: ${IS_DRY_RUN ? 'DRY RUN' : SCAN_MODE.toUpperCase()} | sources: ${SCAN_SOURCES} (portals: ${runPortals}, API: ${runApi})`);
+  // Action-token key diagnostics — logged once per run so a mint/verify key desync
+  // (e.g. a half-applied secret rotation) can be diffed against the Vercel logs.
+  console.log(`action-token key: source=${actionKeySource()} fp=${actionKeyFingerprint()}`);
 
   const config = await loadConfig();
 
@@ -207,19 +211,36 @@ async function run() {
 
   // ── Always persist and notify even if evaluation errored ─────────────────
   if (evaluated.length > 0) {
-    // Mark scored in seen-jobs.json so they aren't re-surfaced next scan
-    try {
-      const evaluatedFingerprints = evaluated.map(j => j._fingerprint).filter(Boolean);
-      if (evaluatedFingerprints.length > 0) await markScored(evaluatedFingerprints);
-    } catch (err) {
-      console.error(`[index] markScored failed: ${err.message}`);
-    }
-
-    // Persist all evaluated jobs to job-status.json
+    // Persist FIRST. markScored writes seen-jobs.json so a job is never
+    // re-surfaced; if we marked-seen before persisting and the persist then
+    // failed, the job would be silently lost (never saved, never re-scanned).
+    // So persist first and only mark-seen after it succeeds.
+    let persisted = false;
     try {
       await persistJobs(evaluated);
+      persisted = true;
     } catch (err) {
-      console.error(`[index] persistJobs failed: ${err.message}`);
+      console.error(`[index] persistJobs failed: ${err.message} — NOT marking jobs seen, so they retry next scan`);
+    }
+
+    // Mark scored in seen-jobs.json ONLY after a successful persist.
+    if (persisted) {
+      try {
+        // Exclude Stage-2 (Sonnet) scoring FAILURES from the marked-scored set so
+        // they re-surface next run. A failed job comes back with score:null and no
+        // stage1Filtered marker; marking it scored would drop it permanently (never
+        // re-evaluated). Stage-1-filtered jobs (stage1Filtered:true) ARE marked —
+        // they're clear non-fits and re-filtering them every run wastes Haiku spend.
+        const toMark = evaluated.filter(wasScoredOrFiltered);
+        const unmarkedForRetry = evaluated.length - toMark.length;
+        if (unmarkedForRetry > 0) {
+          console.log(`[index] ${unmarkedForRetry} job(s) had Stage-2 scoring failures — left unmarked so they retry next run`);
+        }
+        const evaluatedFingerprints = toMark.map(j => j._fingerprint).filter(Boolean);
+        if (evaluatedFingerprints.length > 0) await markScored(evaluatedFingerprints);
+      } catch (err) {
+        console.error(`[index] markScored failed: ${err.message}`);
+      }
     }
 
     // Send digest for jobs above score threshold
