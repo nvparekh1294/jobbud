@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { classifyJobType, sanitizeLocation, wasScoredOrFiltered, evaluateJobs } from '../scanner/evaluate.mjs';
+import { classifyJobType, sanitizeLocation, wasScoredOrFiltered, mapWithConcurrency, evaluateJobs } from '../scanner/evaluate.mjs';
 import { HAIKU_MODEL, SONNET_MODEL } from '../scanner/config.mjs';
 
 // ── classifyJobType ───────────────────────────────────────────────────────────
@@ -143,6 +143,22 @@ async function makeTmpCachePath() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'jobbud-eval-'));
   return { dir, cachePath: path.join(dir, 'company-cache.json') };
 }
+
+// Test A ── mapWithConcurrency bounds in-flight calls and preserves input order.
+test('mapWithConcurrency runs at most `limit` calls in flight and returns results in input order', async () => {
+  const items = Array.from({ length: 12 }, (_, i) => i);
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const results = await mapWithConcurrency(items, 4, async (item) => {
+    inFlight++;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise(r => setTimeout(r, 5));
+    inFlight--;
+    return item * 10;
+  });
+  assert.equal(maxInFlight, 4, `expected max 4 concurrent, saw ${maxInFlight}`);
+  assert.deepEqual(results, items.map(i => i * 10), 'results preserve input order');
+});
 
 // Test B (E4 proof) ── the Stage 2 cap bounds the COMBINED portal+API stream.
 test('evaluateJobs caps Stage 2 across BOTH portal and API sources', async () => {

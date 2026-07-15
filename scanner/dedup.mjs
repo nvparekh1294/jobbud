@@ -5,12 +5,39 @@ import path from 'path';
 export async function dedup(jobs) {
   const seenPath = './data/seen-jobs.json';
   const seen = await loadSeen(seenPath);
+  const { unique, newSeen } = dedupAgainstSeen(jobs, seen);
+  await saveSeen(seenPath, newSeen);
+  return unique;
+}
 
+// Pure dedup core (no file I/O) — testable in isolation.
+// Given this run's raw jobs and the persisted `seen` map, returns the jobs to
+// evaluate plus the updated seen map.
+//
+// Two distinct dedup concerns are handled here:
+//   1. Cross-run: skip a job already seen AND scored (scored: true / legacy no
+//      field). Re-surface a prior-run scored:false entry (seen but capped before
+//      Claude could evaluate it) so it gets a second chance.
+//   2. In-batch: the SAME job appearing twice within THIS run's raw list must
+//      survive only once. A first occurrence writes a fresh scored:false entry,
+//      so without per-run tracking the second occurrence would read that
+//      just-written scored:false entry and pass too — double-scoring the same job
+//      at real API cost. `batchSeen` guarantees at most one survivor per run.
+export function dedupAgainstSeen(jobs, seen) {
   const unique = [];
   const newSeen = { ...seen };
+  const batchSeen = new Set();
 
   for (const job of jobs) {
     const fp = fingerprint(job);
+
+    // In-batch guard: a repeat within this same run is always dropped, whether it
+    // was brand-new (first occurrence wrote scored:false) or a prior-run resurface.
+    if (batchSeen.has(fp)) {
+      continue;
+    }
+    batchSeen.add(fp);
+
     const existing = newSeen[fp];
 
     // Skip if already seen AND already evaluated (scored: true).
@@ -34,8 +61,7 @@ export async function dedup(jobs) {
     unique.push({ ...job, _fingerprint: fp });
   }
 
-  await saveSeen(seenPath, newSeen);
-  return unique;
+  return { unique, newSeen };
 }
 
 export async function markScored(fingerprints) {
@@ -49,7 +75,7 @@ export async function markScored(fingerprints) {
   await saveSeen(seenPath, seen);
 }
 
-function fingerprint(job) {
+export function fingerprint(job) {
   const company = normalizeCompany(job.company || '');
   const title   = normalizeTitle(job.title || '');
 
@@ -66,7 +92,7 @@ function normalize(str) {
   return str.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim();
 }
 
-function normalizeCompany(company) {
+export function normalizeCompany(company) {
   return normalize(company)
     // Strip leading articles
     .replace(/^the\s+/, '')
@@ -75,7 +101,7 @@ function normalizeCompany(company) {
     .trim();
 }
 
-function normalizeTitle(title) {
+export function normalizeTitle(title) {
   // Normalize & → and before stripping non-alphanum, so "Strategy & Ops" and "Strategy and Ops" match
   return normalize(title.replace(/&/g, 'and'))
     .replace(/^(senior|sr|junior|jr|lead|principal|staff|vp|svp|evp|head of|director of)\s+/i, '')

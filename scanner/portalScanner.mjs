@@ -240,7 +240,7 @@ async function fetchAshby(company, timeoutMs = FETCH_TIMEOUT_MS) {
  * Walk forward from jsonStart tracking bracket depth to extract a complete JSON object.
  * More reliable than a greedy regex for large nested objects.
  */
-function extractJsonObject(str, start) {
+export function extractJsonObject(str, start) {
   let depth = 0;
   let inStr  = false;
   let esc    = false;

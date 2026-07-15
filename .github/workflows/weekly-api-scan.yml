@@ -5,17 +5,19 @@ name: JobBud Weekly API Scan
 # scoring + persist + digest pipeline (scanner/index.mjs) as the daily scan.
 
 on:
-  # STAGED BUT OFF pending a clean manual verification run — mirrors scan.yml.
-  # Uncomment to enable the weekly Monday 6am UTC API scan.
-  # schedule:
-  #   - cron: '0 6 * * 1'    # Every Monday at 6am UTC
+  # Weekly Monday 6am UTC API scan (JSearch + Adzuna). NOTE: the schedule only
+  # takes effect once this is on the default branch; before relying on it, do one
+  # manual workflow_dispatch run and confirm it completes cleanly (fetched, scored,
+  # persisted, digest sent) — it makes real paid API calls and sends email.
+  schedule:
+    - cron: '0 6 * * 1'    # Every Monday at 6am UTC
   workflow_dispatch:
 
 jobs:
   scan:
     runs-on: ubuntu-latest
     concurrency:
-      group: jobbud-scan        # shares the daily scan's group so the two never overlap
+      group: jobbud-scan            # shares the daily scan's group so the two never overlap
       cancel-in-progress: false     # queue a new trigger; never abort a scan mid-scoring
     steps:
       - uses: actions/checkout@v5
@@ -36,35 +38,17 @@ jobs:
 
       # No Playwright install — this workflow runs API sources only, never the portal scanner.
 
-      - name: Restore seen-jobs cache
-        uses: actions/cache/restore@v5
-        with:
-          path: data/seen-jobs.json
-          key: seen-jobs-${{ github.run_id }}
-          restore-keys: |
-            seen-jobs-
-
-      - name: Restore company cache
-        uses: actions/cache/restore@v5
-        with:
-          path: data/company-cache.json
-          key: company-cache-${{ github.run_id }}
-          restore-keys: |
-            company-cache-
-
-      - name: Restore API usage cache
-        uses: actions/cache/restore@v5
-        with:
-          path: data/api-usage.json
-          key: api-usage-${{ github.run_id }}
-          restore-keys: |
-            api-usage-
+      # Durable scanner state (seen-jobs.json, company-cache.json, api-usage.json)
+      # is git-tracked, so `actions/checkout` above already restored it. The
+      # committed copy is the source of truth — no evictable cache. State is
+      # committed back at the end by the "Commit scanner state" step below.
 
       - name: Run API scanner
         env:
           SCAN_MODE: standard
           SCAN_SOURCES: api            # API sources only; portal scan is skipped
           MAX_JOBS_TO_EVALUATE: '250'  # Stage 1 Haiku filter is the quality gate, not the count
+          USE_BATCH_API: 'true'        # Latency-insensitive weekly scan — route both scoring stages through the Message Batches API (50% token discount). This 250-cap Sonnet batch is where batch mode saves the most.
           JSEARCH_API_KEY: ${{ secrets.JSEARCH_API_KEY }}
           ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
           ADZUNA_API_KEY: ${{ secrets.ADZUNA_API_KEY }}
@@ -72,27 +56,17 @@ jobs:
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
           VERCEL_URL: ${{ secrets.VERCEL_URL }}
           DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+          ACTION_TOKEN_SECRET: ${{ secrets.ACTION_TOKEN_SECRET }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: node scanner/index.mjs
 
-      - name: Save seen-jobs cache
+      - name: Commit scanner state
+        # Persist seen-jobs.json / company-cache.json / api-usage.json back to the
+        # repo so the committed copy stays the durable source of truth. Best-effort —
+        # never fails the run. Unchanged files are skipped.
         if: always()
-        uses: actions/cache/save@v5
-        with:
-          path: data/seen-jobs.json
-          key: seen-jobs-${{ github.run_id }}
-
-      - name: Save company cache
-        if: always()
-        uses: actions/cache/save@v5
-        with:
-          path: data/company-cache.json
-          key: company-cache-${{ github.run_id }}
-
-      - name: Save API usage cache
-        if: always()
-        uses: actions/cache/save@v5
-        with:
-          path: data/api-usage.json
-          key: api-usage-${{ github.run_id }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: node scanner/commitState.mjs || true

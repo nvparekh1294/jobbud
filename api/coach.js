@@ -271,7 +271,13 @@ async function handleChat(req, res) {
       body: JSON.stringify({
         model: SONNET_MODEL,
         max_tokens: 2048,
-        system: systemPrompt,
+        // Cache the static system prefix (profile/instructions) so it isn't
+        // re-billed as fresh input on every turn of the conversation. Within a
+        // conversation systemPrompt is identical each turn, so the first turn
+        // writes the cache and later turns read it. Mirrors the scoring pipeline
+        // (scanner/evaluate.mjs). Prompt caching is GA — no anthropic-beta header
+        // needed (and none is set here).
+        system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
         messages: messagesForApi,
       }),
     });
@@ -284,6 +290,11 @@ async function handleChat(req, res) {
 
     const data = await response.json();
     const reply = data.content?.[0]?.text ?? '';
+
+    // Observability for the cache breakpoint: first turn shows a cache write, later
+    // turns show cache reads (cache_read_input_tokens > 0).
+    const usage = data.usage || {};
+    console.log(`[coach] chat cache — write:${usage.cache_creation_input_tokens || 0} read:${usage.cache_read_input_tokens || 0} input:${usage.input_tokens || 0}`);
 
     return res.status(200).json({ reply });
   } catch (err) {
@@ -908,26 +919,7 @@ Generate a CLAUDE.md with these sections:
         body: JSON.stringify({
           model: SONNET_MODEL,
           max_tokens: 4000,
-          system: `${updatePrefix}You are generating a bullet-bank.md file for a job search automation system. This file is a curated library of strong, metric-backed achievement bullets the AI selects from verbatim when generating tailored resumes and outreach messages.
-
-FORMAT — organize by company, then by theme within each company:
-
-1. Define role-type tags based on the user's stated target roles (e.g. [ops], [strategy], [finance], [product], [sales] — choose tags that match what THIS user is targeting, not a fixed list)
-2. Group bullets under each company by theme (e.g. 'Theme: Cross-Functional Leadership', 'Theme: Financial Planning')
-3. Tag each bullet with the role types it applies to, plus a priority: [primary] (strongest, most broadly applicable phrasing for this theme), [alt] (use if primary doesn't fit the JD), [optional] (only if the JD specifically calls for it)
-4. Where the same achievement could be framed multiple ways for different role types, write 2-3 variant bullets for that theme rather than one generic version
-5. At the top of the file, include a short 'How to Use This File' section defining the role-type tags you chose and explaining the priority system, so the user understands the format
-
-REQUIREMENTS for each bullet:
-- Start with a strong action verb
-- Include a specific metric or outcome where possible
-- Written in past tense
-- 1-2 lines maximum
-- Never fabricate metrics — use a placeholder like [ADD: specific number] if the user mentioned an achievement but not the number
-
-If the input is thin (short resume, brief conversation), still use this format, but produce fewer bullets and fewer variants per theme rather than padding with weak or repetitive content. A sparse file in the correct format is better than a rich file with fabricated content.
-
-Output clean markdown starting with # Bullet Bank. No preamble.`,
+          system: BULLET_BANK_SYSTEM(updatePrefix),
           messages: [{ role: 'user', content: existingBulletBankBlock ? `EXISTING FILE FOR REFERENCE:\n${existingBulletBankBlock}\n\n${baseContent}` : baseContent }],
         }),
       }).then(async r => { if (!r.ok) throw new Error(`Anthropic error ${r.status}: ${await r.text()}`); return r.json(); }),
@@ -984,6 +976,35 @@ Be specific and grounded only in what the user told you. Use placeholders for mi
 }
 
 // ── Shared onboarding helpers ────────────────────────────────────────────────
+
+// Single source of truth for the bullet-bank.md generation prompt. Both onboarding
+// paths use it so they produce ONE consistent format: the first-time flow
+// (handleGenerateOnboarding) and the per-file refresh flow (handleGenerateBulletBank).
+// Previously the two prompts had diverged into different output formats (company/theme
+// + role-type tags vs. flat competency sections), so the file's shape depended on which
+// path the frontend happened to call. This company→theme, role-type-tagged,
+// priority-ranked format is the one the downstream application-package bullet selection
+// expects.
+const BULLET_BANK_SYSTEM = (updatePrefix = '') => `${updatePrefix}You are generating a bullet-bank.md file for a job search automation system. This file is a curated library of strong, metric-backed achievement bullets the AI selects from verbatim when generating tailored resumes and outreach messages.
+
+FORMAT — organize by company, then by theme within each company:
+
+1. Define role-type tags based on the user's stated target roles (e.g. [ops], [strategy], [finance], [product], [sales] — choose tags that match what THIS user is targeting, not a fixed list)
+2. Group bullets under each company by theme (e.g. 'Theme: Cross-Functional Leadership', 'Theme: Financial Planning')
+3. Tag each bullet with the role types it applies to, plus a priority: [primary] (strongest, most broadly applicable phrasing for this theme), [alt] (use if primary doesn't fit the JD), [optional] (only if the JD specifically calls for it)
+4. Where the same achievement could be framed multiple ways for different role types, write 2-3 variant bullets for that theme rather than one generic version
+5. At the top of the file, include a short 'How to Use This File' section defining the role-type tags you chose and explaining the priority system, so the user understands the format
+
+REQUIREMENTS for each bullet:
+- Start with a strong action verb
+- Include a specific metric or outcome where possible
+- Written in past tense
+- 1-2 lines maximum
+- Never fabricate metrics — use a placeholder like [ADD: specific number] if the user mentioned an achievement but not the number
+
+If the input is thin (short resume, brief conversation), still use this format, but produce fewer bullets and fewer variants per theme rather than padding with weak or repetitive content. A sparse file in the correct format is better than a rich file with fabricated content.
+
+Output clean markdown starting with # Bullet Bank. No preamble.`;
 
 function buildOnboardingShared(req) {
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
@@ -1086,20 +1107,7 @@ async function handleGenerateBulletBank(req, res) {
     const data = await anthropicFetch(anthropicKey, {
       model: SONNET_MODEL,
       max_tokens: 4000,
-      system: `${updatePrefix}You are generating a bullet-bank.md file for a job search automation system. This file is a curated library of strong, metric-backed achievement bullets drawn from the user's career. The AI uses these bullets when generating tailored resumes and outreach messages.
-
-Extract and rewrite the strongest achievement bullets from the resume and conversation. Requirements for each bullet:
-- Start with a strong action verb
-- Include a specific metric or outcome where possible
-- Written in past tense
-- 1-2 lines maximum
-- Never fabricate metrics — use placeholders like [X%] if the user mentioned an achievement but not the specific number
-
-Organize bullets into sections by competency area. Aim for 15-25 bullets total across 3-5 sections. Common section names: Strategy & Operations, Leadership & Team Building, Analysis & Insight, Financial Impact, Product & Growth. Use whatever section names best fit this user's background.
-
-If the resume is thin or the conversation short, produce fewer bullets rather than padding with weak ones. Quality over quantity.
-
-Output the file in clean markdown. No preamble, no explanation — just the bullet bank content starting with # Bullet Bank.`,
+      system: BULLET_BANK_SYSTEM(updatePrefix),
       messages: [{ role: 'user', content: userContent }],
     });
     return res.status(200).json({ bulletBankMd: data.content?.[0]?.text ?? '' });

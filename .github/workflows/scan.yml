@@ -49,14 +49,19 @@ jobs:
       - name: Run scanner
         if: github.event.schedule != '0 9 * * 1'
         env:
-          SCAN_MODE: standard
+          # Honor the workflow_dispatch scan_mode dropdown (standard | full); scheduled
+          # runs have no input, so it falls back to 'standard'. Previously this was
+          # hardcoded 'standard', which made the dropdown input do nothing.
+          SCAN_MODE: ${{ github.event.inputs.scan_mode || 'standard' }}
           SCAN_SOURCES: portals   # Daily scan is portals-only; API sources (JSearch/Adzuna) run in weekly-api-scan.yml
           RADAR_CADENCE: daily    # Include Company Radar (data/radar.json) companies set to 'daily'. The Monday 9am radar step below sets this to 'weekly'.
+          USE_BATCH_API: 'true'   # Scheduled scans are latency-insensitive — route both scoring stages through the Message Batches API (50% token discount). Vercel/interactive paths never set this and keep the synchronous flow.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
           VERCEL_URL: ${{ secrets.VERCEL_URL }}
           DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+          ACTION_TOKEN_SECRET: ${{ secrets.ACTION_TOKEN_SECRET }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: node scanner/index.mjs
@@ -69,6 +74,7 @@ jobs:
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
           VERCEL_URL: ${{ secrets.VERCEL_URL }}
           DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+          ACTION_TOKEN_SECRET: ${{ secrets.ACTION_TOKEN_SECRET }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: node scanner/remind.mjs || true
@@ -84,11 +90,13 @@ jobs:
           SCAN_MODE: standard
           SCAN_SOURCES: portals
           RADAR_CADENCE: weekly
+          USE_BATCH_API: 'true'   # Latency-insensitive scheduled scan — use the Message Batches API (50% token discount).
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
           VERCEL_URL: ${{ secrets.VERCEL_URL }}
           DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+          ACTION_TOKEN_SECRET: ${{ secrets.ACTION_TOKEN_SECRET }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: node scanner/index.mjs
@@ -100,6 +108,7 @@ jobs:
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
           VERCEL_URL: ${{ secrets.VERCEL_URL }}
           DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+          ACTION_TOKEN_SECRET: ${{ secrets.ACTION_TOKEN_SECRET }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: node scanner/weeklyDigest.mjs || true
