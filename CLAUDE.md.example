@@ -4,7 +4,32 @@
 
 This file configures how the AI assistant behaves in this project. When you open this project in Claude Code (or another AI coding CLI), the assistant reads this file at the start of every session and uses it to understand your job search goals, preferences, and operating rules.
 
-Rename this file to CLAUDE.md to activate it. CLAUDE.md is gitignored — it will never be committed to your repo.
+Rename this file to CLAUDE.md to activate it. CLAUDE.md then lives in your (private) repo alongside your other profile files — that is how the scanner and the dashboard's Coach read it. See **Where your files live** below for how that works and why the repo must be private.
+
+---
+
+## What JobBud actually is
+
+JobBud is a personal, single-user job-search app you self-host. It is not a SaaS product and has no hosted version. It runs as three cooperating parts, all reading and writing the same GitHub repo (yours):
+
+- **`scanner/`** — a Node job scanner run on a schedule by GitHub Actions. `index.mjs` orchestrates it: fetch from job portals and API sources, dedup, two-stage AI scoring, persist to `data/`, and send email/Telegram digests and reminders. Runtime config comes from `config/profile.yml` and `scanner/portals.yml`.
+- **`api/`** — Vercel serverless functions backing the dashboard (serve jobs, apply status changes, generate application/prep docs, the Coach, Company Radar, outreach). Shared GitHub read/write lives in `lib/`.
+- **`dashboard/index.html`** — the single-page dashboard (pipeline, all-jobs, archive, Coach, and Company Radar views).
+
+**Data** lives in `data/*.json` in your repo (job status, radar, dedup state, caches), which is the source of truth both systems read from.
+
+---
+
+## Where your files live
+
+There are two buckets of files in this repo, and the difference matters for your privacy:
+
+- **Your personal files** — `CLAUDE.md`, `cv.md`, `bullet-bank.md`, `article-digest.md`, `story-bank.md`, `config/profile.yml`, and everything under `data/`. These hold your real background and job history. They are **committed to your repo** — the scanner (which runs from a fresh checkout) and the dashboard both read them from there, so they must be present in the repo to work. **This is why your repo must be private.** The onboarding flow writes them for you via "Save to my repo" (it refuses a public repo), or you can download and commit them yourself.
+- **The tool files** — `api/`, `lib/`, `scanner/`, `dashboard/`, `.github/workflows/`, `package.json`, and the `*.example` templates. These are the shared JobBud code, identical for every user, with no personal data in them.
+
+The `.gitignore` lists the personal files on purpose: if you also work in a local clone, it stops you from hand-committing a stale second copy — JobBud keeps the canonical versions in your repo. It does **not** mean those files are absent from your repo; they are there, which is exactly why the repo stays private. The one true exception is `.env`, which holds secrets and is never committed anywhere (see **Environment Variables**).
+
+Rule of thumb: put anything personal (target roles, comp, narrative, resume notes) into the personal files above — never hardcode it into the tool files.
 
 ---
 
@@ -24,7 +49,7 @@ Copy config/profile.yml.example to config/profile.yml and fill in your own value
 
 Place your resume at cv.md in the project root. This is the canonical version the assistant uses for all tailoring and evaluation. It should be in plain Markdown with standard sections: Summary, Experience, Education, Skills.
 
-cv.md is gitignored — it will never be committed.
+cv.md lives in your private repo like the rest of your profile files (see **Where your files live**).
 
 ---
 
@@ -34,7 +59,7 @@ The file bullet-bank.md holds a curated library of strong, metric-backed achieve
 
 This file is optional — if it doesn't exist, the AI falls back to cv.md. But a well-maintained bullet bank significantly improves the quality of application packages and outreach drafts.
 
-Use bullet-bank.md.example as a starting point. Copy it to bullet-bank.md and replace the examples with your own bullets. bullet-bank.md is gitignored and will never be committed.
+Use bullet-bank.md.example as a starting point. Copy it to bullet-bank.md and replace the examples with your own bullets. Like your other profile files, bullet-bank.md lives in your private repo (see **Where your files live**).
 
 ---
 
@@ -52,7 +77,7 @@ There is no fixed format. Good things to include:
 - Sensitive context for interview prep only — not for resumes
 
 The onboarding flow generates a starter version. Enrich it over time as your situation changes.
-article-digest.md is gitignored and will never be committed.
+article-digest.md lives in your private repo (see **Where your files live**).
 See article-digest.md.example for a starter template.
 
 ---
@@ -63,7 +88,7 @@ The file story-bank.md holds your prepared interview stories in STAR format (Sit
 
 Use story-bank.md.example as a starting point. Copy it to story-bank.md and replace the fictional examples with your real stories.
 
-story-bank.md is gitignored — it will never be committed.
+story-bank.md lives in your private repo (see **Where your files live**).
 
 ---
 
@@ -91,10 +116,11 @@ Copy .env.example to .env and fill in your keys. Required for full functionality
 
 - ANTHROPIC_API_KEY — for AI evaluation and coaching
 - GH_TOKEN + GH_REPO — for persisting job data to GitHub
-- GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET + GOOGLE_REFRESH_TOKEN — optional, for automatic Google Drive saving of prep docs. Keep your OAuth app in Production mode or tokens expire after 7 days.
+- GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET + GOOGLE_REFRESH_TOKEN + GOOGLE_DRIVE_FOLDER_ID — optional, for automatic Google Drive saving of prep docs. Full setup, including how to mint the refresh token with get-google-token.mjs, is in SETUP.md. Keep your OAuth app in Production mode or tokens expire after 7 days.
 - SENDGRID_API_KEY + SENDGRID_FROM_EMAIL + NOTIFICATION_EMAIL — optional, for email digests
 - TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID — optional, for push notifications via Telegram
 - FIRECRAWL_API_KEY — optional, for scanning company career pages that require JavaScript rendering (e.g. Meta, Microsoft, Google DeepMind). Standard ATS platforms like Ashby, Greenhouse, and Lever work without it.
+- JSEARCH_API_KEY, ADZUNA_APP_ID, ADZUNA_API_KEY, SERP_API_KEY — optional, extra API job sources for the weekly API scan. Set only the ones you have.
 
 .env is gitignored — it will never be committed.
 

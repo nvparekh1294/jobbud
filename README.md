@@ -4,7 +4,7 @@
 
   [![CI](https://github.com/nvparekh1294/jobbud/actions/workflows/ci.yml/badge.svg)](https://github.com/nvparekh1294/jobbud/actions/workflows/ci.yml)
   [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-  [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/nvparekh1294/jobbud&env=ANTHROPIC_API_KEY,GH_TOKEN,GH_REPO&envDescription=Required%20API%20keys%20for%20JobBud%20-%20see%20README%20for%20setup%20instructions&envLink=https://github.com/nvparekh1294/jobbud%23getting-started)
+  [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/nvparekh1294/jobbud&env=ANTHROPIC_API_KEY,GH_TOKEN,GH_REPO,DASHBOARD_PASSWORD&envDescription=Required%20API%20keys%20for%20JobBud%20-%20see%20README%20for%20setup%20instructions&envLink=https://github.com/nvparekh1294/jobbud%23getting-started)
 </div>
 
 ---
@@ -22,6 +22,7 @@
 - [Getting Started](#getting-started)
 - [Optional Integrations](#optional-integrations)
 - [LinkedIn Research](#linkedin-research--mutual-connection-lookup)
+- [Upgrading](#upgrading)
 - [Known Limitations](#known-limitations)
 - [Contributing](#contributing)
 - [License](#license)
@@ -49,12 +50,15 @@ JobBud — your AI job search buddy — is a self-hosted job search pipeline. Yo
 
 ## Features
 
+- **Guided onboarding** — generate your profile files (`config/profile.yml`, `CLAUDE.md`, resume, bullet bank, background) from your resume and a few questions, then save them to your private repo or download them to review first
+- **Profile-driven scoring** — every scanned job is evaluated against your `config/profile.yml` for role fit, company fit, and compensation match; change your profile and the scoring follows
 - **Pipeline kanban** — track jobs across Saved, Preparing, Applied, Interviewing, and Offer stages
-- **AI job scoring** — every scanned job is evaluated against your profile for role fit, company fit, and compensation match
+- **Bulk actions** — select multiple jobs in the All Jobs view and reject or change their status in one move
 - **Application package generation** — AI-generated packages with tailored resume bullets, cover letter angles, and application Q&A
 - **Interview prep** — role-specific question sets and answer frameworks drawn from your story bank, with a link back to previous rounds
+- **Voice dictation** — answer mock-interview questions by speaking instead of typing (uses the browser Web Speech API; Chrome and Edge only)
 - **Coach library** — on-demand coaching on resume writing, negotiation, outreach, and interview strategy
-- **Automated scanning** — GitHub Actions cron job scans configured job boards on a schedule
+- **Automated scanning** — GitHub Actions cron job scans configured job boards on a schedule; scheduled scans route their AI scoring through Anthropic's Message Batches API, which bills every token at 50% of the standard price
 - **Radar** — track target companies and get notified when relevant roles open
 - **Outreach drafts** — AI-generated cold outreach and follow-up templates
 - **Notifications** — daily and weekly summaries via email (SendGrid) or push (Telegram)
@@ -98,25 +102,42 @@ If you only deploy to Vercel, the dashboard will load but no jobs will be scanne
 - A [Vercel account](https://vercel.com) (free Hobby plan works)
 - An [Anthropic API key](https://console.anthropic.com)
 
-### 1. Fork this repo
+### 1. Get your own private copy of this repo
 
-Click **Fork** at the top of this page. This creates your own copy at `your-username/jobbud`.
+Your copy must be **private** — JobBud stores your job data and personal profile files inside it. **Do not fork.** A fork of a public repo is itself public and cannot be made private, and JobBud's "Save to my repo" would then publish your personal data.
+
+- **If a "Use this template" button appears** at the top of this repo: click it, choose **Create a new repository**, and set the visibility to **Private**.
+- **Otherwise, duplicate it manually.** First create an empty **private** repo named `jobbud` under your account, then mirror this one into it:
+
+  ```bash
+  git clone --bare https://github.com/nvparekh1294/jobbud.git
+  cd jobbud.git
+  git push --mirror https://github.com/YOUR-USERNAME/jobbud.git
+  ```
 
 ### 2. Deploy to Vercel
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/nvparekh1294/jobbud&env=ANTHROPIC_API_KEY,GH_TOKEN,GH_REPO&envDescription=Required%20API%20keys%20for%20JobBud%20-%20see%20README%20for%20setup%20instructions&envLink=https://github.com/nvparekh1294/jobbud%23getting-started)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/nvparekh1294/jobbud&env=ANTHROPIC_API_KEY,GH_TOKEN,GH_REPO,DASHBOARD_PASSWORD&envDescription=Required%20API%20keys%20for%20JobBud%20-%20see%20README%20for%20setup%20instructions&envLink=https://github.com/nvparekh1294/jobbud%23getting-started)
 
-During deploy, Vercel will prompt for three required environment variables:
+During deploy, Vercel will prompt for four required environment variables:
 
 | Variable | Description |
 |----------|-------------|
 | `ANTHROPIC_API_KEY` | Your Anthropic API key |
 | `GH_TOKEN` | GitHub personal access token with `repo` scope |
 | `GH_REPO` | Your GitHub repo in the format `username/jobbud` |
+| `DASHBOARD_PASSWORD` | Password gate for the dashboard. The dashboard fails closed — it will not serve your job data unless this is set, so choose a strong value. (The GitHub Actions scanner pipeline runs without it; this one is needed only by the Vercel dashboard.) |
 
 ### 3. Configure your profile
 
-Copy the example files and fill them in with your details. These files are gitignored and will never be committed.
+JobBud reads five personal files to score jobs and generate applications: `CLAUDE.md`, `cv.md`, `bullet-bank.md`, `article-digest.md`, and `config/profile.yml`. The easiest way to create them is the built-in onboarding — open your dashboard, go to the **Coach** tab, and follow **Onboarding**. It generates all five from your resume and a few short questions, then offers two ways to keep them:
+
+- **Save to my repo** — JobBud commits the five files straight into your GitHub repo through the API. It does this **only if your repo is private**; a public repo is refused, because these files contain your real background.
+- **Download** — review each file first, then add them yourself: `CLAUDE.md`, `cv.md`, `bullet-bank.md`, and `article-digest.md` at the repo root, `config/profile.yml` in `config/`. Commit all five.
+
+Either way, these files live **in your private repo** — that is how the scanner (which runs from a fresh checkout in GitHub Actions) and the dashboard read them. The `.gitignore` lists them for a different reason: if you also work in a local clone, it stops you from hand-committing a second, stale copy — JobBud keeps the canonical versions in your repo for you. (This is also why your repo must be private: it holds these files.)
+
+Prefer to start from templates instead of onboarding? Copy the examples and fill them in by hand:
 
 ```bash
 cp config/profile.yml.example config/profile.yml
@@ -124,7 +145,7 @@ cp CLAUDE.md.example CLAUDE.md
 cp story-bank.md.example story-bank.md
 ```
 
-`config/profile.yml` is the most important — it tells the AI what roles to target and how to score matches. See the inline comments in the example file for guidance on each field.
+`config/profile.yml` is the one that matters most — it tells the scanner what roles to target and drives how every job is scored against your profile. See the inline comments in the example file for guidance on each field.
 
 ### 4. Configure GitHub Actions
 
@@ -146,9 +167,7 @@ All optional integrations fail silently when not configured. The dashboard works
 
 Without it: application packages and prep docs are generated and available in a popup window to copy or reference. You can regenerate them anytime. With it: prep docs save automatically to a folder in your Google Drive, with a persistent link on the job card.
 
-1. Create a project in [Google Cloud Console](https://console.cloud.google.com/) and enable the Google Docs and Drive APIs
-2. Create OAuth 2.0 credentials and complete the auth flow to get a refresh token
-3. Add `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_REFRESH_TOKEN` to your Vercel environment variables
+This one needs a few steps — creating a Google Cloud project, enabling the Docs and Drive APIs, creating an OAuth client, and minting a refresh token with the included `get-google-token.mjs` helper. The full, followable walkthrough is in **[SETUP.md](SETUP.md#optional-auto-save-prep-docs-to-google-drive)**.
 
 > **Important:** Google OAuth apps start in "Testing" mode, where refresh tokens expire after 7 days. To prevent this, go to your OAuth consent screen in Google Cloud Console and click **Publish App** to switch to Production mode. Production mode tokens do not expire.
 
@@ -182,9 +201,22 @@ With it: the dashboard identifies mutual LinkedIn connections at target companie
 
 ### Dashboard password
 
-Without it: anyone with your Vercel URL can access the dashboard. With it: the dashboard is protected by a password gate.
+`DASHBOARD_PASSWORD` is **required**, not optional — it is listed with the other required variables in [Deploy to Vercel](#2-deploy-to-vercel) above. The dashboard fails closed: without it set, the API returns 401 and serves no job data, so the dashboard cannot work. Set `DASHBOARD_PASSWORD` in your Vercel environment variables and use a strong value.
 
-Add `DASHBOARD_PASSWORD` to your Vercel environment variables.
+(The GitHub Actions scanner pipeline does not use this variable — it runs without it. Only the Vercel dashboard needs it.)
+
+---
+
+## Upgrading
+
+If you deployed an earlier version of JobBud, note one breaking change: the action
+links embedded in digest and reminder emails (the one-click "mark applied",
+"reject", etc. buttons) are now signed with a hardened token scheme. **Action links
+in emails sent before this release will no longer work** — clicking them is rejected
+instead of changing a job's status. This affects only old emails already in your
+inbox; every new email uses the new scheme. Manage those older jobs from the
+dashboard instead. No configuration change is required, though setting a dedicated
+`ACTION_TOKEN_SECRET` (see `.env.example`) is recommended.
 
 ---
 

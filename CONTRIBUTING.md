@@ -17,6 +17,8 @@ Open an issue with the tag `enhancement`. Describe the use case, not just the fe
 
 ## Submitting a pull request
 
+> Note: forking is for **code contributions to this project** only. If you just want to run JobBud for your own job search, do **not** fork — follow the README quickstart to make a private copy instead (a fork of a public repo is itself public and would expose your personal data).
+
 1. Fork the repo and create a branch from `main`
 2. Make your changes
 3. Open a pull request with a clear description of what changed and why

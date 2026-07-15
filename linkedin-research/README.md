@@ -3,7 +3,7 @@
 This directory holds the LinkedIn mutual-connections research workflow. For it to work, your local `~/linkedin-research` directory must be a **clone of your JobBud repo**, not a plain folder, because the JobBud dashboard writes `current_job.json` here via a commit and your local copy reads it. One-time setup (if `~/linkedin-research` already exists with files, move them aside or delete the folder first, since `git clone` needs an empty or non-existent target):
 
 ```bash
-# Replace YOUR_USERNAME with your own GitHub account (and the repo name if you renamed your fork)
+# Replace YOUR_USERNAME with your own GitHub account (and the repo name if you named your JobBud repo something other than jobbud)
 git clone https://github.com/YOUR_USERNAME/jobbud.git ~/linkedin-research
 ```
 

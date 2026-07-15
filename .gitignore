@@ -21,8 +21,6 @@ linkedin-research/*_connections.md
 !linkedin-research/linkedin_mutual_connections.md
 linkedin-research/*_network_summary.md
 linkedin-research/*_research_notes.md
-batch/
-get-google-token.mjs
 handoff.md
 
 # Environment
