@@ -649,7 +649,7 @@ async function handleGeneratePrep(req, res, githubToken, owner, repo) {
 
     const context = { claudeMd, storyBank, bulletBank, radarContext };
 
-    const { docUrl, docId } = await generateInterviewPrepDoc(jobData, context, conversationHistory);
+    const { docUrl, docId, markdown } = await generateInterviewPrepDoc(jobData, context, conversationHistory);
 
     console.log(`[coach] generate-prep doc created: ${docId}`);
 

@@ -236,6 +236,11 @@ async function putJobStatus(githubToken, owner, repo, content) {
 }
 
 function htmlPage(title, body, isError = false) {
+  // VERCEL_URL may be a bare hostname (Vercel's system var) or already include a
+  // scheme (if set manually). Normalize to an absolute https URL; fall back to a
+  // relative /dashboard link when it's unset so the anchor never points at a bad host.
+  const rawHost = (process.env.VERCEL_URL || '').trim().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  const dashboardHref = rawHost ? `https://${rawHost}/dashboard` : '/dashboard';
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -254,7 +259,7 @@ function htmlPage(title, body, isError = false) {
 <body>
   <div class="card">
     ${body}
-    <a href="${process.env.VERCEL_URL || ''}/dashboard" style="display:inline-block;margin-top:12px;padding:10px 24px;background:#1a1a1a;color:#fff;border-radius:6px;text-decoration:none;font-size:14px;">Back to Dashboard</a>
+    <a href="${dashboardHref}" style="display:inline-block;margin-top:12px;padding:10px 24px;background:#1a1a1a;color:#fff;border-radius:6px;text-decoration:none;font-size:14px;">Back to Dashboard</a>
   </div>
 </body>
 </html>`;
@@ -388,23 +393,28 @@ export default async function handler(req, res) {
       let roleTypes = [];
       let additionalGuidance = '';
       let applicationQuestions = '';
+      let jobDescription = '';
       if (req.body && typeof req.body === 'object') {
         roleTypes = Array.isArray(req.body.roleTypes) ? req.body.roleTypes : [];
         additionalGuidance = typeof req.body.additionalGuidance === 'string' ? req.body.additionalGuidance : '';
         applicationQuestions = typeof req.body.applicationQuestions === 'string' ? req.body.applicationQuestions : '';
+        jobDescription = typeof req.body.jobDescription === 'string' ? req.body.jobDescription : '';
       }
-      console.log('[action] roleTypes:', roleTypes, '| additionalGuidance length:', additionalGuidance.length, '| applicationQuestions length:', applicationQuestions.length);
+      if (jobDescription) job.description = jobDescription;
+      console.log('[action] roleTypes:', roleTypes, '| additionalGuidance length:', additionalGuidance.length, '| applicationQuestions length:', applicationQuestions.length, '| jobDescription length:', jobDescription.length);
 
       if (wantJson) {
         // Dashboard path: run synchronously, return full package content as JSON.
         try {
           const { pkg, docUrl } = await generateAndSendPackage(job, jobId, { roleTypes, additionalGuidance, applicationQuestions });
 
-          // Persist docUrl back to job-status.json so the dashboard can link to the
-          // Google Doc from the applied status indicator. The content object is still
-          // in memory from the earlier read; we write it as a second commit here.
+          // Persist docUrl (and the possibly-updated description) back to
+          // job-status.json so the dashboard can link to the Google Doc from the
+          // applied status indicator. The content object is still in memory from
+          // the earlier read; we write it as a second commit here.
           if (docUrl) {
             content.jobs[jobId].docUrl = docUrl;
+            if (jobDescription) content.jobs[jobId].description = jobDescription;
             try {
               await putJobStatus(githubToken, owner, repo, content);
               console.log(`[action] docUrl persisted for ${jobId}`);
