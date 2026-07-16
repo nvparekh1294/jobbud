@@ -48,7 +48,6 @@ jobs:
           SCAN_MODE: standard
           SCAN_SOURCES: api            # API sources only; portal scan is skipped
           MAX_JOBS_TO_EVALUATE: '250'  # Stage 1 Haiku filter is the quality gate, not the count
-          USE_BATCH_API: 'true'        # Latency-insensitive weekly scan — route both scoring stages through the Message Batches API (50% token discount). This 250-cap Sonnet batch is where batch mode saves the most.
           JSEARCH_API_KEY: ${{ secrets.JSEARCH_API_KEY }}
           ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
           ADZUNA_API_KEY: ${{ secrets.ADZUNA_API_KEY }}
