@@ -1,0 +1,32 @@
+name: CI
+
+# Runs the unit tests and a syntax check on every pull request (and on pushes to
+# main) so broken code can't merge. No secrets, no network calls to paid APIs —
+# the tests cover pure functions only.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'   # match the scanner runtime used in scan.yml
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Syntax-check all API, scanner, and batch files
+        run: |
+          set -e
+          for f in api/*.js scanner/*.mjs scanner/sources/*.mjs batch/*.mjs; do
+            echo "checking $f"
+            node --check "$f"
+          done

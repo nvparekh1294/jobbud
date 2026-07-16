@@ -40,41 +40,28 @@ jobs:
         run: npm install
         working-directory: .
 
-      - name: Restore seen-jobs cache
-        uses: actions/cache/restore@v5
-        with:
-          path: data/seen-jobs.json
-          key: seen-jobs-${{ github.run_id }}
-          restore-keys: |
-            seen-jobs-
-
-      - name: Restore company cache
-        uses: actions/cache/restore@v5
-        with:
-          path: data/company-cache.json
-          key: company-cache-${{ github.run_id }}
-          restore-keys: |
-            company-cache-
-
-      - name: Restore API usage cache
-        uses: actions/cache/restore@v5
-        with:
-          path: data/api-usage.json
-          key: api-usage-${{ github.run_id }}
-          restore-keys: |
-            api-usage-
+      # Durable scanner state (seen-jobs.json, company-cache.json, api-usage.json)
+      # is git-tracked, so `actions/checkout` above already restored it. The
+      # committed copy is the source of truth — no cache restore, which could be
+      # evicted and silently reset dedup. State is committed back at the end of the
+      # run by the "Commit scanner state" step below.
 
       - name: Run scanner
         if: github.event.schedule != '0 9 * * 1'
         env:
-          SCAN_MODE: standard
+          # Honor the workflow_dispatch scan_mode dropdown (standard | full); scheduled
+          # runs have no input, so it falls back to 'standard'. Previously this was
+          # hardcoded 'standard', which made the dropdown input do nothing.
+          SCAN_MODE: ${{ github.event.inputs.scan_mode || 'standard' }}
           SCAN_SOURCES: portals   # Daily scan is portals-only; API sources (JSearch/Adzuna) run in weekly-api-scan.yml
           RADAR_CADENCE: daily    # Include Company Radar (data/radar.json) companies set to 'daily'. The Monday 9am radar step below sets this to 'weekly'.
+          USE_BATCH_API: 'true'   # Scheduled scans are latency-insensitive — route both scoring stages through the Message Batches API (50% token discount). Vercel/interactive paths never set this and keep the synchronous flow.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
           VERCEL_URL: ${{ secrets.VERCEL_URL }}
           DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+          ACTION_TOKEN_SECRET: ${{ secrets.ACTION_TOKEN_SECRET }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: node scanner/index.mjs
@@ -87,6 +74,7 @@ jobs:
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
           VERCEL_URL: ${{ secrets.VERCEL_URL }}
           DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+          ACTION_TOKEN_SECRET: ${{ secrets.ACTION_TOKEN_SECRET }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: node scanner/remind.mjs || true
@@ -102,11 +90,13 @@ jobs:
           SCAN_MODE: standard
           SCAN_SOURCES: portals
           RADAR_CADENCE: weekly
+          USE_BATCH_API: 'true'   # Latency-insensitive scheduled scan — use the Message Batches API (50% token discount).
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
           VERCEL_URL: ${{ secrets.VERCEL_URL }}
           DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+          ACTION_TOKEN_SECRET: ${{ secrets.ACTION_TOKEN_SECRET }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: node scanner/index.mjs
@@ -118,27 +108,17 @@ jobs:
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
           VERCEL_URL: ${{ secrets.VERCEL_URL }}
           DASHBOARD_PASSWORD: ${{ secrets.DASHBOARD_PASSWORD }}
+          ACTION_TOKEN_SECRET: ${{ secrets.ACTION_TOKEN_SECRET }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: node scanner/weeklyDigest.mjs || true
 
-      - name: Save seen-jobs cache
+      - name: Commit scanner state
+        # Persist seen-jobs.json / company-cache.json / api-usage.json back to the
+        # repo so the committed copy stays the durable source of truth. Best-effort —
+        # never fails the run. Unchanged files are skipped.
         if: always()
-        uses: actions/cache/save@v5
-        with:
-          path: data/seen-jobs.json
-          key: seen-jobs-${{ github.run_id }}
-
-      - name: Save company cache
-        if: always()
-        uses: actions/cache/save@v5
-        with:
-          path: data/company-cache.json
-          key: company-cache-${{ github.run_id }}
-
-      - name: Save API usage cache
-        if: always()
-        uses: actions/cache/save@v5
-        with:
-          path: data/api-usage.json
-          key: api-usage-${{ github.run_id }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: node scanner/commitState.mjs || true

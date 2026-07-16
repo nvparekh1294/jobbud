@@ -166,7 +166,7 @@ export default async function handler(req, res) {
     // Graceful: surface the failure but don't 500 — the modal falls back to manual entry.
     return res.status(200).json({
       ok: false,
-      error: `Could not fetch the page (${err.message}). Enter details manually.`,
+      error: 'Could not fetch the page. Enter details manually.',
       company: null,
       description: null,
       location: null,

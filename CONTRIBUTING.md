@@ -17,6 +17,8 @@ Open an issue with the tag `enhancement`. Describe the use case, not just the fe
 
 ## Submitting a pull request
 
+> Note: forking is for **code contributions to this project** only. If you just want to run JobBud for your own job search, do **not** fork — follow the README quickstart to make a private copy instead (a fork of a public repo is itself public and would expose your personal data).
+
 1. Fork the repo and create a branch from `main`
 2. Make your changes
 3. Open a pull request with a clear description of what changed and why
@@ -40,6 +42,12 @@ The app supports PDF and plain text paste only. PRs adding DOCX upload will not 
 ### No personal data in PRs
 
 Do not submit PRs that include real names, email addresses, API keys, job records, or any other personal information. Check your diff before opening a PR.
+
+### The `data/` seed stubs
+
+The JSON files in `data/` are committed as intentionally empty stubs (`[]` or `{}`) so that a fresh self-hosted install starts with valid, empty seed files. These same files are also listed in `.gitignore`, which means they are tracked-but-ignored on purpose: once you have the stubs, Git will not surface any local changes to them. This is deliberate — it lets the app write your real job data into `data/` while keeping that data out of version control.
+
+Never commit real data into `data/`. Leave the stubs as `[]` / `{}` in any PR. If you need to change the shape of a seed file, open an issue first.
 
 ## Questions
 

@@ -1,17 +1,40 @@
-import crypto from 'crypto';
+import { esc, safeUrl } from './html.mjs';
+import { readGithubFile, writeGithubFile } from '../lib/github.js';
+import { signActionToken, actionKeySource, actionKeyFingerprint } from '../lib/auth.mjs';
 
 const GITHUB_REPO = process.env.GH_REPO;
 const GITHUB_TOKEN = process.env.GH_TOKEN;
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
-const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || '';
 const VERCEL_URL = process.env.VERCEL_URL || 'http://localhost:3000';
 const RECIPIENT_EMAIL = process.env.NOTIFICATION_EMAIL || '';
 
+const MS_20H = 20 * 60 * 60 * 1000;
 const MS_24H = 24 * 60 * 60 * 1000;
 const MS_48H = 48 * 60 * 60 * 1000;
 const MS_72H = 72 * 60 * 60 * 1000;
 const MS_14D = 14 * 24 * 60 * 60 * 1000;
 const MS_21D = 21 * 24 * 60 * 60 * 1000;
+
+// Per-job, per-nudge-type dedup (same statusHistory-marker style the preparing
+// nudges already use). These nudges are meant to RE-nudge across days — they are
+// NOT once-only — so instead of an "already nudged ever?" check we enforce a
+// minimum 20h re-send interval. That preserves the intended cadence (a job can be
+// re-nudged on subsequent days while it stays in the qualifying window) while
+// preventing the double-send that happens when a manual dispatch and the daily
+// cron run a few hours apart. Marker status strings: `nudged_<type>`.
+function nudgeDue(job, markerStatus, now) {
+  const marks = (job.statusHistory || [])
+    .filter(h => h.status === markerStatus)
+    .map(h => new Date(h.timestamp).getTime())
+    .filter(t => !isNaN(t));
+  if (marks.length === 0) return true;
+  return (now - Math.max(...marks)) >= MS_20H;
+}
+
+function markNudged(job, markerStatus, nowIso) {
+  job.statusHistory = job.statusHistory || [];
+  job.statusHistory.push({ status: markerStatus, timestamp: nowIso });
+}
 
 // Reminders only nag about "Act Now" jobs — score >= 4.0, the dashboard's
 // primary Action Required tier. Lower-scored "Worth a Look" jobs (3.5–4.0) stay
@@ -19,75 +42,73 @@ const MS_21D = 21 * 24 * 60 * 60 * 1000;
 // threshold never appeared at all, so the user had no chance to action them.
 const MIN_SCORE_TO_REMIND = 4.0;
 
-function generateToken(jobId, status, ts) {
-  return crypto
-    .createHmac('sha256', DASHBOARD_PASSWORD)
-    .update(jobId + status + ts)
-    .digest('hex')
-    .slice(0, 16);
-}
-
 function actionUrl(jobId, status) {
   const ts = Math.floor(Date.now() / 1000);
-  const token = generateToken(jobId, status, ts);
+  const token = signActionToken(jobId, status, ts);
   return `${VERCEL_URL}/api/action?jobId=${encodeURIComponent(jobId)}&status=${status}&token=${token}&ts=${ts}`;
 }
 
 function snoozeUrl(jobId) {
   const ts = Math.floor(Date.now() / 1000);
-  const token = generateToken(jobId, 'preparing', ts);
+  const token = signActionToken(jobId, 'preparing', ts);
   return `${VERCEL_URL}/api/action?jobId=${encodeURIComponent(jobId)}&status=preparing&token=${token}&ts=${ts}&snooze=1`;
 }
 
 async function loadJobStatus() {
   const [owner, repo] = GITHUB_REPO.split('/');
-  const url = `https://api.github.com/repos/${owner}/${repo}/contents/data/job-status.json`;
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${GITHUB_TOKEN}`,
-      Accept: 'application/vnd.github+json',
-    },
-  });
-  if (res.status === 404) return { content: { jobs: {} }, sha: null };
-  if (!res.ok) throw new Error(`GitHub GET job-status.json failed: ${res.status}`);
-  const data = await res.json();
-
-  // GitHub Contents API returns content:"" for files > 1MB — fall back to download_url.
-  let rawJson;
-  if (data.content) {
-    rawJson = Buffer.from(data.content, 'base64').toString('utf8');
-    console.log('[remind] GET job-status.json: inline content');
-  } else if (data.download_url) {
-    console.log('[remind] GET job-status.json: file > 1MB, fetching via download_url');
-    const rawRes = await fetch(data.download_url, {
-      headers: { Authorization: `Bearer ${GITHUB_TOKEN}` },
-    });
-    if (!rawRes.ok) throw new Error(`GitHub download_url fetch failed: ${rawRes.status}`);
-    rawJson = await rawRes.text();
-  } else {
-    throw new Error('GitHub Contents API returned neither content nor download_url');
-  }
-
-  return { content: JSON.parse(rawJson), sha: data.sha || null };
+  const { exists, content } = await readGithubFile(GITHUB_TOKEN, owner, repo, 'data/job-status.json');
+  // This snapshot only DRIVES the run's decisions (which jobs to nudge/ghost). It is
+  // never written back: saveJobStatus re-reads the current file and replays the
+  // run's recorded mutations, so a stale snapshot cannot clobber concurrent writes.
+  if (!exists) return { content: { jobs: {} } };
+  return { content: JSON.parse(content) };
 }
 
-async function saveJobStatus(content, sha) {
+// The save goes through writeGithubFile's BUILDER form, never the string form. The
+// old string form serialized the ENTIRE multi-megabyte document from the snapshot
+// loaded once at run start, so (a) a 422 retry re-committed the same stale blob, and
+// (b) even without a 422, any dashboard action committed between remind's load and
+// its save was silently reverted — the same lost-update class the shared GitHub
+// client closes in lib/github.js, live in the reminder path (which runs while the
+// owner reads the nudge emails, the highest-collision window in the system).
+//
+// Instead of writing the snapshot, the run keeps a log of the SPECIFIC per-job
+// mutations it makes (ghosted flags, nudge markers) as replayable closures. The
+// builder callback re-reads the current file content — anchored to the write ref's
+// commit sha — and re-applies ONLY those mutations on top of it, so a concurrent
+// writer's change is preserved on every attempt. Same field-safe pattern as
+// api/action.js's updateJobStatus.
+let pendingMutations = []; // [{ id, mutate(job) }] — this run's not-yet-persisted changes
+
+// Apply a mutation to the in-memory job (so the rest of the run sees it) AND record
+// it for replay inside saveJobStatus's builder. `mutate` must be re-applicable to a
+// freshly-read copy of the job: the builder runs it once per write attempt.
+function applyAndRecord(id, job, mutate) {
+  mutate(job);
+  pendingMutations.push({ id, mutate });
+}
+
+async function saveJobStatus() {
+  if (pendingMutations.length === 0) return;
   const [owner, repo] = GITHUB_REPO.split('/');
-  const url = `https://api.github.com/repos/${owner}/${repo}/contents/data/job-status.json`;
-  const res = await fetch(url, {
-    method: 'PUT',
-    headers: {
-      Authorization: `Bearer ${GITHUB_TOKEN}`,
-      Accept: 'application/vnd.github+json',
-      'Content-Type': 'application/json',
+  const toPersist = pendingMutations.slice();
+  await writeGithubFile(
+    GITHUB_TOKEN, owner, repo, 'data/job-status.json',
+    (current) => {
+      const doc = current ? JSON.parse(current) : { jobs: {} };
+      if (!doc.jobs) doc.jobs = {};
+      for (const { id, mutate } of toPersist) {
+        if (!doc.jobs[id]) doc.jobs[id] = {};
+        mutate(doc.jobs[id]);
+      }
+      return JSON.stringify(doc, null, 2);
     },
-    body: JSON.stringify({
-      message: 'chore: auto-update job statuses [skip ci]',
-      content: Buffer.from(JSON.stringify(content, null, 2)).toString('base64'),
-      sha,
-    }),
-  });
-  if (!res.ok) throw new Error(`GitHub PUT failed: ${res.status}`);
+    'chore: auto-update job statuses [skip ci]',
+    { logTag: 'remind' },
+  );
+  // Persisted — drop exactly what this save wrote. On throw the log is kept, so a
+  // later save in the same run retries these mutations alongside its own.
+  pendingMutations = pendingMutations.filter(m => !toPersist.includes(m));
 }
 
 async function sendEmail(subject, html, text) {
@@ -120,10 +141,10 @@ function miniCard(id, job) {
   return `
     <div style="border:1px solid #e8e8e8;border-radius:8px;padding:14px 18px;margin-bottom:10px;">
       <div style="font-size:15px;font-weight:600;margin-bottom:2px;">
-        <a href="${job.url}" style="color:#111;text-decoration:none">${job.title}</a>
+        <a href="${safeUrl(job.url)}" style="color:#111;text-decoration:none">${esc(job.title)}</a>
       </div>
       <div style="font-size:11px;font-weight:700;color:#16a34a;margin-bottom:4px">Score: ${typeof job.score === 'number' ? job.score.toFixed(1) : '—'}</div>
-      <div style="font-size:12px;color:#888;margin-bottom:10px">${job.company} · ${job.location || ''}${job.isRemote ? ' · Remote' : ''}</div>
+      <div style="font-size:12px;color:#888;margin-bottom:10px">${esc(job.company)} · ${esc(job.location || '')}${job.isRemote ? ' · Remote' : ''}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <a href="${actionUrl(id, 'saved')}" style="display:inline-block;padding:6px 14px;background:#eff6ff;color:#2563eb;border-radius:6px;text-decoration:none;font-size:12px;font-weight:600">Save</a>
         <a href="${actionUrl(id, 'preparing')}" style="display:inline-block;padding:6px 14px;background:#111;color:white;border-radius:6px;text-decoration:none;font-size:12px;font-weight:600">Prepare to Apply</a>
@@ -136,10 +157,10 @@ function preparingCard(id, job) {
   return `
     <div style="border:1px solid #e8e8e8;border-left:3px solid #2563eb;border-radius:8px;padding:14px 18px;margin-bottom:10px;">
       <div style="font-size:15px;font-weight:600;margin-bottom:2px;">
-        <a href="${job.url}" style="color:#111;text-decoration:none">${job.title}</a>
+        <a href="${safeUrl(job.url)}" style="color:#111;text-decoration:none">${esc(job.title)}</a>
       </div>
       <div style="font-size:11px;font-weight:700;color:#16a34a;margin-bottom:4px">Score: ${typeof job.score === 'number' ? job.score.toFixed(1) : '—'}</div>
-      <div style="font-size:12px;color:#888;margin-bottom:10px">${job.company} · Started preparing ${new Date(job.preparedAt || job.statusUpdatedAt).toLocaleDateString()}</div>
+      <div style="font-size:12px;color:#888;margin-bottom:10px">${esc(job.company)} · Started preparing ${new Date(job.preparedAt || job.statusUpdatedAt).toLocaleDateString()}</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <a href="${actionUrl(id, 'applied')}" style="display:inline-block;padding:6px 14px;background:#111;color:white;border-radius:6px;text-decoration:none;font-size:12px;font-weight:600">✓ I've Applied</a>
         <a href="${snoozeUrl(id)}" style="display:inline-block;padding:6px 14px;background:#eff6ff;color:#2563eb;border-radius:6px;text-decoration:none;font-size:12px;font-weight:600">Snooze 24h</a>
@@ -157,104 +178,6 @@ function wrap(body, title) {
 }
 
 // Weekly summary moved to scanner/weeklyDigest.mjs (runs on its own Monday 9am cron).
-
-async function _unused_sendWeeklySummary(jobs, content, sha) {
-  const all = Object.values(jobs);
-  const counts = {
-    new: all.filter(j => !j.status || j.status === 'new').length,
-    saved: all.filter(j => j.status === 'saved').length,
-    preparing: all.filter(j => j.status === 'preparing').length,
-    applied: all.filter(j => j.status === 'applied').length,
-    interviewing: all.filter(j => j.status === 'interviewing').length,
-    offer: all.filter(j => j.status === 'offer').length,
-    ghosted: all.filter(j => j.status === 'ghosted').length,
-    rejected_by_them: all.filter(j => j.status === 'rejected_by_them').length,
-  };
-
-  // Funnel conversion rates
-  const appliedPlus = counts.applied + counts.interviewing + counts.offer + counts.ghosted + counts.rejected_by_them;
-  const interviewingPlus = counts.interviewing + counts.offer;
-  const preparedPlus = counts.preparing + appliedPlus;
-
-  const savedToPrep = preparedPlus + counts.saved > 0 ? Math.round((preparedPlus / (preparedPlus + counts.saved)) * 100) : 0;
-  const prepToApplied = preparedPlus > 0 ? Math.round((appliedPlus / preparedPlus) * 100) : 0;
-  const appliedToInterview = appliedPlus > 0 ? Math.round((interviewingPlus / appliedPlus) * 100) : 0;
-  const interviewToOffer = interviewingPlus > 0 ? Math.round((counts.offer / interviewingPlus) * 100) : 0;
-
-  // At-risk: applied > 14 days, no movement
-  const atRisk = Object.entries(jobs).filter(([, j]) => {
-    if (j.status !== 'applied') return false;
-    return Date.now() - new Date(j.appliedAt || j.statusUpdatedAt).getTime() > 14 * 24 * 60 * 60 * 1000;
-  });
-
-  const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
-  const subject = `JobBud Weekly Pipeline — ${dateStr}`;
-
-  const funnelRows = [
-    ['New / Unactioned', counts.new],
-    ['Saved', counts.saved],
-    ['Preparing', counts.preparing],
-    ['Applied', counts.applied],
-    ['Interviewing', counts.interviewing],
-    ['Offers', counts.offer],
-    ['Ghosted', counts.ghosted],
-    ['Rejected by them', counts.rejected_by_them],
-  ];
-
-  const conversionRows = [
-    ['Saved → Prepared', `${savedToPrep}%`],
-    ['Prepared → Applied', `${prepToApplied}%`],
-    ['Applied → Interview', `${appliedToInterview}%`],
-    ['Interview → Offer', `${interviewToOffer}%`],
-  ];
-
-  const atRiskHtml = atRisk.length
-    ? `<div style="margin-top:20px"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:10px">⚠ At Risk (14+ days, no response)</div>
-      ${atRisk.map(([, j]) => `<div style="font-size:13px;padding:6px 0;border-bottom:1px solid #f0f0f0"><strong>${j.company}</strong> — ${j.title}</div>`).join('')}</div>`
-    : '';
-
-  const html = `<!DOCTYPE html><html><head><style>
-    body { font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto; color: #1a1a1a; }
-    .header { background: #0f0f0f; color: white; padding: 20px 28px; }
-    .header h1 { margin: 0; font-size: 18px; }
-    .header p { margin: 4px 0 0; font-size: 12px; color: #888; }
-    .section { padding: 20px 28px; border-bottom: 1px solid #f0f0f0; }
-    .label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: #888; margin: 0 0 12px; }
-    table { width: 100%; border-collapse: collapse; }
-    td { padding: 7px 0; font-size: 13px; border-bottom: 1px solid #f5f5f5; }
-    td:last-child { text-align: right; font-weight: 600; }
-    .footer { padding: 16px 28px; font-size: 12px; color: #9ca3af; }
-  </style></head><body>
-    <div class="header"><h1>Weekly Pipeline</h1><p>${dateStr}</p></div>
-    <div class="section">
-      <p class="label">Funnel</p>
-      <table>${funnelRows.map(([l, v]) => `<tr><td>${l}</td><td>${v}</td></tr>`).join('')}</table>
-    </div>
-    <div class="section">
-      <p class="label">Conversion Rates</p>
-      <table>${conversionRows.map(([l, v]) => `<tr><td>${l}</td><td>${v}</td></tr>`).join('')}</table>
-      ${atRiskHtml}
-    </div>
-    <div class="footer">JobBud · Weekly summary</div>
-  </body></html>`;
-
-  const text = [
-    `JOBBUD WEEKLY PIPELINE — ${dateStr}`,
-    '',
-    'FUNNEL:',
-    ...funnelRows.map(([l, v]) => `  ${l}: ${v}`),
-    '',
-    'CONVERSION RATES:',
-    ...conversionRows.map(([l, v]) => `  ${l}: ${v}`),
-    atRisk.length ? `\nAT RISK (14+ days):\n${atRisk.map(([, j]) => `  ${j.company} — ${j.title}`).join('\n')}` : '',
-  ].join('\n');
-
-  await sendEmail(subject, html, text);
-  console.log('[remind] Sent weekly pipeline summary');
-
-  // Mark as sent so we don't resend today
-  content.lastWeeklySummaryAt = new Date().toISOString();
-}
 
 async function sendNudgeDigest(nudgeItems) {
   const now = Date.now();
@@ -285,9 +208,9 @@ async function sendNudgeDigest(nudgeItems) {
     return `
       <div style="border:1px solid #e8e8e8;border-radius:8px;padding:14px 18px;margin-bottom:10px;">
         <div style="font-size:15px;font-weight:600;margin-bottom:2px;">
-          ${job.url ? `<a href="${job.url}" style="color:#111;text-decoration:none">${job.title}</a>` : job.title}
+          ${job.url ? `<a href="${safeUrl(job.url)}" style="color:#111;text-decoration:none">${esc(job.title)}</a>` : esc(job.title)}
         </div>
-        <div style="font-size:12px;color:#888;margin-bottom:10px">${job.company} · ${days} day${days !== 1 ? 's' : ''} since last action</div>
+        <div style="font-size:12px;color:#888;margin-bottom:10px">${esc(job.company)} · ${days} day${days !== 1 ? 's' : ''} since last action</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">${btns}</div>
       </div>`;
   };
@@ -327,16 +250,22 @@ async function sendNudgeDigest(nudgeItems) {
 
 export async function runReminders() {
   console.log('[remind] Starting reminder check...');
+  // Action-token key diagnostics — logged once per run so a mint/verify key desync
+  // can be diffed against the Vercel logs.
+  console.log(`action-token key: source=${actionKeySource()} fp=${actionKeyFingerprint()}`);
 
   if (!GITHUB_TOKEN) {
     console.warn('[remind] GH_TOKEN not set — skipping');
     return;
   }
 
-  const { content, sha } = await loadJobStatus();
+  const { content } = await loadJobStatus();
   const jobs = content.jobs || {};
   const now = Date.now();
   let dirty = false;
+  // Fresh mutation log per run — a stale log from a previous invocation in the same
+  // process (e.g. tests) must never replay into this run's saves.
+  pendingMutations = [];
 
   // ── 1. Auto-flag ghosted: applied > 21 days with no movement ────────────
   const newlyGhosted = [];
@@ -344,10 +273,13 @@ export async function runReminders() {
     if (job.status !== 'applied') continue;
     const updatedAt = new Date(job.appliedAt || job.statusUpdatedAt || job.firstSeenAt).getTime();
     if (now - updatedAt > MS_21D) {
-      jobs[id].status = 'ghosted';
-      jobs[id].statusUpdatedAt = new Date().toISOString();
-      if (!jobs[id].statusHistory) jobs[id].statusHistory = [];
-      jobs[id].statusHistory.push({ status: 'ghosted', timestamp: new Date().toISOString(), reason: 'auto-flagged after 21 days' });
+      const ghostedIso = new Date().toISOString();
+      applyAndRecord(id, job, (j) => {
+        j.status = 'ghosted';
+        j.statusUpdatedAt = ghostedIso;
+        if (!j.statusHistory) j.statusHistory = [];
+        j.statusHistory.push({ status: 'ghosted', timestamp: ghostedIso, reason: 'auto-flagged after 21 days' });
+      });
       newlyGhosted.push(job);
       dirty = true;
       console.log(`[remind] Auto-ghosted: ${job.company} — ${job.title}`);
@@ -359,8 +291,9 @@ export async function runReminders() {
 
   if (dirty) {
     try {
-      await saveJobStatus(content, sha);
+      await saveJobStatus();
       console.log('[remind] Saved status updates');
+      dirty = false; // persisted — only re-save if a later section marks a change
     } catch (err) {
       console.warn(`[remind] saveJobStatus failed (status updates not persisted): ${err.message}`);
       dirty = false; // prevent second save attempt below from also failing
@@ -393,8 +326,8 @@ export async function runReminders() {
       const alreadyNudged48 = job.statusHistory?.some(h => h.status === 'nudged_preparing_48h');
       if (!alreadyNudged48) {
         nudgeItems.push({ id, job, nudgeType: 'preparing_48h', sinceTs: preparedAt });
-        job.statusHistory = job.statusHistory || [];
-        job.statusHistory.push({ status: 'nudged_preparing_48h', timestamp: new Date().toISOString() });
+        const stamp48 = new Date().toISOString();
+        applyAndRecord(id, job, (j) => markNudged(j, 'nudged_preparing_48h', stamp48));
         dirty = true;
         console.log(`[remind] Queued 48h preparing nudge: ${job.company} — ${job.title}`);
       }
@@ -403,8 +336,8 @@ export async function runReminders() {
       const alreadyNudged24 = job.statusHistory?.some(h => h.status === 'nudged_preparing_24h');
       if (!alreadyNudged24) {
         nudgeItems.push({ id, job, nudgeType: 'preparing_24h', sinceTs: preparedAt });
-        job.statusHistory = job.statusHistory || [];
-        job.statusHistory.push({ status: 'nudged_preparing_24h', timestamp: new Date().toISOString() });
+        const stamp24 = new Date().toISOString();
+        applyAndRecord(id, job, (j) => markNudged(j, 'nudged_preparing_24h', stamp24));
         dirty = true;
         console.log(`[remind] Queued 24h preparing nudge: ${job.company} — ${job.title}`);
       }
@@ -413,13 +346,17 @@ export async function runReminders() {
 
   if (dirty) {
     try {
-      await saveJobStatus(content, sha);
+      await saveJobStatus();
+      dirty = false; // persisted — sections 5–8 below re-set dirty only if they mark
     } catch (err) {
       console.warn(`[remind] saveJobStatus (preparing nudges) failed: ${err.message}`);
     }
   }
 
   // ── 5. Unactioned new jobs > 24h ─────────────────────────────────────────
+  // Dedup: skip any job nudged with this type in the last 20h (see nudgeDue). The
+  // job stays eligible across days while it sits in the 24–72h window, but never
+  // gets a second 24h email inside 20h.
   const unactioned24h = Object.entries(jobs).filter(([, j]) => {
     if (j.status && j.status !== 'new') return false;
     // Only nag about jobs that actually appeared in the digest. A job below
@@ -430,10 +367,80 @@ export async function runReminders() {
     const addedAt = new Date(j.firstSeenAt).getTime();
     if (!addedAt || isNaN(addedAt)) return false;
     const ageHours = (now - addedAt) / (1000 * 60 * 60);
-    console.log(`[remind] unactioned job age: ${ageHours.toFixed(1)}h — ${j.company} — ${j.title}`);
     return ageHours > 24 && ageHours <= 72;
-  }).sort(([, a], [, b]) => (b.score || 0) - (a.score || 0));   // highest score first
+  })
+    .filter(([, j]) => nudgeDue(j, 'nudged_unactioned_24h', now))
+    .sort(([, a], [, b]) => (b.score || 0) - (a.score || 0));   // highest score first
 
+  // ── 6. Escalating nag: unactioned new jobs > 72h ─────────────────────────
+  // Staleness cutoff: exclude jobs older than 14 days that are ALSO completely
+  // unactioned. At that age with no action they're acknowledged noise — nagging
+  // indefinitely adds no value. Jobs with ANY explicit action status (saved,
+  // applied, rejected, etc.) are never excluded here, regardless of age.
+  // Dedup: same 20h re-send floor — the 72h nag re-fires on later days, never
+  // twice inside 20h.
+  const unactioned72h = Object.entries(jobs).filter(([, j]) => {
+    if (j.status && j.status !== 'new') return false;
+    // Same score gate as section 5 — only nag about digest-visible jobs.
+    if (j.score === null || j.score === undefined || j.score < MIN_SCORE_TO_REMIND) return false;
+    const seen = new Date(j.firstSeenAt).getTime();
+    const age = now - seen;
+    if (age > MS_14D) return false;  // both old AND unactioned — skip
+    return age > MS_72H;
+  })
+    .filter(([, j]) => nudgeDue(j, 'nudged_unactioned_72h', now))
+    .sort(([, a], [, b]) => (b.score || 0) - (a.score || 0));   // highest score first
+
+  // ── 7. Saved but not preparing > 24h (collect for digest) ────────────────
+  // Dedup: 20h floor via nudgeDue, keyed to the saved_24h marker.
+  const savedOver24h = Object.entries(jobs).filter(([, j]) => {
+    if (j.status !== 'saved') return false;
+    const savedAt = new Date(j.savedAt || j.statusUpdatedAt || j.firstSeenAt).getTime();
+    if (!savedAt || (now - savedAt) <= 23 * 60 * 60 * 1000) return false;
+    return now - savedAt > MS_24H && now - savedAt <= MS_48H;
+  }).filter(([, j]) => nudgeDue(j, 'nudged_saved_24h', now));
+
+  for (const [id, job] of savedOver24h) {
+    const savedAt = new Date(job.savedAt || job.statusUpdatedAt || job.firstSeenAt).getTime();
+    nudgeItems.push({ id, job, nudgeType: 'saved_24h', sinceTs: savedAt });
+    console.log(`[remind] Queued 24h saved nudge: ${job.company} — ${job.title}`);
+  }
+
+  // ── 8. Saved but not preparing > 48h (collect for digest) ───────────────
+  // Dedup: 20h floor via nudgeDue, keyed to the saved_48h marker.
+  const savedOver48h = Object.entries(jobs).filter(([, j]) => {
+    if (j.status !== 'saved') return false;
+    const savedAt = new Date(j.statusUpdatedAt || j.firstSeenAt).getTime();
+    return now - savedAt > MS_48H;
+  }).filter(([, j]) => nudgeDue(j, 'nudged_saved_48h', now));
+
+  for (const [id, job] of savedOver48h) {
+    const savedAt = new Date(job.statusUpdatedAt || job.firstSeenAt).getTime();
+    nudgeItems.push({ id, job, nudgeType: 'saved_48h', sinceTs: savedAt });
+    console.log(`[remind] Queued 48h saved nudge: ${job.company} — ${job.title}`);
+  }
+
+  // ── Record nudge markers BEFORE any send, then persist ────────────────────
+  // Mirrors the preparing-nudge ordering (mark → save → send): a job selected in
+  // any of sections 5–8 gets its `nudged_<type>` marker now, so a re-run within
+  // 20h (manual dispatch + daily cron) filters it out above and sends nothing.
+  const nudgeNowIso = new Date().toISOString();
+  for (const [id, job] of unactioned24h) { applyAndRecord(id, job, (j) => markNudged(j, 'nudged_unactioned_24h', nudgeNowIso)); dirty = true; }
+  for (const [id, job] of unactioned72h) { applyAndRecord(id, job, (j) => markNudged(j, 'nudged_unactioned_72h', nudgeNowIso)); dirty = true; }
+  for (const [id, job] of savedOver24h)  { applyAndRecord(id, job, (j) => markNudged(j, 'nudged_saved_24h', nudgeNowIso));      dirty = true; }
+  for (const [id, job] of savedOver48h)  { applyAndRecord(id, job, (j) => markNudged(j, 'nudged_saved_48h', nudgeNowIso));      dirty = true; }
+
+  if (dirty) {
+    try {
+      await saveJobStatus();
+      dirty = false;
+      console.log('[remind] Saved nudge markers');
+    } catch (err) {
+      console.warn(`[remind] saveJobStatus (nudge markers) failed: ${err.message}`);
+    }
+  }
+
+  // ── Sends (after markers are persisted) ───────────────────────────────────
   if (unactioned24h.length > 0) {
     const cards = unactioned24h.map(([id, job]) => miniCard(id, job)).join('');
     await sendEmail(
@@ -444,21 +451,6 @@ export async function runReminders() {
     console.log(`[remind] Sent 24h reminder for ${unactioned24h.length} jobs`);
   }
 
-  // ── 6. Escalating nag: unactioned new jobs > 72h ─────────────────────────
-  // Staleness cutoff: exclude jobs older than 14 days that are ALSO completely
-  // unactioned. At that age with no action they're acknowledged noise — nagging
-  // indefinitely adds no value. Jobs with ANY explicit action status (saved,
-  // applied, rejected, etc.) are never excluded here, regardless of age.
-  const unactioned72h = Object.entries(jobs).filter(([, j]) => {
-    if (j.status && j.status !== 'new') return false;
-    // Same score gate as section 5 — only nag about digest-visible jobs.
-    if (j.score === null || j.score === undefined || j.score < MIN_SCORE_TO_REMIND) return false;
-    const seen = new Date(j.firstSeenAt).getTime();
-    const age = now - seen;
-    if (age > MS_14D) return false;  // both old AND unactioned — skip
-    return age > MS_72H;
-  }).sort(([, a], [, b]) => (b.score || 0) - (a.score || 0));   // highest score first
-
   if (unactioned72h.length > 0) {
     const cards = unactioned72h.map(([id, job]) => miniCard(id, job)).join('');
     await sendEmail(
@@ -467,33 +459,6 @@ export async function runReminders() {
       `OVERDUE — ${unactioned72h.length} jobs waiting 72h+:\n\n${unactioned72h.map(([, j]) => `${j.company} — ${j.title}\n${j.url}`).join('\n\n')}`
     );
     console.log(`[remind] Sent 72h nag for ${unactioned72h.length} jobs`);
-  }
-
-  // ── 7. Saved but not preparing > 24h (collect for digest) ────────────────
-  const savedOver24h = Object.entries(jobs).filter(([, j]) => {
-    if (j.status !== 'saved') return false;
-    const savedAt = new Date(j.savedAt || j.statusUpdatedAt || j.firstSeenAt).getTime();
-    if (!savedAt || (now - savedAt) <= 23 * 60 * 60 * 1000) return false;
-    return now - savedAt > MS_24H && now - savedAt <= MS_48H;
-  });
-
-  for (const [id, job] of savedOver24h) {
-    const savedAt = new Date(job.savedAt || job.statusUpdatedAt || job.firstSeenAt).getTime();
-    nudgeItems.push({ id, job, nudgeType: 'saved_24h', sinceTs: savedAt });
-    console.log(`[remind] Queued 24h saved nudge: ${job.company} — ${job.title}`);
-  }
-
-  // ── 8. Saved but not preparing > 48h (collect for digest) ───────────────
-  const savedOver48h = Object.entries(jobs).filter(([, j]) => {
-    if (j.status !== 'saved') return false;
-    const savedAt = new Date(j.statusUpdatedAt || j.firstSeenAt).getTime();
-    return now - savedAt > MS_48H;
-  });
-
-  for (const [id, job] of savedOver48h) {
-    const savedAt = new Date(job.statusUpdatedAt || job.firstSeenAt).getTime();
-    nudgeItems.push({ id, job, nudgeType: 'saved_48h', sinceTs: savedAt });
-    console.log(`[remind] Queued 48h saved nudge: ${job.company} — ${job.title}`);
   }
 
   // ── Send consolidated nudge digest ───────────────────────────────────────

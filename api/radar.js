@@ -7,6 +7,8 @@
 // everywhere else in this codebase (see api/action.js putJobStatus).
 
 import crypto from 'crypto';
+import { readGithubFile, writeGithubFile } from '../lib/github.js';
+import { safeEqual } from '../lib/auth.mjs';
 
 const GITHUB_API = 'https://api.github.com';
 const RADAR_PATH = 'data/radar.json';
@@ -20,92 +22,24 @@ const CONTACT_STATUSES = ['not_contacted', 'contacted', 'replied', 'meeting_sche
 // Empty string = no board mapped yet (the company won't be scanned until set).
 const ATS_BOARDS = ['', 'greenhouse', 'ashby', 'lever'];
 
-// ── Read radar.json (handles the >1MB download_url case like the rest of the codebase) ──
+// ── Read radar.json (handles the >1MB download_url case via the shared helper) ──
 async function readRadar(githubToken, owner, repo) {
-  const url = `${GITHUB_API}/repos/${owner}/${repo}/contents/${RADAR_PATH}`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${githubToken}`, Accept: 'application/vnd.github+json' },
-  });
+  const { exists, content } = await readGithubFile(githubToken, owner, repo, RADAR_PATH);
   // First run before radar.json is committed — start from an empty model.
-  if (res.status === 404) return { companies: {} };
-  if (!res.ok) throw new Error(`GitHub GET ${RADAR_PATH} failed: ${res.status}`);
-  const data = await res.json();
-
-  let rawJson;
-  if (data.content) {
-    rawJson = Buffer.from(data.content, 'base64').toString('utf8');
-  } else if (data.download_url) {
-    const rawRes = await fetch(data.download_url, {
-      headers: { Authorization: `Bearer ${githubToken}` },
-    });
-    if (!rawRes.ok) throw new Error(`GitHub download_url fetch failed: ${rawRes.status}`);
-    rawJson = await rawRes.text();
-  } else {
-    throw new Error('GitHub Contents API returned neither content nor download_url');
-  }
-
-  const parsed = JSON.parse(rawJson);
+  if (!exists) return { companies: {} };
+  const parsed = JSON.parse(content);
   if (!parsed.companies || typeof parsed.companies !== 'object') parsed.companies = {};
   return parsed;
 }
 
-// ── Write radar.json via the Git Data API: blob → tree → commit → advance ref ──
-// Same pattern as putJobStatus in api/action.js / commitFile in queue-linkedin-research.
+// ── Write radar.json via the shared Git Data API helper (blob → tree → commit → ref, with retry) ──
 async function writeRadar(githubToken, owner, repo, content, message) {
-  const GIT = `${GITHUB_API}/repos/${owner}/${repo}/git`;
-  const authHeaders = {
-    Authorization: `Bearer ${githubToken}`,
-    Accept: 'application/vnd.github+json',
-    'Content-Type': 'application/json',
-  };
-
-  const contentBase64 = Buffer.from(JSON.stringify(content, null, 2) + '\n').toString('base64');
-
-  // 1 — create blob
-  const blobRes = await fetch(`${GIT}/blobs`, {
-    method: 'POST', headers: authHeaders,
-    body: JSON.stringify({ content: contentBase64, encoding: 'base64' }),
-  });
-  if (!blobRes.ok) throw new Error(`blob create failed: ${blobRes.status} — ${await blobRes.text()}`);
-  const { sha: blobSha } = await blobRes.json();
-
-  // 2 — HEAD commit SHA
-  const refRes = await fetch(`${GIT}/ref/heads/main`, { headers: authHeaders });
-  if (!refRes.ok) throw new Error(`get ref failed: ${refRes.status} — ${await refRes.text()}`);
-  const { object: { sha: commitSha } } = await refRes.json();
-
-  // 3 — tree SHA from commit
-  const commitRes = await fetch(`${GIT}/commits/${commitSha}`, { headers: authHeaders });
-  if (!commitRes.ok) throw new Error(`get commit failed: ${commitRes.status} — ${await commitRes.text()}`);
-  const { tree: { sha: treeSha } } = await commitRes.json();
-
-  // 4 — new tree with radar.json added/updated
-  const newTreeRes = await fetch(`${GIT}/trees`, {
-    method: 'POST', headers: authHeaders,
-    body: JSON.stringify({
-      base_tree: treeSha,
-      tree: [{ path: RADAR_PATH, mode: '100644', type: 'blob', sha: blobSha }],
-    }),
-  });
-  if (!newTreeRes.ok) throw new Error(`create tree failed: ${newTreeRes.status} — ${await newTreeRes.text()}`);
-  const { sha: newTreeSha } = await newTreeRes.json();
-
-  // 5 — commit
-  const newCommitRes = await fetch(`${GIT}/commits`, {
-    method: 'POST', headers: authHeaders,
-    body: JSON.stringify({ message, tree: newTreeSha, parents: [commitSha] }),
-  });
-  if (!newCommitRes.ok) throw new Error(`create commit failed: ${newCommitRes.status} — ${await newCommitRes.text()}`);
-  const { sha: newCommitSha } = await newCommitRes.json();
-
-  // 6 — advance branch ref
-  const updateRefRes = await fetch(`${GIT}/refs/heads/main`, {
-    method: 'PATCH', headers: authHeaders,
-    body: JSON.stringify({ sha: newCommitSha }),
-  });
-  if (!updateRefRes.ok) throw new Error(`update ref failed: ${updateRefRes.status} — ${await updateRefRes.text()}`);
-
-  return newCommitSha;
+  return writeGithubFile(
+    githubToken, owner, repo, RADAR_PATH,
+    JSON.stringify(content, null, 2) + '\n',
+    message,
+    { logTag: 'radar' },
+  );
 }
 
 // ── Small helpers ────────────────────────────────────────────────────────────
@@ -138,7 +72,7 @@ export default async function handler(req, res) {
 
   // Auth — same X-Dashboard-Password header check as api/jobs.js.
   const headerPw = req.headers['x-dashboard-password'];
-  if (!password || !headerPw || headerPw !== password) {
+  if (!password || !headerPw || !safeEqual(headerPw, password)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
   if (!githubToken) return res.status(500).json({ error: 'GH_TOKEN not configured' });
@@ -269,6 +203,6 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: `Unknown action: ${action}` });
   } catch (err) {
     console.error('[radar] Error:', err.message);
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }

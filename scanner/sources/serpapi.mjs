@@ -5,6 +5,8 @@
  * Docs: https://serpapi.com/google-jobs-api
  */
 
+import { resolveTargetRoles, buildRoleGroups, serpApiLocationString } from './queryHelpers.mjs';
+
 const BASE_URL = 'https://serpapi.com/search.json';
 
 export async function checkSerpApiBalance(apiKey) {
@@ -40,45 +42,34 @@ export async function fetchSerpApi(config) {
 }
 
 function buildQueries(config) {
+  const roles = resolveTargetRoles(config);
+  if (!roles.length) {
+    console.warn('[serpapi] No target roles configured (set target_roles in config/profile.yml) -- skipping');
+    return [];
+  }
+
+  const roleGroups = buildRoleGroups(roles);
   const queries = [];
 
-  const roleGroups = [
-    'business operations OR biz ops OR chief of staff',
-    'head of operations OR strategy operations OR special projects',
-    'COO OR strategic finance OR corporate development OR growth operations',
-    'investment partner OR investment principal OR venture partner',
-  ];
-
-  const serpApiLocation = (loc) => {
-    const locationMap = {
-      'San Francisco': 'San Francisco, California',
-      'New York City': 'New York City, New York',
-      'Los Angeles': 'Los Angeles, California',
-      'London': 'London, England',
-      'Singapore': 'Singapore',
-    };
-    return locationMap[loc.city] || loc.city;
-  };
-
   for (const location of config.locations) {
+    const locationStr = serpApiLocationString(location);
+    if (!locationStr) continue;
     for (const roleGroup of roleGroups) {
       queries.push({
         q: roleGroup,
-        location: serpApiLocation(location),
+        location: locationStr,
         chips: 'date_posted:week',
       });
     }
   }
 
   if (config.includeRemote) {
-    queries.push({
-      q: 'business operations OR chief of staff OR strategy operations',
-      chips: 'date_posted:week,work_from_home:1',
-    });
-    queries.push({
-      q: 'COO OR strategic finance OR corporate development',
-      chips: 'date_posted:week,work_from_home:1',
-    });
+    for (const roleGroup of roleGroups) {
+      queries.push({
+        q: roleGroup,
+        chips: 'date_posted:week,work_from_home:1',
+      });
+    }
   }
 
   return queries;

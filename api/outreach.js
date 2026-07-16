@@ -1,6 +1,8 @@
 // NOTE FOR MAINTAINERS: This file is sanitized for public release.
 // When porting changes from a private instance, re-sanitize any
 // hardcoded name, bio, or background references before committing.
+import { safeEqual } from '../lib/auth.mjs';
+
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const GITHUB_API = 'https://api.github.com';
 
@@ -151,7 +153,7 @@ export default async function handler(req, res) {
 
   // Auth — X-Dashboard-Password header only (dashboard-initiated call)
   const headerPw = req.headers['x-dashboard-password'];
-  if (!headerPw || !password || headerPw !== password) {
+  if (!headerPw || !password || !safeEqual(headerPw, password)) {
     return res.status(403).json({ error: 'Unauthorized' });
   }
 
@@ -351,6 +353,6 @@ Respond with exactly this JSON:
 
   } catch (err) {
     console.error('[outreach] Error:', err.message);
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }

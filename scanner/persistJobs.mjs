@@ -1,155 +1,107 @@
-const GITHUB_API = 'https://api.github.com';
+import { readGithubFile, writeGithubFile } from '../lib/github.js';
 
-// GET job-status.json — handles files > 1MB via download_url fallback
-// (GitHub Contents API returns content:"" for files over 1MB)
-async function getJobStatusFile(githubToken, owner, repo) {
-  const url = `${GITHUB_API}/repos/${owner}/${repo}/contents/data/job-status.json`;
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${githubToken}`,
-      Accept: 'application/vnd.github+json',
-    },
-  });
-  if (res.status === 404) return { content: { jobs: {} } };
-  if (!res.ok) throw new Error(`GitHub GET job-status.json failed: ${res.status}`);
-  const data = await res.json();
-
-  let rawJson;
-  if (data.content) {
-    rawJson = Buffer.from(data.content, 'base64').toString('utf8');
-    console.log('[persist] GET success (inline content)');
-  } else if (data.download_url) {
-    console.log('[persist] File exceeds GitHub Contents API limit — fetching via download_url');
-    const rawRes = await fetch(data.download_url, {
-      headers: { Authorization: `Bearer ${githubToken}` },
-    });
-    if (!rawRes.ok) throw new Error(`GitHub download_url fetch failed: ${rawRes.status}`);
-    rawJson = await rawRes.text();
-  } else {
-    throw new Error('GitHub Contents API returned neither content nor download_url');
-  }
-
-  return { content: JSON.parse(rawJson) };
-}
-
-// PUT job-status.json via Git Data API — no file-size limit.
-// The Contents API PUT endpoint rejects files > 1MB with a 422.
-async function putJobStatusFile(githubToken, owner, repo, content) {
-  const GITHUB_GIT = `${GITHUB_API}/repos/${owner}/${repo}/git`;
-  const authHeaders = {
-    Authorization: `Bearer ${githubToken}`,
-    Accept: 'application/vnd.github+json',
-    'Content-Type': 'application/json',
+// Build the job record persisted for a freshly-evaluated job.
+function buildJobRecord(job) {
+  return {
+    status: 'new',
+    firstSeenAt: new Date().toISOString(),
+    company: job.company || '',
+    title: job.title || '',
+    location: job.location || '',
+    isRemote: job.isRemote || false,
+    url: job.url || '',
+    score: job.score ?? null,
+    aiExposureRisk: job.aiExposureRisk || null,
+    aiExposureRationale: job.aiExposureRationale || null,
+    jobType: job.jobType || 'operating',
+    whyFit: job.whyFit || [],
+    watchOuts: job.watchOuts || [],
+    recommendedAction: job.recommendedAction || '',
+    oneLineSummary: job.oneLineSummary || '',
+    companyDescription: job.companyDescription || '',
+    description: (job.description || '').slice(0, 3000),
+    fundingSnapshot: job.fundingSnapshot || null,
   };
-
-  const contentBase64 = Buffer.from(JSON.stringify(content, null, 2)).toString('base64');
-
-  // Step 1 — create blob
-  console.log('[persist] Git Data API: creating blob...');
-  const blobRes = await fetch(`${GITHUB_GIT}/blobs`, {
-    method: 'POST', headers: authHeaders,
-    body: JSON.stringify({ content: contentBase64, encoding: 'base64' }),
-  });
-  if (!blobRes.ok) throw new Error(`GitHub blob create failed: ${blobRes.status} — ${await blobRes.text()}`);
-  const { sha: blobSha } = await blobRes.json();
-
-  // Step 2 — get HEAD commit SHA
-  const refRes = await fetch(`${GITHUB_GIT}/ref/heads/main`, { headers: authHeaders });
-  if (!refRes.ok) throw new Error(`GitHub get ref failed: ${refRes.status}`);
-  const { object: { sha: commitSha } } = await refRes.json();
-
-  // Step 3 — get tree SHA from commit
-  const commitRes = await fetch(`${GITHUB_GIT}/commits/${commitSha}`, { headers: authHeaders });
-  if (!commitRes.ok) throw new Error(`GitHub get commit failed: ${commitRes.status}`);
-  const { tree: { sha: treeSha } } = await commitRes.json();
-
-  // Step 4 — create new tree with updated file
-  const newTreeRes = await fetch(`${GITHUB_GIT}/trees`, {
-    method: 'POST', headers: authHeaders,
-    body: JSON.stringify({
-      base_tree: treeSha,
-      tree: [{ path: 'data/job-status.json', mode: '100644', type: 'blob', sha: blobSha }],
-    }),
-  });
-  if (!newTreeRes.ok) throw new Error(`GitHub create tree failed: ${newTreeRes.status}`);
-  const { sha: newTreeSha } = await newTreeRes.json();
-
-  // Step 5 — create commit
-  const newCommitRes = await fetch(`${GITHUB_GIT}/commits`, {
-    method: 'POST', headers: authHeaders,
-    body: JSON.stringify({
-      message: 'chore: persist scanned jobs [skip ci]',
-      tree: newTreeSha,
-      parents: [commitSha],
-    }),
-  });
-  if (!newCommitRes.ok) throw new Error(`GitHub create commit failed: ${newCommitRes.status}`);
-  const { sha: newCommitSha } = await newCommitRes.json();
-
-  // Step 6 — advance branch ref
-  const updateRefRes = await fetch(`${GITHUB_GIT}/refs/heads/main`, {
-    method: 'PATCH', headers: authHeaders,
-    body: JSON.stringify({ sha: newCommitSha }),
-  });
-  if (!updateRefRes.ok) throw new Error(`GitHub update ref failed: ${updateRefRes.status}`);
-  console.log('[persist] job-status.json updated via Git Data API');
 }
 
+// Persist newly-evaluated jobs into data/job-status.json.
+//
+// Returns the number of new jobs actually added. Concurrency-safe: the write goes
+// through writeGithubFile's builder form, which re-reads the file on every attempt
+// and re-adds only the missing job ids. So a status change the dashboard commits
+// mid-scan (or another scan running concurrently) is preserved rather than erased
+// by a stale whole-file overwrite. Existing jobs are NEVER overwritten — the owner
+// may have actioned them.
 export async function persistJobs(evaluatedJobs) {
   const githubToken = process.env.GH_TOKEN;
   const githubRepo = process.env.GH_REPO;
 
   if (!githubToken) {
     console.warn('[persist] GH_TOKEN not set — skipping job persistence');
-    return;
+    return 0;
   }
 
   const [owner, repo] = githubRepo.split('/');
 
+  const candidates = evaluatedJobs.filter(job => job._fingerprint);
+  if (candidates.length === 0) {
+    console.log('[persist] No fingerprinted jobs to persist');
+    return 0;
+  }
+
+  // Load once up front only to decide whether a write is even needed. If every
+  // candidate already exists we skip the commit entirely (no empty no-op commit).
+  // The actual write below re-reads fresh and re-checks, so this pre-read being
+  // slightly stale is harmless.
+  //
+  // A genuine read failure (network error / GitHub 5xx) MUST propagate, not
+  // return 0: the caller treats a non-throwing return as success and marks jobs
+  // seen, so swallowing the error would lose jobs permanently. A genuinely absent
+  // file is NOT a failure: readGithubFile resolves a 404 to { exists: false }
+  // without throwing, so that path still starts from an empty job set below.
   let jobStatus;
   try {
-    ({ content: jobStatus } = await getJobStatusFile(githubToken, owner, repo));
+    const { exists, content } = await readGithubFile(githubToken, owner, repo, 'data/job-status.json');
+    jobStatus = exists ? JSON.parse(content) : { jobs: {} };
   } catch (err) {
-    console.error(`[persist] Failed to load job-status.json: ${err.message}`);
-    return;
+    throw new Error(`Failed to load job-status.json: ${err.message}`);
   }
-
   if (!jobStatus.jobs) jobStatus.jobs = {};
-
-  let added = 0;
-  for (const job of evaluatedJobs) {
-    const id = job._fingerprint;
-    if (!id) continue;
-    if (jobStatus.jobs[id]) continue; // Never overwrite — user may have actioned it
-
-    jobStatus.jobs[id] = {
-      status: 'new',
-      firstSeenAt: new Date().toISOString(),
-      company: job.company || '',
-      title: job.title || '',
-      location: job.location || '',
-      isRemote: job.isRemote || false,
-      url: job.url || '',
-      score: job.score ?? null,
-      aiExposureRisk: job.aiExposureRisk || null,
-      aiExposureRationale: job.aiExposureRationale || null,
-      jobType: job.jobType || 'operating',
-      whyFit: job.whyFit || [],
-      watchOuts: job.watchOuts || [],
-      recommendedAction: job.recommendedAction || '',
-      oneLineSummary: job.oneLineSummary || '',
-      companyDescription: job.companyDescription || '',
-      description: (job.description || '').slice(0, 3000),
-      fundingSnapshot: job.fundingSnapshot || null,
-    };
-    added++;
-  }
-
-  if (added === 0) {
+  const anyNew = candidates.some(job => !jobStatus.jobs[job._fingerprint]);
+  if (!anyNew) {
     console.log('[persist] No new jobs to persist');
-    return;
+    return 0;
   }
 
-  await putJobStatusFile(githubToken, owner, repo, jobStatus);
+  // `added` is recomputed on each builder attempt so it reflects what was actually
+  // written in the attempt that ultimately succeeded (a concurrent add of the same
+  // job by another writer means it is no longer counted as newly added here).
+  let added = 0;
+  try {
+    await writeGithubFile(
+      githubToken, owner, repo, 'data/job-status.json',
+      (current) => {
+        const jobStatus = current ? JSON.parse(current) : { jobs: {} };
+        if (!jobStatus.jobs) jobStatus.jobs = {};
+
+        added = 0;
+        for (const job of candidates) {
+          const id = job._fingerprint;
+          if (jobStatus.jobs[id]) continue; // Never overwrite — user may have actioned it
+          jobStatus.jobs[id] = buildJobRecord(job);
+          added++;
+        }
+
+        return JSON.stringify(jobStatus, null, 2);
+      },
+      'chore: persist scanned jobs [skip ci]',
+      { logTag: 'persist' },
+    );
+  } catch (err) {
+    // Re-throw so the caller (scanner/index.mjs) can gate markScored on success.
+    throw new Error(`Failed to persist job-status.json: ${err.message}`);
+  }
+
   console.log(`[persist] Persisted ${added} new jobs to job-status.json`);
+  return added;
 }

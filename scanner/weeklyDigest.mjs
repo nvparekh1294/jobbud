@@ -1,5 +1,7 @@
 // scanner/weeklyDigest.mjs
 import { sendWeeklyTelegram } from './telegram.mjs';
+import { esc, safeUrl } from './html.mjs';
+import { signActionToken, actionKeySource, actionKeyFingerprint } from '../lib/auth.mjs';
 // Runs every Monday at 9am UTC via .github/workflows/scan.yml
 // Sends a weekly pipeline summary email with funnel stats, activity trends,
 // stale-saved nudges, and at-risk applied jobs.
@@ -95,7 +97,7 @@ function appliedCard(id, job) {
   const days = daysSince(job.appliedAt || job.statusUpdatedAt);
   return `
     <div style="border:1px solid #e8e8e8;border-left:3px solid #dc2626;border-radius:8px;padding:12px 18px;margin-bottom:8px;">
-      <div style="font-size:14px;font-weight:600">${job.company} — ${job.title}</div>
+      <div style="font-size:14px;font-weight:600">${esc(job.company)} — ${esc(job.title)}</div>
       <div style="font-size:12px;color:#888;margin-top:2px">Applied ${days != null ? `${days} days ago` : 'unknown date'} · No response yet</div>
     </div>`;
 }
@@ -104,6 +106,9 @@ function appliedCard(id, job) {
 
 export async function runWeeklyDigest() {
   console.log('[weeklyDigest] Starting...');
+  // Action-token key diagnostics — logged once per run so a mint/verify key desync
+  // can be diffed against the Vercel logs.
+  console.log(`action-token key: source=${actionKeySource()} fp=${actionKeyFingerprint()}`);
 
   if (!GITHUB_TOKEN) {
     console.warn('[weeklyDigest] GH_TOKEN not set — skipping');
@@ -184,16 +189,12 @@ export async function runWeeklyDigest() {
       ).join('')}
     </table>`;
 
-  // Resolve card HTML for stale saved (async due to crypto import)
-  const crypto = await import('crypto');
+  // Resolve card HTML for stale saved. Action tokens are signed via the shared
+  // helper (ACTION_TOKEN_SECRET, widened digest) so they match the api/action verifier.
   const VERCEL_URL = process.env.VERCEL_URL || 'http://localhost:3000';
-  const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || '';
-  const tok = (id, status, ts) => crypto.default
-    .createHmac('sha256', DASHBOARD_PASSWORD)
-    .update(id + status + ts).digest('hex').slice(0, 16);
   const actionUrl = (id, status) => {
     const ts = Math.floor(Date.now() / 1000);
-    return `${VERCEL_URL}/api/action?jobId=${encodeURIComponent(id)}&status=${status}&token=${tok(id, status, ts)}&ts=${ts}`;
+    return `${VERCEL_URL}/api/action?jobId=${encodeURIComponent(id)}&status=${status}&token=${signActionToken(id, status, ts)}&ts=${ts}`;
   };
 
   const staleSavedHtml = staleSaved.map(([id, job]) => {
@@ -201,9 +202,9 @@ export async function runWeeklyDigest() {
     return `
       <div style="border:1px solid #e8e8e8;border-left:3px solid #f59e0b;border-radius:8px;padding:14px 18px;margin-bottom:10px;">
         <div style="font-size:14px;font-weight:600;margin-bottom:2px;">
-          <a href="${job.url || '#'}" style="color:#111;text-decoration:none">${job.title}</a>
+          <a href="${safeUrl(job.url)}" style="color:#111;text-decoration:none">${esc(job.title)}</a>
         </div>
-        <div style="font-size:12px;color:#888;margin-bottom:10px">${job.company}${days != null ? ` · Saved ${days} days ago` : ''}</div>
+        <div style="font-size:12px;color:#888;margin-bottom:10px">${esc(job.company)}${days != null ? ` · Saved ${days} days ago` : ''}</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <a href="${actionUrl(id, 'preparing')}" style="display:inline-block;padding:6px 14px;background:#111;color:white;border-radius:6px;text-decoration:none;font-size:12px;font-weight:600">Prepare to Apply</a>
           <a href="${actionUrl(id, 'rejected_by_me')}" style="display:inline-block;padding:6px 14px;background:#fef2f2;color:#dc2626;border-radius:6px;text-decoration:none;font-size:12px;font-weight:600">Pass</a>
@@ -215,7 +216,7 @@ export async function runWeeklyDigest() {
     const days = daysSince(job.appliedAt || job.statusUpdatedAt);
     return `
       <div style="border:1px solid #e8e8e8;border-left:3px solid #dc2626;border-radius:8px;padding:12px 18px;margin-bottom:8px;">
-        <div style="font-size:14px;font-weight:600">${job.company} — ${job.title}</div>
+        <div style="font-size:14px;font-weight:600">${esc(job.company)} — ${esc(job.title)}</div>
         <div style="font-size:12px;color:#888;margin-top:2px">Applied ${days != null ? `${days} days ago` : 'unknown date'} · Consider following up</div>
       </div>`;
   }).join('');

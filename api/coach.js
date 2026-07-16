@@ -3,16 +3,17 @@
 // Route by GET/POST + ?action query param.
 
 import { generateInterviewPrepDoc } from '../scanner/interviewPackage.mjs';
+import { readGithubText, writeGithubFile, assertRepoPrivate, RepoPublicError } from '../lib/github.js';
+import { safeEqual } from '../lib/auth.mjs';
 
 const SONNET_MODEL    = 'claude-sonnet-4-6';
-const GITHUB_API_BASE = 'https://api.github.com';
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
 function checkAuth(req) {
   const password = process.env.DASHBOARD_PASSWORD;
   const headerPw = req.headers['x-dashboard-password'];
-  return !!(password && headerPw && headerPw === password);
+  return !!(password && headerPw && safeEqual(headerPw, password));
 }
 
 // ── System prompts (verbatim from api/interview.js) ───────────────────────────
@@ -112,31 +113,10 @@ function normalizeCompanyName(name) {
     .trim();
 }
 
+// Soft read (returns '' on missing/error) — delegates to the shared helper.
+// Kept as a thin wrapper so the many call sites below read unchanged.
 async function readGithubFile(githubToken, owner, repo, path) {
-  const url = `${GITHUB_API_BASE}/repos/${owner}/${repo}/contents/${path}`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${githubToken}`, Accept: 'application/vnd.github+json' },
-  });
-  if (res.status === 404) return '';
-  if (!res.ok) {
-    console.warn(`[coach] GitHub read ${path} failed: ${res.status}`);
-    return '';
-  }
-  const data = await res.json();
-  if (data.content) {
-    return Buffer.from(data.content, 'base64').toString('utf8');
-  }
-  if (data.download_url) {
-    const rawRes = await fetch(data.download_url, {
-      headers: { Authorization: `Bearer ${githubToken}` },
-    });
-    if (!rawRes.ok) {
-      console.warn(`[coach] download_url fetch for ${path} failed: ${rawRes.status}`);
-      return '';
-    }
-    return rawRes.text();
-  }
-  return '';
+  return readGithubText(githubToken, owner, repo, path);
 }
 
 async function readRadar(githubToken, owner, repo) {
@@ -222,65 +202,10 @@ async function getOAuthAccessToken() {
   }
 }
 
-// ── Write job-status.json via Git Data API ─────────────────────────────────────
-
-async function writeJobStatus(githubToken, owner, repo, content) {
-  const GITHUB_API  = `${GITHUB_API_BASE}/repos/${owner}/${repo}`;
-  const GITHUB_GIT  = `${GITHUB_API}/git`;
-  const authHeaders = {
-    Authorization: `Bearer ${githubToken}`,
-    Accept: 'application/vnd.github+json',
-    'Content-Type': 'application/json',
-  };
-
-  const contentBase64 = Buffer.from(JSON.stringify(content, null, 2)).toString('base64');
-
-  const blobRes = await fetch(`${GITHUB_GIT}/blobs`, {
-    method: 'POST',
-    headers: authHeaders,
-    body: JSON.stringify({ content: contentBase64, encoding: 'base64' }),
-  });
-  if (!blobRes.ok) throw new Error(`Blob create failed: ${blobRes.status}`);
-  const { sha: blobSha } = await blobRes.json();
-
-  const refRes = await fetch(`${GITHUB_GIT}/refs/heads/main`, { headers: authHeaders });
-  if (!refRes.ok) throw new Error(`Get ref failed: ${refRes.status}`);
-  const { object: { sha: commitSha } } = await refRes.json();
-
-  const commitRes = await fetch(`${GITHUB_GIT}/commits/${commitSha}`, { headers: authHeaders });
-  if (!commitRes.ok) throw new Error(`Get commit failed: ${commitRes.status}`);
-  const { tree: { sha: treeSha } } = await commitRes.json();
-
-  const newTreeRes = await fetch(`${GITHUB_GIT}/trees`, {
-    method: 'POST',
-    headers: authHeaders,
-    body: JSON.stringify({
-      base_tree: treeSha,
-      tree: [{ path: 'data/job-status.json', mode: '100644', type: 'blob', sha: blobSha }],
-    }),
-  });
-  if (!newTreeRes.ok) throw new Error(`Create tree failed: ${newTreeRes.status}`);
-  const { sha: newTreeSha } = await newTreeRes.json();
-
-  const newCommitRes = await fetch(`${GITHUB_GIT}/commits`, {
-    method: 'POST',
-    headers: authHeaders,
-    body: JSON.stringify({
-      message: 'chore: update job status [skip ci]',
-      tree: newTreeSha,
-      parents: [commitSha],
-    }),
-  });
-  if (!newCommitRes.ok) throw new Error(`Create commit failed: ${newCommitRes.status}`);
-  const { sha: newCommitSha } = await newCommitRes.json();
-
-  const updateRefRes = await fetch(`${GITHUB_GIT}/refs/heads/main`, {
-    method: 'PATCH',
-    headers: authHeaders,
-    body: JSON.stringify({ sha: newCommitSha }),
-  });
-  if (!updateRefRes.ok) throw new Error(`Advance ref failed: ${updateRefRes.status}`);
-}
+// NOTE: no whole-file writer for data/job-status.json belongs here. That string-form
+// pattern (serialize a snapshot, write it all back) silently reverts concurrent
+// changes — use writeGithubFile's builder form with a per-job mutation, like
+// api/action.js updateJobStatus.
 
 // ── Route: GET ?action=get-assets ─────────────────────────────────────────────
 // Replaces api/claude-md.js + api/story-bank.js in a single round trip.
@@ -346,7 +271,13 @@ async function handleChat(req, res) {
       body: JSON.stringify({
         model: SONNET_MODEL,
         max_tokens: 2048,
-        system: systemPrompt,
+        // Cache the static system prefix (profile/instructions) so it isn't
+        // re-billed as fresh input on every turn of the conversation. Within a
+        // conversation systemPrompt is identical each turn, so the first turn
+        // writes the cache and later turns read it. Mirrors the scoring pipeline
+        // (scanner/evaluate.mjs). Prompt caching is GA — no anthropic-beta header
+        // needed (and none is set here).
+        system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
         messages: messagesForApi,
       }),
     });
@@ -360,10 +291,15 @@ async function handleChat(req, res) {
     const data = await response.json();
     const reply = data.content?.[0]?.text ?? '';
 
+    // Observability for the cache breakpoint: first turn shows a cache write, later
+    // turns show cache reads (cache_read_input_tokens > 0).
+    const usage = data.usage || {};
+    console.log(`[coach] chat cache — write:${usage.cache_creation_input_tokens || 0} read:${usage.cache_read_input_tokens || 0} input:${usage.input_tokens || 0}`);
+
     return res.status(200).json({ reply });
   } catch (err) {
     console.error('[coach] chat error:', err);
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }
 
@@ -376,170 +312,40 @@ async function handleSaveStory(req, res, githubToken, owner, repo) {
     return res.status(400).json({ error: 'storyMarkdown is required' });
   }
 
-  const GITHUB_API  = `${GITHUB_API_BASE}/repos/${owner}/${repo}`;
-  const GITHUB_GIT  = `${GITHUB_API}/git`;
-  const authHeaders = {
-    Authorization: `Bearer ${githubToken}`,
-    Accept: 'application/vnd.github+json',
-    'Content-Type': 'application/json',
-  };
-
   try {
-    // ── Read current story-bank.md ────────────────────────────────────────
-    const contentsRes = await fetch(`${GITHUB_API}/contents/story-bank.md`, {
-      headers: authHeaders,
-    });
-
-    let existingContent = '';
-
-    if (contentsRes.ok) {
-      const data = await contentsRes.json();
-      if (data.content) {
-        existingContent = Buffer.from(data.content, 'base64').toString('utf8');
-      } else if (data.download_url) {
-        const rawRes = await fetch(data.download_url, {
-          headers: { Authorization: `Bearer ${githubToken}` },
-        });
-        if (rawRes.ok) {
-          existingContent = await rawRes.text();
-        }
-      }
-    } else if (contentsRes.status !== 404) {
-      const text = await contentsRes.text();
-      return res.status(contentsRes.status).json({
-        status: contentsRes.status,
-        message: `Failed to read story-bank.md: ${text}`,
-      });
-    }
+    const existingContent = await readGithubText(githubToken, owner, repo, 'story-bank.md');
 
     const separator = existingContent && !existingContent.endsWith('\n\n') ? '\n\n' : '';
     const updatedContent = existingContent + separator + storyMarkdown.trim() + '\n';
 
-    // ── Step 1: Create blob ───────────────────────────────────────────────
-    const blobRes = await fetch(`${GITHUB_GIT}/blobs`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({ content: updatedContent, encoding: 'utf-8' }),
-    });
-    if (!blobRes.ok) {
-      const msg = await blobRes.text();
-      return res.status(blobRes.status).json({ status: blobRes.status, message: `Blob creation failed: ${msg}` });
-    }
-    const { sha: blobSha } = await blobRes.json();
-
-    // ── Step 2: Get HEAD commit SHA ───────────────────────────────────────
-    const refRes = await fetch(`${GITHUB_GIT}/refs/heads/main`, { headers: authHeaders });
-    if (!refRes.ok) {
-      const msg = await refRes.text();
-      return res.status(refRes.status).json({ status: refRes.status, message: `Failed to get branch ref: ${msg}` });
-    }
-    const { object: { sha: commitSha } } = await refRes.json();
-
-    // ── Step 3: Get tree SHA from commit ──────────────────────────────────
-    const commitRes = await fetch(`${GITHUB_GIT}/commits/${commitSha}`, { headers: authHeaders });
-    if (!commitRes.ok) {
-      const msg = await commitRes.text();
-      return res.status(commitRes.status).json({ status: commitRes.status, message: `Failed to get commit: ${msg}` });
-    }
-    const { tree: { sha: treeSha } } = await commitRes.json();
-
-    // ── Step 4: Create new tree ───────────────────────────────────────────
-    const newTreeRes = await fetch(`${GITHUB_GIT}/trees`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({
-        base_tree: treeSha,
-        tree: [{ path: 'story-bank.md', mode: '100644', type: 'blob', sha: blobSha }],
-      }),
-    });
-    if (!newTreeRes.ok) {
-      const msg = await newTreeRes.text();
-      return res.status(newTreeRes.status).json({ status: newTreeRes.status, message: `Tree creation failed: ${msg}` });
-    }
-    const { sha: newTreeSha } = await newTreeRes.json();
-
-    // ── Step 5: Create commit ─────────────────────────────────────────────
-    const newCommitRes = await fetch(`${GITHUB_GIT}/commits`, {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({
-        message: 'feat: add interview story [skip ci]',
-        tree: newTreeSha,
-        parents: [commitSha],
-      }),
-    });
-    if (!newCommitRes.ok) {
-      const msg = await newCommitRes.text();
-      return res.status(newCommitRes.status).json({ status: newCommitRes.status, message: `Commit creation failed: ${msg}` });
-    }
-    const { sha: newCommitSha } = await newCommitRes.json();
-
-    // ── Step 6: Advance branch ref ────────────────────────────────────────
-    const updateRefRes = await fetch(`${GITHUB_GIT}/refs/heads/main`, {
-      method: 'PATCH',
-      headers: authHeaders,
-      body: JSON.stringify({ sha: newCommitSha }),
-    });
-    if (!updateRefRes.ok) {
-      const msg = await updateRefRes.text();
-      return res.status(updateRefRes.status).json({ status: updateRefRes.status, message: `Failed to advance ref: ${msg}` });
-    }
+    // Guarded write: writeStoryBankContent refuses public repos (fails closed).
+    await writeStoryBankContent(
+      githubToken, owner, repo, updatedContent, 'feat: add interview story [skip ci]',
+    );
 
     return res.status(200).json({ success: true });
   } catch (err) {
+    if (err instanceof RepoPublicError) {
+      console.warn(`[coach] save-story refused: ${err.message}`);
+      return res.status(403).json({ error: err.message, code: 'REPO_PUBLIC' });
+    }
     console.error('[coach] save-story error:', err);
-    return res.status(500).json({ status: 500, message: err.message });
+    return res.status(500).json({ status: 500, message: 'Something went wrong. Please try again.' });
   }
 }
 
 // ── Shared: write updated story-bank.md via Git Data API ─────────────────────
 
 async function writeStoryBankContent(githubToken, owner, repo, updatedContent, commitMessage) {
-  const GITHUB_API  = `${GITHUB_API_BASE}/repos/${owner}/${repo}`;
-  const GITHUB_GIT  = `${GITHUB_API}/git`;
-  const authHeaders = {
-    Authorization: `Bearer ${githubToken}`,
-    Accept: 'application/vnd.github+json',
-    'Content-Type': 'application/json',
-  };
-
-  const blobRes = await fetch(`${GITHUB_GIT}/blobs`, {
-    method: 'POST', headers: authHeaders,
-    body: JSON.stringify({ content: updatedContent, encoding: 'utf-8' }),
-  });
-  if (!blobRes.ok) throw new Error(`Blob create failed: ${blobRes.status}`);
-  const { sha: blobSha } = await blobRes.json();
-
-  const refRes = await fetch(`${GITHUB_GIT}/refs/heads/main`, { headers: authHeaders });
-  if (!refRes.ok) throw new Error(`Get ref failed: ${refRes.status}`);
-  const { object: { sha: commitSha } } = await refRes.json();
-
-  const commitRes = await fetch(`${GITHUB_GIT}/commits/${commitSha}`, { headers: authHeaders });
-  if (!commitRes.ok) throw new Error(`Get commit failed: ${commitRes.status}`);
-  const { tree: { sha: treeSha } } = await commitRes.json();
-
-  const newTreeRes = await fetch(`${GITHUB_GIT}/trees`, {
-    method: 'POST', headers: authHeaders,
-    body: JSON.stringify({
-      base_tree: treeSha,
-      tree: [{ path: 'story-bank.md', mode: '100644', type: 'blob', sha: blobSha }],
-    }),
-  });
-  if (!newTreeRes.ok) throw new Error(`Create tree failed: ${newTreeRes.status}`);
-  const { sha: newTreeSha } = await newTreeRes.json();
-
-  const newCommitRes = await fetch(`${GITHUB_GIT}/commits`, {
-    method: 'POST', headers: authHeaders,
-    body: JSON.stringify({ message: commitMessage, tree: newTreeSha, parents: [commitSha] }),
-  });
-  if (!newCommitRes.ok) throw new Error(`Create commit failed: ${newCommitRes.status}`);
-  const { sha: newCommitSha } = await newCommitRes.json();
-
-  const updateRefRes = await fetch(`${GITHUB_GIT}/refs/heads/main`, {
-    method: 'PATCH', headers: authHeaders,
-    body: JSON.stringify({ sha: newCommitSha }),
-  });
-  if (!updateRefRes.ok) throw new Error(`Advance ref failed: ${updateRefRes.status}`);
+  // story-bank.md holds the user's personal interview stories — never publish it
+  // to a public repo. This is the single choke point EVERY story-bank write passes
+  // through (save/update/delete), so the visibility guard lives here and cannot be
+  // bypassed. Fails closed (refuses) if visibility can't be determined.
+  await assertRepoPrivate(githubToken, owner, repo);
+  await writeGithubFile(
+    githubToken, owner, repo, 'story-bank.md', updatedContent, commitMessage,
+    { logTag: 'coach' },
+  );
 }
 
 // ── Shared: parse story blocks from story-bank.md content ────────────────────
@@ -585,8 +391,12 @@ async function handleDeleteStory(req, res, githubToken, owner, repo) {
     console.log(`[coach] action=delete-story storyId=${storyId}`);
     return res.status(200).json({ success: true });
   } catch (err) {
+    if (err instanceof RepoPublicError) {
+      console.warn(`[coach] delete-story refused: ${err.message}`);
+      return res.status(403).json({ error: err.message, code: 'REPO_PUBLIC' });
+    }
     console.error('[coach] delete-story error:', err);
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }
 
@@ -616,8 +426,12 @@ async function handleUpdateStory(req, res, githubToken, owner, repo) {
     console.log(`[coach] action=update-story storyId=${storyId}`);
     return res.status(200).json({ success: true });
   } catch (err) {
+    if (err instanceof RepoPublicError) {
+      console.warn(`[coach] update-story refused: ${err.message}`);
+      return res.status(403).json({ error: err.message, code: 'REPO_PUBLIC' });
+    }
     console.error('[coach] update-story error:', err);
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }
 
@@ -649,21 +463,26 @@ async function handleGeneratePrep(req, res, githubToken, owner, repo) {
 
     const context = { claudeMd, storyBank, bulletBank, radarContext };
 
-    const { docUrl, docId } = await generateInterviewPrepDoc(jobData, context, conversationHistory);
+    const { docUrl, docId, markdown } = await generateInterviewPrepDoc(jobData, context, conversationHistory);
 
     console.log(`[coach] generate-prep doc created: ${docId}`);
 
     if (jobId && docUrl) {
       try {
-        const statusRaw = await readGithubFile(githubToken, owner, repo, 'data/job-status.json');
-        if (statusRaw) {
-          const status = JSON.parse(statusRaw);
-          if (status.jobs?.[jobId]) {
-            status.jobs[jobId].prepDocUrl = docUrl;
-            await writeJobStatus(githubToken, owner, repo, status);
-            console.log(`[coach] generate-prep persisted prepDocUrl for jobId=${jobId}`);
-          }
-        }
+        // Field-safe write: the builder re-reads job-status.json on every attempt
+        // and sets only this job's prepDocUrl, so a concurrent change to a different
+        // job (scanner or dashboard action) is preserved rather than overwritten.
+        await writeGithubFile(
+          githubToken, owner, repo, 'data/job-status.json',
+          (current) => {
+            const status = current ? JSON.parse(current) : { jobs: {} };
+            if (status.jobs?.[jobId]) status.jobs[jobId].prepDocUrl = docUrl;
+            return JSON.stringify(status, null, 2);
+          },
+          'chore: update job status [skip ci]',
+          { logTag: 'coach' },
+        );
+        console.log(`[coach] generate-prep persisted prepDocUrl for jobId=${jobId}`);
       } catch (persistErr) {
         console.warn(`[coach] generate-prep failed to persist prepDocUrl: ${persistErr.message}`);
       }
@@ -672,7 +491,7 @@ async function handleGeneratePrep(req, res, githubToken, owner, repo) {
     return res.status(200).json({ docUrl, markdown, driveConfigured: !!docUrl });
   } catch (err) {
     console.error('[coach] generate-prep error:', err);
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }
 
@@ -692,7 +511,7 @@ async function handleMockStart(req, res, githubToken, owner, repo) {
 
     const roleDesc = jobContext
       ? `${jobContext.role || 'the role'}${jobContext.level ? ` (${jobContext.level})` : ''} at ${jobContext.company || 'the company'}`
-      : 'a senior Director/VP-level strategy and operations role';
+      : "the user's target role";
 
     const jdBlock = jobContext?.jobDescription
       ? `\n\nJOB DESCRIPTION (for question calibration):\n${jobContext.jobDescription.slice(0, 2000)}`
@@ -828,7 +647,7 @@ ${claudeMd || 'No profile provided.'}
 STORY BANK (candidate's prepared stories):
 ${storyBank || 'No stories yet.'}${jdBlock}
 
-Generate exactly 6 interview questions: ${jobContext ? '5 behavioral/competency questions tailored to this role and company' : '5 Director/VP-level behavioral questions for strategy and operations roles'}, plus 1 curveball question.
+Generate exactly 6 interview questions: ${jobContext ? '5 behavioral/competency questions tailored to this role and company' : "5 behavioral questions appropriate to the user's target seniority and function"}, plus 1 curveball question.
 
 Curveball rules:
 - NOT a standard behavioral question
@@ -882,7 +701,7 @@ Use "source": "fresh" for behavioral/competency questions and "source": "curveba
     return res.status(200).json({ questions });
   } catch (err) {
     console.error('[coach] mock-start error:', err);
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }
 
@@ -979,7 +798,7 @@ Output JSON only — no preamble, no code fences:
     return res.status(200).json(feedback);
   } catch (err) {
     console.error('[coach] mock-feedback error:', err);
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }
 
@@ -1117,26 +936,7 @@ Generate a CLAUDE.md with these sections:
         body: JSON.stringify({
           model: SONNET_MODEL,
           max_tokens: 4000,
-          system: `${updatePrefix}You are generating a bullet-bank.md file for a job search automation system. This file is a curated library of strong, metric-backed achievement bullets the AI selects from verbatim when generating tailored resumes and outreach messages.
-
-FORMAT — organize by company, then by theme within each company:
-
-1. Define role-type tags based on the user's stated target roles (e.g. [ops], [strategy], [finance], [product], [sales] — choose tags that match what THIS user is targeting, not a fixed list)
-2. Group bullets under each company by theme (e.g. 'Theme: Cross-Functional Leadership', 'Theme: Financial Planning')
-3. Tag each bullet with the role types it applies to, plus a priority: [primary] (strongest, most broadly applicable phrasing for this theme), [alt] (use if primary doesn't fit the JD), [optional] (only if the JD specifically calls for it)
-4. Where the same achievement could be framed multiple ways for different role types, write 2-3 variant bullets for that theme rather than one generic version
-5. At the top of the file, include a short 'How to Use This File' section defining the role-type tags you chose and explaining the priority system, so the user understands the format
-
-REQUIREMENTS for each bullet:
-- Start with a strong action verb
-- Include a specific metric or outcome where possible
-- Written in past tense
-- 1-2 lines maximum
-- Never fabricate metrics — use a placeholder like [ADD: specific number] if the user mentioned an achievement but not the number
-
-If the input is thin (short resume, brief conversation), still use this format, but produce fewer bullets and fewer variants per theme rather than padding with weak or repetitive content. A sparse file in the correct format is better than a rich file with fabricated content.
-
-Output clean markdown starting with # Bullet Bank. No preamble.`,
+          system: BULLET_BANK_SYSTEM(updatePrefix),
           messages: [{ role: 'user', content: existingBulletBankBlock ? `EXISTING FILE FOR REFERENCE:\n${existingBulletBankBlock}\n\n${baseContent}` : baseContent }],
         }),
       }).then(async r => { if (!r.ok) throw new Error(`Anthropic error ${r.status}: ${await r.text()}`); return r.json(); }),
@@ -1194,6 +994,35 @@ Be specific and grounded only in what the user told you. Use placeholders for mi
 
 // ── Shared onboarding helpers ────────────────────────────────────────────────
 
+// Single source of truth for the bullet-bank.md generation prompt. Both onboarding
+// paths use it so they produce ONE consistent format: the first-time flow
+// (handleGenerateOnboarding) and the per-file refresh flow (handleGenerateBulletBank).
+// Previously the two prompts had diverged into different output formats (company/theme
+// + role-type tags vs. flat competency sections), so the file's shape depended on which
+// path the frontend happened to call. This company→theme, role-type-tagged,
+// priority-ranked format is the one the downstream application-package bullet selection
+// expects.
+const BULLET_BANK_SYSTEM = (updatePrefix = '') => `${updatePrefix}You are generating a bullet-bank.md file for a job search automation system. This file is a curated library of strong, metric-backed achievement bullets the AI selects from verbatim when generating tailored resumes and outreach messages.
+
+FORMAT — organize by company, then by theme within each company:
+
+1. Define role-type tags based on the user's stated target roles (e.g. [ops], [strategy], [finance], [product], [sales] — choose tags that match what THIS user is targeting, not a fixed list)
+2. Group bullets under each company by theme (e.g. 'Theme: Cross-Functional Leadership', 'Theme: Financial Planning')
+3. Tag each bullet with the role types it applies to, plus a priority: [primary] (strongest, most broadly applicable phrasing for this theme), [alt] (use if primary doesn't fit the JD), [optional] (only if the JD specifically calls for it)
+4. Where the same achievement could be framed multiple ways for different role types, write 2-3 variant bullets for that theme rather than one generic version
+5. At the top of the file, include a short 'How to Use This File' section defining the role-type tags you chose and explaining the priority system, so the user understands the format
+
+REQUIREMENTS for each bullet:
+- Start with a strong action verb
+- Include a specific metric or outcome where possible
+- Written in past tense
+- 1-2 lines maximum
+- Never fabricate metrics — use a placeholder like [ADD: specific number] if the user mentioned an achievement but not the number
+
+If the input is thin (short resume, brief conversation), still use this format, but produce fewer bullets and fewer variants per theme rather than padding with weak or repetitive content. A sparse file in the correct format is better than a rich file with fabricated content.
+
+Output clean markdown starting with # Bullet Bank. No preamble.`;
+
 function buildOnboardingShared(req) {
   const anthropicKey = process.env.ANTHROPIC_API_KEY;
   const { resumeText = '', transcriptText = '', existingFiles = null } = req.body || {};
@@ -1249,7 +1078,7 @@ Generate a CLAUDE.md with these sections:
     return res.status(200).json({ claudeMd: data.content?.[0]?.text ?? '' });
   } catch (err) {
     console.error('[coach] generate-claude error:', err);
-    return res.status(200).json({ error: err.message });
+    return res.status(200).json({ error: 'Something went wrong. Please try again.' });
   }
 }
 
@@ -1277,7 +1106,7 @@ async function handleGenerateCv(req, res) {
     return res.status(200).json({ cvMd: data.content?.[0]?.text ?? '' });
   } catch (err) {
     console.error('[coach] generate-cv error:', err);
-    return res.status(200).json({ error: err.message });
+    return res.status(200).json({ error: 'Something went wrong. Please try again.' });
   }
 }
 
@@ -1295,27 +1124,14 @@ async function handleGenerateBulletBank(req, res) {
     const data = await anthropicFetch(anthropicKey, {
       model: SONNET_MODEL,
       max_tokens: 4000,
-      system: `${updatePrefix}You are generating a bullet-bank.md file for a job search automation system. This file is a curated library of strong, metric-backed achievement bullets drawn from the user's career. The AI uses these bullets when generating tailored resumes and outreach messages.
-
-Extract and rewrite the strongest achievement bullets from the resume and conversation. Requirements for each bullet:
-- Start with a strong action verb
-- Include a specific metric or outcome where possible
-- Written in past tense
-- 1-2 lines maximum
-- Never fabricate metrics — use placeholders like [X%] if the user mentioned an achievement but not the specific number
-
-Organize bullets into sections by competency area. Aim for 15-25 bullets total across 3-5 sections. Common section names: Strategy & Operations, Leadership & Team Building, Analysis & Insight, Financial Impact, Product & Growth. Use whatever section names best fit this user's background.
-
-If the resume is thin or the conversation short, produce fewer bullets rather than padding with weak ones. Quality over quantity.
-
-Output the file in clean markdown. No preamble, no explanation — just the bullet bank content starting with # Bullet Bank.`,
+      system: BULLET_BANK_SYSTEM(updatePrefix),
       messages: [{ role: 'user', content: userContent }],
     });
     return res.status(200).json({ bulletBankMd: data.content?.[0]?.text ?? '' });
   } catch (err) {
     console.error('[coach] generate-bulletbank error:', err.message);
     console.error('[coach] generate-bulletbank error stack:', err.stack);
-    return res.status(200).json({ error: err.message });
+    return res.status(200).json({ error: 'Something went wrong. Please try again.' });
   }
 }
 
@@ -1358,68 +1174,160 @@ Be specific and grounded only in what the user told you. Use placeholders for mi
     return res.status(200).json({ articleDigestMd: data.content?.[0]?.text ?? '' });
   } catch (err) {
     console.error('[coach] generate-articledigest error:', err);
-    return res.status(200).json({ error: err.message });
+    return res.status(200).json({ error: 'Something went wrong. Please try again.' });
+  }
+}
+
+// ── Route: POST ?action=generate-profile ─────────────────────────────────────
+// Generates config/profile.yml — the structured file scanner/config.mjs reads at
+// runtime to drive search keywords, locations, salary floor, and deal-breakers,
+// plus narrative sections the AI scoring/coaching read. Populated only from what
+// the user provided; anything missing is a [placeholder], never fabricated.
+
+async function handleGenerateProfile(req, res) {
+  const { anthropicKey, resumeText, transcriptText, existingFiles, updatePrefix } = buildOnboardingShared(req);
+  if (!anthropicKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  console.log('[coach] action=generate-profile');
+  try {
+    const existingBlock = existingFiles?.profileYml
+      ? `EXISTING config/profile.yml:\n${existingFiles.profileYml}\n\n`
+      : null;
+    const baseContent = resumeText
+      ? `RESUME:\n${resumeText}\n\nCONVERSATION:\n${transcriptText || '(No conversation yet.)'}`
+      : `CONVERSATION:\n${transcriptText || '(No conversation yet.)'}`;
+    const userContent = existingBlock ? `${existingBlock}${baseContent}` : baseContent;
+    const data = await anthropicFetch(anthropicKey, {
+      model: SONNET_MODEL,
+      max_tokens: 3000,
+      system: `${updatePrefix}You are generating a structured config/profile.yml file for a job search automation system. This file is read by the scanner at runtime to configure search keywords, locations, salary filters, and deal-breakers. It must be valid YAML.
+
+Generate the file with exactly this structure — populate each field from the resume and conversation. Use placeholders like [ADD: value] for anything not provided. Never fabricate values.
+
+# JobBud Profile
+name: [full name]
+location: [current city, state]
+email: [email if provided, otherwise leave blank]
+
+# Scanner configuration — parsed at runtime by scanner/config.mjs
+target_roles:
+  - [role title 1 — exact phrase, lowercase]
+  - [role title 2]
+  - [add more as needed]
+
+exclude_titles:
+  - coordinator
+  - analyst
+  - intern
+  - assistant
+  - specialist
+  - [add any the user mentioned]
+
+target_locations:
+  - city: [city name]
+    region: [state/region code or null]
+    country: [2-letter country code]
+    radius_miles: [30 for US cities, 15 for international]
+  - [add more locations as needed]
+
+include_remote: [true or false based on stated preference]
+
+min_salary: [annual base salary floor as integer, e.g. 150000. Use 0 if not specified.]
+
+deal_breaker_industries:
+  - [industry 1 — only if explicitly stated]
+  - [add more as needed]
+
+deal_breaker_keywords:
+  - [keyword 1 — only if explicitly stated]
+
+# Narrative sections — read by AI scoring and coaching
+target_role_description: |
+  [2-3 sentences describing target roles, seniority, and scope]
+
+industries_of_interest: |
+  [industries and company types the user is targeting]
+
+company_types: |
+  [preferred company stage, size, backing, culture]
+
+career_history_summary: |
+  [3-4 sentences summarizing career arc and background]
+
+current_situation: [one line — e.g. 'Actively searching, available immediately' or 'Currently employed, selectively exploring']
+
+deal_breakers: |
+  [explicit deal-breakers stated by the user, or 'None stated']
+
+nice_to_haves: |
+  [nice-to-haves stated by the user, or 'None stated']
+
+Output valid YAML only. No preamble, no explanation, no markdown code fences. Start directly with # JobBud Profile.`,
+      messages: [{ role: 'user', content: userContent }],
+    });
+    return res.status(200).json({ profileYml: data.content?.[0]?.text ?? '' });
+  } catch (err) {
+    console.error('[coach] generate-profile error:', err);
+    return res.status(200).json({ error: 'Something went wrong. Please try again.' });
+  }
+}
+
+// ── Route: POST ?action=save-onboarding ──────────────────────────────────────
+// Commits the onboarding-generated files to the user's repo — the "Save to my
+// repo" alternative to downloading each file by hand. These files carry the
+// user's real name, background, and history, so the save is GATED on a
+// repo-visibility check: if the target repo is PUBLIC, it is refused outright (no
+// override). The download buttons remain the review-first path.
+
+// filename → the field the dashboard sends it under.
+const ONBOARDING_FILE_MAP = [
+  { path: 'CLAUDE.md',           key: 'claudeMd' },
+  { path: 'cv.md',               key: 'cvMd' },
+  { path: 'bullet-bank.md',      key: 'bulletBankMd' },
+  { path: 'article-digest.md',   key: 'articleDigestMd' },
+  { path: 'config/profile.yml',  key: 'profileYml' },
+];
+
+async function handleSaveOnboarding(req, res, githubToken, owner, repo) {
+  const files = req.body || {};
+  const toWrite = ONBOARDING_FILE_MAP.filter(
+    f => typeof files[f.key] === 'string' && files[f.key].trim(),
+  );
+  if (!toWrite.length) {
+    return res.status(400).json({ error: 'No generated files to save. Generate your profile first.' });
+  }
+  console.log(`[coach] action=save-onboarding files=${toWrite.map(f => f.path).join(', ')}`);
+  try {
+    // CRITICAL: refuse to publish personal files to a public repo. Fails closed.
+    await assertRepoPrivate(githubToken, owner, repo);
+
+    const saved = [];
+    for (const f of toWrite) {
+      await writeGithubFile(
+        githubToken, owner, repo, f.path, files[f.key],
+        `chore: save ${f.path} from onboarding [skip ci]`, { logTag: 'coach' },
+      );
+      saved.push(f.path);
+    }
+    return res.status(200).json({ success: true, saved });
+  } catch (err) {
+    if (err instanceof RepoPublicError) {
+      console.warn(`[coach] save-onboarding refused: ${err.message}`);
+      return res.status(403).json({ error: err.message, code: 'REPO_PUBLIC' });
+    }
+    console.error('[coach] save-onboarding error:', err);
+    return res.status(500).json({ error: 'Could not save your files. Please try again, or use the download buttons.' });
   }
 }
 
 // ── Mock session persistence ─────────────────────────────────────────────────
 
 async function writeMockSessions(githubToken, owner, repo, content) {
-  const GITHUB_API  = `${GITHUB_API_BASE}/repos/${owner}/${repo}`;
-  const GITHUB_GIT  = `${GITHUB_API}/git`;
-  const authHeaders = {
-    Authorization: `Bearer ${githubToken}`,
-    Accept: 'application/vnd.github+json',
-    'Content-Type': 'application/json',
-  };
-
-  const contentBase64 = Buffer.from(JSON.stringify(content, null, 2)).toString('base64');
-
-  const blobRes = await fetch(`${GITHUB_GIT}/blobs`, {
-    method: 'POST',
-    headers: authHeaders,
-    body: JSON.stringify({ content: contentBase64, encoding: 'base64' }),
-  });
-  if (!blobRes.ok) throw new Error(`Blob create failed: ${blobRes.status}`);
-  const { sha: blobSha } = await blobRes.json();
-
-  const refRes = await fetch(`${GITHUB_GIT}/refs/heads/main`, { headers: authHeaders });
-  if (!refRes.ok) throw new Error(`Get ref failed: ${refRes.status}`);
-  const { object: { sha: commitSha } } = await refRes.json();
-
-  const commitRes = await fetch(`${GITHUB_GIT}/commits/${commitSha}`, { headers: authHeaders });
-  if (!commitRes.ok) throw new Error(`Get commit failed: ${commitRes.status}`);
-  const { tree: { sha: treeSha } } = await commitRes.json();
-
-  const newTreeRes = await fetch(`${GITHUB_GIT}/trees`, {
-    method: 'POST',
-    headers: authHeaders,
-    body: JSON.stringify({
-      base_tree: treeSha,
-      tree: [{ path: 'data/mock-sessions.json', mode: '100644', type: 'blob', sha: blobSha }],
-    }),
-  });
-  if (!newTreeRes.ok) throw new Error(`Create tree failed: ${newTreeRes.status}`);
-  const { sha: newTreeSha } = await newTreeRes.json();
-
-  const newCommitRes = await fetch(`${GITHUB_GIT}/commits`, {
-    method: 'POST',
-    headers: authHeaders,
-    body: JSON.stringify({
-      message: 'chore: save mock interview session [skip ci]',
-      tree: newTreeSha,
-      parents: [commitSha],
-    }),
-  });
-  if (!newCommitRes.ok) throw new Error(`Create commit failed: ${newCommitRes.status}`);
-  const { sha: newCommitSha } = await newCommitRes.json();
-
-  const updateRefRes = await fetch(`${GITHUB_GIT}/refs/heads/main`, {
-    method: 'PATCH',
-    headers: authHeaders,
-    body: JSON.stringify({ sha: newCommitSha }),
-  });
-  if (!updateRefRes.ok) throw new Error(`Advance ref failed: ${updateRefRes.status}`);
+  await writeGithubFile(
+    githubToken, owner, repo, 'data/mock-sessions.json',
+    JSON.stringify(content, null, 2),
+    'chore: save mock interview session [skip ci]',
+    { logTag: 'coach' },
+  );
 }
 
 async function handleGetMockSessions(req, res, githubToken, owner, repo) {
@@ -1429,7 +1337,8 @@ async function handleGetMockSessions(req, res, githubToken, owner, repo) {
     console.log(`[coach] action=get-mock-sessions count=${(data.sessions || []).length}`);
     return res.status(200).json(data);
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    console.error('[coach] get-mock-sessions error:', err);
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }
 
@@ -1446,7 +1355,8 @@ async function handleSaveMockSession(req, res, githubToken, owner, repo) {
     console.log(`[coach] action=save-mock-session sessionId=${session.id}`);
     return res.status(200).json({ success: true });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    console.error('[coach] save-mock-session error:', err);
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }
 
@@ -1487,11 +1397,13 @@ export default async function handler(req, res) {
     if (req.method === 'POST' && action === 'generate-cv')             return handleGenerateCv(req, res);
     if (req.method === 'POST' && action === 'generate-bulletbank')     return handleGenerateBulletBank(req, res);
     if (req.method === 'POST' && action === 'generate-articledigest')  return handleGenerateArticleDigest(req, res);
+    if (req.method === 'POST' && action === 'generate-profile')         return handleGenerateProfile(req, res);
+    if (req.method === 'POST' && action === 'save-onboarding')          return handleSaveOnboarding(req, res, githubToken, owner, repo);
     if (req.method === 'GET'  && action === 'get-mock-sessions')       return handleGetMockSessions(req, res, githubToken, owner, repo);
     if (req.method === 'POST' && action === 'save-mock-session')   return handleSaveMockSession(req, res, githubToken, owner, repo);
     return res.status(400).json({ error: `Unknown action: ${action}` });
   } catch (err) {
     console.error(`[coach] uncaught error for action=${action}:`, err);
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }

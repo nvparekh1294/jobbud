@@ -180,7 +180,7 @@
     .all-actions { position: relative; display: flex; justify-content: flex-end; }
     .all-menu-btn { width: 34px; height: 34px; background: #F0EADF; color: #7c8378; border: 1px solid #E1DACB; border-radius: 9px; font-size: 17px; cursor: pointer; line-height: 1; display: flex; align-items: center; justify-content: center; letter-spacing: 2px; padding-bottom: 3px; }
     .all-menu-btn:hover, .all-menu-btn.open { background: #E6E1D6; }
-    .all-row-menu { display: none; position: fixed; z-index: 30; background: #FFFFFF; border: 1px solid #E7E0D2; border-radius: 11px; box-shadow: 0 10px 30px rgba(40,44,38,0.16); padding: 6px; min-width: 160px; }
+    .all-row-menu { display: none; position: fixed; z-index: 9999; background: #FFFFFF; border: 1px solid #E7E0D2; border-radius: 11px; box-shadow: 0 10px 30px rgba(40,44,38,0.16); padding: 6px; min-width: 160px; }
     .all-row-menu.open { display: block; }
     .all-menu-item { display: block; width: 100%; text-align: left; background: transparent; border: none; border-radius: 7px; padding: 9px 11px; font-family: 'Hanken Grotesk', sans-serif; font-size: 13.5px; font-weight: 500; color: #3a4036; cursor: pointer; text-decoration: none; white-space: nowrap; }
     .all-menu-item:hover { background: #F4F1E8; }
@@ -256,6 +256,9 @@
     /* Worth a Look rows */
     .action-rows-wrap { background: #FBF9F3; border: 1px solid #E7E0D2; border-radius: 16px; overflow: hidden; }
     .action-row { display: flex; align-items: center; gap: 20px; padding: 21px 24px; border-bottom: 1px solid #E9E2D4; position: relative; }
+    .action-row-check { flex-shrink: 0; width: 16px; height: 16px; margin: 0; cursor: pointer; }
+    .action-select-all { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text); cursor: pointer; user-select: none; }
+    .action-select-all input { width: 15px; height: 15px; margin: 0; cursor: pointer; }
     .action-row:last-child { border-bottom: none; }
     .action-row-score { font-family: 'Newsreader', serif; font-size: 22px; font-weight: 600; width: 46px; text-align: center; flex-shrink: 0; }
     .action-row-mid { flex: 1; min-width: 0; }
@@ -670,6 +673,12 @@
     .mock-progress-bar-fill { height: 100%; background: #2D5A3D; border-radius: 6px; transition: width 0.4s ease; }
     @keyframes mock-shake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-8px)} 40%{transform:translateX(8px)} 60%{transform:translateX(-6px)} 80%{transform:translateX(6px)} }
     .mock-shake { animation: mock-shake 0.4s ease; }
+    /* Voice dictation button (Web Speech API; Chrome/Edge only). */
+    @keyframes mock-record-pulse { 0%,100%{box-shadow:0 0 0 0 rgba(180,40,40,0.5)} 50%{box-shadow:0 0 0 7px rgba(180,40,40,0)} }
+    .mock-record-btn { background:#EAF0E8; color:#2D5A3D; border:none; border-radius:10px; padding:12px 18px; font-family:'Hanken Grotesk',sans-serif; font-size:15px; font-weight:600; cursor:pointer; }
+    .mock-record-btn.recording { background:#B42828; color:#fff; animation: mock-record-pulse 1.4s ease-in-out infinite; }
+    .mock-record-hint { width:100%; margin-top:2px; font-family:'Hanken Grotesk',sans-serif; font-size:13px; color:#8a9085; }
+    .mock-record-hint.error { color:#B42828; }
     .star-badge { display:inline-block; font-size:11px; font-weight:700; padding:2px 8px; border-radius:10px; }
     .star-badge.strong { background: var(--green-bg); color: var(--green); }
     .star-badge.partial { background: #fef9c3; color: #854d0e; }
@@ -714,6 +723,11 @@
   <div id="role-modal">
     <h3>Preparing application for:</h3>
     <div class="modal-job" id="modal-job-label"></div>
+    <div id="modal-job-url-row" style="margin-bottom:12px;font-size:13px;">
+      <a id="modal-job-url" href="#" target="_blank" style="color:var(--accent);text-decoration:underline;">View job posting ↗</a>
+    </div>
+    <div class="modal-label">Job description <span style="font-weight:400;color:var(--muted)">— edit or paste if missing</span></div>
+    <textarea id="role-jd" rows="6" placeholder="Paste the job description here if it wasn't captured automatically..." style="margin-bottom:16px"></textarea>
     <div class="modal-label">Which role types best describe this position? Select all that apply.</div>
     <label class="role-option"><input type="checkbox" value="ops"><span class="role-option-text">Business Operations / Chief of Staff / COO</span></label>
     <label class="role-option"><input type="checkbox" value="corpdev"><span class="role-option-text">Corporate Development / M&amp;A</span></label>
@@ -1043,7 +1057,6 @@
     <p>Enter your dashboard password to continue.</p>
     <input type="password" id="pw-input" placeholder="Password" autocomplete="current-password">
     <button id="pw-btn">Unlock</button>
-    <div class="error" id="pw-error">Incorrect password. Try again.</div>
     <p style="font-size:11px;color:var(--muted);margin-top:16px;margin-bottom:0;line-height:1.5">Forgot your password? Check your <code style="font-size:11px">DASHBOARD_PASSWORD</code> environment variable in Vercel.</p>
   </div>
 </div>
@@ -1083,6 +1096,7 @@
             <option value="firstSeenAt">Date: Newest First</option>
             <option value="company">Company A → Z</option>
           </select>
+          <label class="action-select-all"><input type="checkbox" id="action-check-all" onclick="toggleCheckAll(this)"> Select all</label>
         </div>
         <div id="bulk-bar">
           <span id="bulk-label">0 selected</span>
@@ -1450,9 +1464,11 @@
 
           <div style="display:flex;align-items:center;gap:14px;margin-top:18px;flex-wrap:wrap;">
             <button class="coach-new-btn" id="mock-submit-btn" onclick="submitMockAnswer()" style="padding:12px 24px;font-size:15px;border-radius:10px;">Submit Answer</button>
-            <button style="background:#EAF0E8;color:#2D5A3D;border:none;border-radius:10px;padding:12px 18px;font-family:'Hanken Grotesk',sans-serif;font-size:15px;font-weight:600;cursor:pointer;">● Record</button>
+            <!-- Voice dictation: hidden on browsers without the Web Speech API (see initMockRecording). -->
+            <button type="button" id="mock-record-btn" class="mock-record-btn" onclick="toggleMockRecording()">● Record</button>
             <button id="mock-skip-btn" onclick="skipMockQuestion()"
               style="background:transparent;border:none;font-family:'Hanken Grotesk',sans-serif;font-size:14.5px;font-weight:500;color:#8a9085;cursor:pointer;margin-left:auto;">Skip question →</button>
+            <div id="mock-record-hint" class="mock-record-hint"></div>
           </div>
 
           <!-- Feedback panel -->
@@ -1622,7 +1638,7 @@
                 <textarea id="onboarding-refresh-resume-input" class="onboarding-paste-area" style="min-height:100px" placeholder="Paste updated resume text here..."></textarea>
               </div>
             </div>
-            <div style="font-size:12px;color:var(--muted);margin-top:12px;margin-bottom:12px;line-height:1.5">⚠️ This takes 1–3 minutes to update all four files. Please don't close this tab or navigate to another section of the dashboard while it's running — doing so may interrupt the update.</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:12px;margin-bottom:12px;line-height:1.5">⚠️ This takes 1–3 minutes to update all five files. Please don't close this tab or navigate to another section of the dashboard while it's running — doing so may interrupt the update.</div>
             <button class="draft-save-btn" onclick="onboardingStartGenerateFromNotes()">Update My Profile</button>
           </div>
         </div>
@@ -1649,6 +1665,9 @@
             </div>
             <div class="onboarding-file-row" id="gen-row-digest" style="font-size:14px;margin:8px 0;color:var(--text)">
               <span id="gen-status-digest">⏳</span> article-digest.md
+            </div>
+            <div class="onboarding-file-row" id="gen-row-profile" style="font-size:14px;margin:8px 0;color:var(--text)">
+              <span id="gen-status-profile">⏳</span> config/profile.yml
             </div>
           </div>
         </div>
@@ -1687,12 +1706,17 @@
             <button class="onboarding-dl-btn" id="onboarding-dl-cv" onclick="onboardingDownload('cv.md', 'cvMd')">⬇ Download cv.md</button>
             <button class="onboarding-dl-btn" id="onboarding-dl-bulletbank" onclick="onboardingDownload('bullet-bank.md', 'bulletBankMd')">⬇ Download bullet-bank.md</button>
             <button class="onboarding-dl-btn" id="onboarding-dl-digest" onclick="onboardingDownload('article-digest.md', 'articleDigestMd')">⬇ Download article-digest.md</button>
+            <button class="onboarding-dl-btn" id="onboarding-dl-profile" onclick="onboardingDownload('config/profile.yml', 'profileYml')">⬇ Download config/profile.yml</button>
             <div class="onboarding-instruction-box">
-              Download all four files and add them to the root of your JobBud repo, then commit them. Once committed, your scanner and application generator will use them automatically.<br><br>
-              <strong>Priority order:</strong> CLAUDE.md and cv.md are required. bullet-bank.md and article-digest.md are optional but significantly improve output quality — add them when you can.<br><br>
+              Download all five files. Add CLAUDE.md, cv.md, bullet-bank.md, and article-digest.md to the root of your JobBud repo. Add config/profile.yml to the config/ folder. Commit all five — your scanner and application generator will use them automatically.<br><br>
+              <strong>Priority order:</strong> CLAUDE.md and cv.md are required. bullet-bank.md, article-digest.md, and config/profile.yml are optional but significantly improve output quality — add them when you can.<br><br>
               <strong>article-digest.md</strong> is a starter file — enrich it over time by adding role context, proof points, and tailoring guidance specific to your background.
             </div>
-            <div style="margin-top:20px">
+            <div class="onboarding-instruction-box" style="margin-top:14px">
+              <strong>Prefer not to download?</strong> Save all five straight to your repo. This commits them for you — but only if your repo is <strong>private</strong>. A public repo is refused, since these files contain your real background.
+            </div>
+            <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">
+              <button class="draft-save-btn" id="onboarding-save-repo-btn" onclick="onboardingSaveToRepo()">Save to my repo</button>
               <button class="draft-save-btn" onclick="onboardingDone()">Done — Go to Dashboard</button>
             </div>
           </div>
@@ -1709,17 +1733,7 @@
         </div>
         <select id="filter-status">
           <option value="">All statuses ⌄</option>
-          <option value="new">New</option>
-          <option value="saved">Saved</option>
-          <option value="preparing">Preparing</option>
-          <option value="applied">Applied</option>
-          <option value="interviewing">Interviewing</option>
-          <option value="offer">Offer</option>
-          <option value="rejected_by_me">Passed on</option>
-          <option value="rejected_by_them">Rejected</option>
-          <option value="position_closed">Position Closed</option>
-          <option value="ghosted">Ghosted</option>
-          <option value="withdrew">Withdrew</option>
+          <!-- Status options are populated from JOB_STATUSES (single source of truth) -->
         </select>
         <select id="filter-ai">
           <option value="">All AI risk ⌄</option>
@@ -1802,6 +1816,46 @@
   const ACTION_FLOOR = 3.5;
   const ACT_NOW_MIN  = 4.0;
 
+  // ── Canonical job statuses — single source of truth ─────────────────
+  // Every status list, label, badge, and pill in the dashboard derives from this
+  // map, so adding or renaming a status is a one-line change. Key order drives the
+  // All-Jobs filter dropdown; `stage` marks pipeline columns; `archiveEl` marks
+  // terminal statuses shown in the Archive; `appliedGroup` marks statuses counted
+  // as "applications sent" in stats. badgeLabel/badgeCls feed statusDisplay();
+  // pillLabel/pillColor/pillBg feed statusStyle().
+  const JOB_STATUSES = {
+    new:              { filterLabel: 'New',             badgeLabel: 'new',             badgeCls: 'status',                 pillLabel: 'new',          pillColor: '#6f7568', pillBg: '#EFEADF' },
+    saved:            { filterLabel: 'Saved',           badgeLabel: 'saved',           badgeCls: 'status',                 pillLabel: 'saved',        pillColor: '#5C7D63', pillBg: '#E7EFE6', stage: true },
+    preparing:        { filterLabel: 'Preparing',       badgeLabel: 'preparing',       badgeCls: 'status',                 pillLabel: 'preparing',    pillColor: '#8A6D1F', pillBg: '#F5EFD9', stage: true },
+    applied:          { filterLabel: 'Applied',         badgeLabel: 'applied',         badgeCls: 'status',                 pillLabel: 'applied',      pillColor: '#2D5A3D', pillBg: '#E0ECDF', stage: true, appliedGroup: true },
+    interviewing:     { filterLabel: 'Interviewing',    badgeLabel: 'interviewing',    badgeCls: 'status',                 pillLabel: 'interviewing', pillColor: '#2D5A3D', pillBg: '#D4E8D8', stage: true, appliedGroup: true },
+    offer:            { filterLabel: 'Offer',           badgeLabel: 'offer',           badgeCls: 'status',                 pillLabel: 'offer',        pillColor: '#2D5A3D', pillBg: '#C6DFCA', stage: true, appliedGroup: true },
+    rejected_by_me:   { filterLabel: 'Passed on',       badgeLabel: 'Passed on',       badgeCls: 'status status-rejected', pillLabel: 'passed on',    pillColor: '#9C4A2F', pillBg: '#F3E3DC', archiveEl: 'archive-rejected-me' },
+    rejected_by_them: { filterLabel: 'Rejected',        badgeLabel: 'Rejected',        badgeCls: 'status status-rejected', pillLabel: 'rejected',     pillColor: '#9C4A2F', pillBg: '#F3E3DC', archiveEl: 'archive-rejected-them', appliedGroup: true },
+    position_closed:  { filterLabel: 'Position Closed', badgeLabel: 'Position Closed', badgeCls: 'status status-closed',   pillLabel: 'closed',       pillColor: '#555555', pillBg: '#EAEAEA', archiveEl: 'archive-position-closed' },
+    ghosted:          { filterLabel: 'Ghosted',         badgeLabel: 'Ghosted',         badgeCls: 'status status-ghosted',  pillLabel: 'ghosted',      pillColor: '#C97A30', pillBg: '#F5EBD8', archiveEl: 'archive-ghosted', appliedGroup: true },
+    withdrew:         { filterLabel: 'Withdrew',        badgeLabel: 'Withdrew',        badgeCls: 'status status-withdrew', pillLabel: 'withdrew',     pillColor: '#6B7280', pillBg: '#F3F4F6', archiveEl: 'archive-withdrew', appliedGroup: true },
+  };
+  const PIPELINE_STAGES  = Object.keys(JOB_STATUSES).filter(k => JOB_STATUSES[k].stage);
+  const ARCHIVE_GROUPS   = Object.fromEntries(
+    Object.entries(JOB_STATUSES).filter(([, v]) => v.archiveEl).map(([k, v]) => [k, v.archiveEl])
+  );
+  const APPLIED_STATUSES = Object.keys(JOB_STATUSES).filter(k => JOB_STATUSES[k].appliedGroup);
+
+  // Populate the All-Jobs status filter from the canonical map. The <select> in
+  // markup carries only the "All statuses" placeholder; runs synchronously since
+  // that element is parsed before this script.
+  (function populateStatusFilter() {
+    const sel = document.getElementById('filter-status');
+    if (!sel) return;
+    for (const [value, meta] of Object.entries(JOB_STATUSES)) {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = meta.filterLabel;
+      sel.appendChild(opt);
+    }
+  })();
+
   // ── Password gate ────────────────────────────────────────────────────────
   function unlock(pw) {
     sessionStorage.setItem('co_pw', pw);
@@ -1869,6 +1923,14 @@
     if (onboardingGenerationInProgress) {
       if (!confirm('Profile update in progress. Leaving this tab may interrupt it. Continue anyway?')) return;
     }
+    // Privacy: recognition runs in continuous mode, so navigating away without
+    // stopping it would keep the microphone capturing. Shut it down (and clear
+    // the listening hint) whenever we leave, mirroring exitMock(). Guarded on
+    // mockRecording so a normal tab switch is a no-op.
+    if (mockRecording) {
+      stopMockRecording();
+      setMockRecordHint('', false);
+    }
     document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     const btn = document.querySelector(`nav button[data-view="${tabName}"]`);
@@ -1912,14 +1974,9 @@
   // grey badge (role taken down before applying); rejections get a red tint so the
   // two are visually distinct. Everything else keeps the default grey status badge.
   function statusDisplay(status) {
-    switch (status) {
-      case 'position_closed':  return { label: 'Position Closed', cls: 'status status-closed' };
-      case 'rejected_by_me':   return { label: 'Rejected by Me',  cls: 'status status-rejected' };
-      case 'rejected_by_them': return { label: 'Rejected',        cls: 'status status-rejected' };
-      case 'ghosted':          return { label: 'Ghosted',         cls: 'status status-ghosted' };
-      case 'withdrew':         return { label: 'Withdrew',        cls: 'status status-withdrew' };
-      default:                 return { label: (status || 'new').replace(/_/g, ' '), cls: 'status' };
-    }
+    const meta = JOB_STATUSES[status];
+    if (meta) return { label: meta.badgeLabel, cls: meta.badgeCls };
+    return { label: (status || 'new').replace(/_/g, ' '), cls: 'status' };
   }
 
   function aiEmoji(risk) {
@@ -2006,35 +2063,44 @@
     applyWorthLookOpen();
   }
 
-  // Compute HMAC-SHA256 token client-side using Web Crypto (same algo as server).
-  // ts is a Unix timestamp in seconds — must be included in the payload to match
-  // the server-side verifyToken which signs jobId+status+ts and validates age.
-  async function computeToken(jobId, status, ts) {
-    const pw = sessionStorage.getItem('co_pw') || '';
-    const key = await crypto.subtle.importKey(
-      'raw',
-      new TextEncoder().encode(pw),
-      { name: 'HMAC', hash: 'SHA-256' },
-      false,
-      ['sign']
-    );
-    const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(jobId + status + ts));
-    return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
-  }
-
-  async function navigateToAction(jobId, status) {
-    const ts    = Math.floor(Date.now() / 1000);
-    const token = await computeToken(jobId, status, ts);
-    window.location.href = `${VERCEL_URL}/api/action?jobId=${encodeURIComponent(jobId)}&status=${status}&token=${token}&ts=${ts}`;
-  }
-
-  function actionUrl(jobId, status) {
-    // Synchronous version for email-style links — token computed async via navigateToAction for dashboard buttons
-    return '#';
+  // Pipeline status changes (interviewing / offer / rejected_by_them) go through the
+  // same header-auth inline path as every other dashboard action — a fetch carrying
+  // X-Dashboard-Password, no page navigation. Client-side HMAC token minting was
+  // removed: the browser cannot (and must not) know ACTION_TOKEN_SECRET, so after the
+  // secret rotation those client-minted tokens failed the server's 32-char verify and
+  // every button returned "⛔ Unauthorized". Signed tokens are now exclusively for
+  // server-minted email links. interviewing/offer stay in the pipeline; the
+  // rejected_by_them status moves the job to the archive (like ghosted/withdrew).
+  async function statusInline(id, status, title, company) {
+    const meta = {
+      interviewing:     { emoji: '🎯', label: 'Interviewing', archive: false },
+      offer:            { emoji: '🎉', label: 'Offer',        archive: false },
+      rejected_by_them: { emoji: '📭', label: 'Rejected',     archive: true  },
+    }[status];
+    try {
+      await _doInlineAction(id, status);
+      if (meta && meta.archive) {
+        _removeJobFromView(id);
+        renderPipeline();
+        renderArchive();
+      } else {
+        renderPipeline();
+      }
+      showToast(`${meta ? meta.emoji : '✓'} ${meta ? meta.label : status}: ${title} at ${company}`);
+    } catch (err) {
+      console.error('statusInline error:', err);
+      showToast(`⚠ Failed — ${err.message}`, 8000);
+    }
   }
 
   // Escape a string for safe use in a single-quoted JS attribute (onclick="...")
-  function jsq(str) { return (str || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'"); }
+  // Escape a value for use as a single-quoted JS string argument inside an inline
+  // onclick="..." attribute: JS-escape backslash/quote first, then HTML-encode
+  // (radarEsc) so a double-quote can't break out of the surrounding attribute.
+  function jsq(str) { return radarEsc((str || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'")); }
+  // Only allow http(s) URLs in an href; anything else (javascript:, data:, relative)
+  // collapses to '#'. radarEsc stops a stray quote from breaking out of the attribute.
+  function safeUrl(u) { return /^https?:\/\//i.test(String(u || '')) ? radarEsc(u) : '#'; }
 
   function jobCard(id, job, showActions = true) {
     const score = job.score ?? '—';
@@ -2042,8 +2108,8 @@
     const aiClass = aiBadgeClass(job.aiExposureRisk);
     return `
       <div class="job-card" data-job-id="${id}">
-        <div class="title">${job.url ? `<a href="${job.url}" target="_blank" rel="noopener noreferrer" class="job-title-link">${job.title || 'Unknown role'}</a>` : (job.title || 'Unknown role')}</div>
-        <div class="meta">${job.company || ''} · ${job.location || ''}${job.isRemote ? ' · Remote' : ''} · Added ${fmt(job.firstSeenAt)}</div>
+        <div class="title">${job.url ? `<a href="${safeUrl(job.url)}" target="_blank" rel="noopener noreferrer" class="job-title-link">${radarEsc(job.title || 'Unknown role')}</a>` : radarEsc(job.title || 'Unknown role')}</div>
+        <div class="meta">${radarEsc(job.company || '')} · ${radarEsc(job.location || '')}${job.isRemote ? ' · Remote' : ''} · Added ${fmt(job.firstSeenAt)}</div>
         <div class="badges">
           <span class="badge ${scoreClass}">${typeof score === 'number' ? score.toFixed(1) : score}/5</span>
           <span class="badge ${aiClass}">${aiEmoji(job.aiExposureRisk)} AI: ${job.aiExposureRisk || '—'}</span>
@@ -2052,8 +2118,8 @@
         ${showActions ? `
         <div class="actions">
           <button class="btn btn-save" onclick="saveInline('${id}', '${jsq(job.title)}', '${jsq(job.company)}')">Save</button>
-          <button class="btn btn-apply" onclick="prepareInline('${id}', '${jsq(job.title)}', '${jsq(job.company)}')">Prepare to Apply</button>
-          <a class="btn btn-view" href="${job.url || '#'}" target="_blank">View →</a>
+          <button class="btn btn-apply" onclick="prepareInline('${id}', '${jsq(job.title)}', '${jsq(job.company)}', '${jsq(job.url)}')">Prepare to Apply</button>
+          <a class="btn btn-view" href="${safeUrl(job.url)}" target="_blank">View →</a>
           <button class="btn btn-reject" onclick="rejectInline('${id}', '${jsq(job.title)}', '${jsq(job.company)}')">Reject</button>
           ${['saved','preparing','applied','interviewing'].includes(job.status) ? `<button class="btn btn-outreach" onclick="openOutreachModal('${id}', '${jsq(job.title)}', '${jsq(job.company)}')">Outreach</button>` : ''}
         </div>` : ''}
@@ -2078,8 +2144,8 @@
     const accentColor = { saved:'#B7AE99', preparing:'#C99A2E', applied:'#5C7D63', interviewing:'#2D5A3D', offer:'#2D5A3D' }[job.status] || '#B7AE99';
 
     const titleHtml = job.url
-      ? `<a href="${job.url}" target="_blank" rel="noopener noreferrer">${job.title || 'Unknown role'}</a>`
-      : (job.title || 'Unknown role');
+      ? `<a href="${safeUrl(job.url)}" target="_blank" rel="noopener noreferrer">${radarEsc(job.title || 'Unknown role')}</a>`
+      : radarEsc(job.title || 'Unknown role');
 
     // Optional doc link row
     let linkHtml = '';
@@ -2099,7 +2165,7 @@
 
     if (isSaved) {
       primaryLabel   = 'Prepare to Apply';
-      primaryOnclick = `onclick="prepareInline('${id}', '${jsq(job.title)}', '${jsq(job.company)}')"`;
+      primaryOnclick = `onclick="prepareInline('${id}', '${jsq(job.title)}', '${jsq(job.company)}', '${jsq(job.url)}')"`;
       quickBtns = `<button class="pipe-quick-btn" onclick="openOutreachModal('${id}', '${jsq(job.title)}', '${jsq(job.company)}')">Outreach</button>`;
       moreBtns  = `<button class="pipe-more-action" onclick="closePositionInline('${id}', '${jsq(job.title)}', '${jsq(job.company)}')">Position Closed</button>
                    <button class="pipe-more-action danger" onclick="rejectInline('${id}', '${jsq(job.title)}', '${jsq(job.company)}')">Reject</button>`;
@@ -2107,7 +2173,7 @@
       primaryLabel   = 'Mark Applied';
       primaryOnclick = `onclick="applyInline('${id}', '${jsq(job.title)}', '${jsq(job.company)}')"`;
       quickBtns = `<button class="pipe-quick-btn" onclick="openPrepForInterview('${id}')">Prep for Interview</button>
-                   ${!job.docUrl ? `<button class="pipe-quick-btn" onclick="prepareInline('${id}', '${jsq(job.title)}', '${jsq(job.company)}')">Re-generate</button>` : ''}`;
+                   ${!job.docUrl ? `<button class="pipe-quick-btn" onclick="prepareInline('${id}', '${jsq(job.title)}', '${jsq(job.company)}', '${jsq(job.url)}')">Re-generate</button>` : ''}`;
       moreBtns  = `<button class="pipe-more-action" onclick="openOutreachModal('${id}', '${jsq(job.title)}', '${jsq(job.company)}')">Outreach</button>
                    <button class="pipe-more-action" onclick="openReachedOutModal('${id}', '${jsq(job.title)}', '${jsq(job.company)}')">${reachedLabel}</button>
                    ${connectionsBtn}
@@ -2115,26 +2181,26 @@
                    <button class="pipe-more-action danger" onclick="rejectInline('${id}', '${jsq(job.title)}', '${jsq(job.company)}')">Reject</button>`;
     } else if (isApplied) {
       primaryLabel   = 'Interviewing';
-      primaryOnclick = `onclick="navigateToAction('${id}', 'interviewing')"`;
+      primaryOnclick = `onclick="statusInline('${id}', 'interviewing', '${jsq(job.title)}', '${jsq(job.company)}')"`;
       quickBtns = `<button class="pipe-quick-btn" onclick="openOutreachModal('${id}', '${jsq(job.title)}', '${jsq(job.company)}')">Outreach</button>`;
-      moreBtns  = `<button class="pipe-more-action" onclick="navigateToAction('${id}', 'offer')">Offer</button>
+      moreBtns  = `<button class="pipe-more-action" onclick="statusInline('${id}', 'offer', '${jsq(job.title)}', '${jsq(job.company)}')">Offer</button>
                    <button class="pipe-more-action" onclick="openReachedOutModal('${id}', '${jsq(job.title)}', '${jsq(job.company)}')">${reachedLabel}</button>
                    ${connectionsBtn}
                    <button class="pipe-more-action" onclick="ghostInline('${id}', '${jsq(job.title)}', '${jsq(job.company)}')">Ghosted</button>
                    <button class="pipe-more-action" onclick="withdrawInline('${id}', '${jsq(job.title)}', '${jsq(job.company)}')">Withdrew</button>
-                   <button class="pipe-more-action danger" onclick="navigateToAction('${id}', 'rejected_by_them')">Rejected</button>`;
+                   <button class="pipe-more-action danger" onclick="statusInline('${id}', 'rejected_by_them', '${jsq(job.title)}', '${jsq(job.company)}')">Rejected</button>`;
     } else if (isInterviewing) {
       primaryLabel   = 'Prep for Interview';
       primaryOnclick = `onclick="openPrepForInterview('${id}')"`;
       quickBtns = `<button class="pipe-quick-btn" onclick="openOutreachModal('${id}', '${jsq(job.title)}', '${jsq(job.company)}')">Outreach</button>`;
-      moreBtns  = `<button class="pipe-more-action" onclick="navigateToAction('${id}', 'offer')">Offer</button>
+      moreBtns  = `<button class="pipe-more-action" onclick="statusInline('${id}', 'offer', '${jsq(job.title)}', '${jsq(job.company)}')">Offer</button>
                    <button class="pipe-more-action" onclick="ghostInline('${id}', '${jsq(job.title)}', '${jsq(job.company)}')">Ghosted</button>
                    <button class="pipe-more-action" onclick="withdrawInline('${id}', '${jsq(job.title)}', '${jsq(job.company)}')">Withdrew</button>
-                   <button class="pipe-more-action danger" onclick="navigateToAction('${id}', 'rejected_by_them')">Rejected</button>`;
+                   <button class="pipe-more-action danger" onclick="statusInline('${id}', 'rejected_by_them', '${jsq(job.title)}', '${jsq(job.company)}')">Rejected</button>`;
     } else if (isOffer) {
       primaryLabel   = 'Withdrew';
       primaryOnclick = `onclick="withdrawInline('${id}', '${jsq(job.title)}', '${jsq(job.company)}')"`;
-      moreBtns  = `<button class="pipe-more-action danger" onclick="navigateToAction('${id}', 'rejected_by_them')">Rejected</button>`;
+      moreBtns  = `<button class="pipe-more-action danger" onclick="statusInline('${id}', 'rejected_by_them', '${jsq(job.title)}', '${jsq(job.company)}')">Rejected</button>`;
     }
 
     const moreId  = `pipe-more-${id}`;
@@ -2143,7 +2209,7 @@
     return `
       <div class="pipe-card" style="border-left:3px solid ${accentColor}" data-job-id="${id}">
         <div class="pipe-card-title">${titleHtml}</div>
-        <div class="pipe-card-meta">${job.company || ''} · ${fmt(job.statusUpdatedAt)}</div>
+        <div class="pipe-card-meta">${radarEsc(job.company || '')} · ${fmt(job.statusUpdatedAt)}</div>
         ${linkHtml}
         <button class="pipe-card-primary" ${primaryOnclick}>${primaryLabel}</button>
         <div class="pipe-card-quick">
@@ -2356,6 +2422,7 @@
     document.getElementById('view-connections-overlay').addEventListener('click', e => {
       if (e.target === document.getElementById('view-connections-overlay')) closeViewConnectionsModal();
     });
+    initMockRecording();
   });
 
   // ── Toast ────────────────────────────────────────────────────────────────
@@ -2685,14 +2752,25 @@
   }
 
   // ── Role-type modal state ─────────────────────────────────────────────────
-  let _modalJobId = null, _modalTitle = null, _modalCompany = null;
+  let _modalJobId = null, _modalTitle = null, _modalCompany = null, _modalJobUrl = '', _modalJobDescription = '';
 
-  function prepareInline(id, title, company) {
-    _modalJobId  = id;
-    _modalTitle  = title;
-    _modalCompany = company;
+  function prepareInline(id, title, company, url) {
+    _modalJobId          = id;
+    _modalTitle          = title;
+    _modalCompany        = company;
+    _modalJobUrl         = url || '';
+    _modalJobDescription = jobs[id]?.description || '';
     // Reset modal state
     document.getElementById('modal-job-label').textContent = `${title} at ${company}`;
+    const urlEl  = document.getElementById('modal-job-url');
+    const urlRow = document.getElementById('modal-job-url-row');
+    if (_modalJobUrl) {
+      urlEl.href = _modalJobUrl;
+      urlRow.style.display = '';
+    } else {
+      urlRow.style.display = 'none';
+    }
+    document.getElementById('role-jd').value = _modalJobDescription;
     document.querySelectorAll('#role-modal input[type=checkbox]').forEach(cb => cb.checked = false);
     document.getElementById('role-guidance').value = '';
     document.getElementById('role-app-questions').value = '';
@@ -2723,6 +2801,7 @@
       .filter(cb => cb.checked).map(cb => cb.value);
     const additionalGuidance = document.getElementById('role-guidance').value.trim();
     const applicationQuestions = document.getElementById('role-app-questions').value.trim();
+    const jobDescription = document.getElementById('role-jd')?.value?.trim() || '';
 
     closeRoleModal();
 
@@ -2751,7 +2830,7 @@
           'Content-Type': 'application/json',
           'X-Dashboard-Password': pw,
         },
-        body: JSON.stringify({ roleTypes, additionalGuidance, applicationQuestions }),
+        body: JSON.stringify({ roleTypes, additionalGuidance, applicationQuestions, jobDescription }),
         redirect: 'follow',
       });
 
@@ -2785,21 +2864,34 @@
 
   // ── View toggle (card / list) ─────────────────────────────────────────────
   // ── Bulk actions ──────────────────────────────────────────────────────────
-  function toggleCheckAll() {
-    const checked = document.getElementById('check-all').checked;
+  function toggleCheckAll(srcEl) {
+    // srcEl is the visible #action-check-all (passed as `this`). Fall back to
+    // whichever select-all element exists so the legacy hidden #check-all header
+    // keeps working too.
+    const src = srcEl || document.getElementById('action-check-all') || document.getElementById('check-all');
+    const checked = !!(src && src.checked);
     document.querySelectorAll('.job-check').forEach(cb => cb.checked = checked);
     updateBulkBar();
   }
 
   function updateBulkBar() {
-    const selected = [...document.querySelectorAll('.job-check:checked')];
+    const boxes = [...document.querySelectorAll('.job-check')];
+    const selected = boxes.filter(cb => cb.checked);
     const bar = document.getElementById('bulk-bar');
     if (selected.length > 0) {
       bar.classList.add('visible');
       document.getElementById('bulk-label').textContent = `${selected.length} selected`;
     } else {
       bar.classList.remove('visible');
-      document.getElementById('check-all').checked = false;
+      const legacy = document.getElementById('check-all');
+      if (legacy) legacy.checked = false;
+    }
+    // Keep the visible select-all in sync: checked when all boxes are selected,
+    // indeterminate on a partial selection.
+    const selectAll = document.getElementById('action-check-all');
+    if (selectAll) {
+      selectAll.checked = boxes.length > 0 && selected.length === boxes.length;
+      selectAll.indeterminate = selected.length > 0 && selected.length < boxes.length;
     }
   }
 
@@ -2825,6 +2917,7 @@
     }
 
     document.getElementById('check-all').checked = false;
+    updateBulkBar();
 
     if (failCount > 0) {
       showToast(`⚠ ${failCount} of ${ids.length} action(s) failed — ${firstError?.message || 'unknown error'}`, 8000);
@@ -2840,16 +2933,16 @@
     return `
       <tr data-job-id="${id}">
         <td class="col-check"><input type="checkbox" class="job-check" data-id="${id}" onchange="updateBulkBar()"></td>
-        <td class="col-co" title="${jsq(job.company)}"><strong>${job.company || '—'}</strong></td>
-        <td class="col-title" title="${jsq(job.title)}">${job.url ? `<a href="${job.url}" target="_blank" rel="noopener noreferrer" class="job-title-link">${job.title || '—'}</a>` : (job.title || '—')}</td>
+        <td class="col-co" title="${radarEsc(job.company || '')}"><strong>${radarEsc(job.company || '—')}</strong></td>
+        <td class="col-title" title="${radarEsc(job.title || '')}">${job.url ? `<a href="${safeUrl(job.url)}" target="_blank" rel="noopener noreferrer" class="job-title-link">${radarEsc(job.title || '—')}</a>` : radarEsc(job.title || '—')}</td>
         <td class="col-score"><span class="badge ${job.score ? scoreBadgeClass(job.score) : 'score-low'}">${job.score ? job.score.toFixed(1) : '—'}</span></td>
-        <td class="col-loc" title="${jsq(job.location)}">${job.location || '—'}${job.isRemote ? ' 🌐' : ''}</td>
+        <td class="col-loc" title="${radarEsc(job.location || '')}">${radarEsc(job.location || '—')}${job.isRemote ? ' 🌐' : ''}</td>
         <td class="col-date" title="${age.title}">${age.label}</td>
         <td class="col-act actions-cell">
           <button class="btn btn-save" onclick="saveInline('${id}','${jsq(job.title)}','${jsq(job.company)}')">Save</button>
-          <button class="btn btn-apply" onclick="prepareInline('${id}','${jsq(job.title)}','${jsq(job.company)}')">Prepare</button>
+          <button class="btn btn-apply" onclick="prepareInline('${id}','${jsq(job.title)}','${jsq(job.company)}','${jsq(job.url)}')">Prepare</button>
           <button class="btn btn-reject" onclick="rejectInline('${id}','${jsq(job.title)}','${jsq(job.company)}')">Reject</button>
-          <a class="btn btn-view" href="${job.url || '#'}" target="_blank">View →</a>
+          <a class="btn btn-view" href="${safeUrl(job.url)}" target="_blank">View →</a>
           ${['saved','preparing','applied','interviewing'].includes(job.status) ? `<button class="btn btn-outreach" onclick="openOutreachModal('${id}','${jsq(job.title)}','${jsq(job.company)}')">Outreach</button>` : ''}
         </td>
       </tr>`;
@@ -2943,24 +3036,20 @@
     const scoreNum = score != null ? score.toFixed(1) : '—';
     const scoreColor = score == null ? '#9aa094' : score >= 4.0 ? '#2D5A3D' : score >= 3.0 ? '#8A6D1F' : '#9C4A2F';
     const titleInner = job.url
-      ? `<a href="${job.url}" target="_blank" rel="noopener noreferrer">${radarEsc(job.title || 'Unknown role')}</a>`
+      ? `<a href="${safeUrl(job.url)}" target="_blank" rel="noopener noreferrer">${radarEsc(job.title || 'Unknown role')}</a>`
       : radarEsc(job.title || 'Unknown role');
     return `
       <div class="action-row" data-job-id="${id}">
+        <input type="checkbox" class="job-check action-row-check" data-id="${id}" onchange="updateBulkBar()" title="Select for bulk action">
         <div class="action-row-score" style="color:${scoreColor}">${scoreNum}</div>
         <div class="action-row-mid">
           <div class="action-row-title">${titleInner} <span class="action-row-company">· ${radarEsc(job.company || '')}</span></div>
           <div class="action-row-sub">${radarEsc(job.location || '—')} · Added ${fmt(job.firstSeenAt)}</div>
         </div>
         <div class="action-row-btns" style="position:relative">
-          <button class="action-row-btn-primary" onclick="prepareInline('${id}','${jsq(job.title)}','${jsq(job.company)}')">Prepare</button>
+          <button class="action-row-btn-primary" onclick="prepareInline('${id}','${jsq(job.title)}','${jsq(job.company)}','${jsq(job.url)}')">Prepare</button>
           <button class="action-row-btn-save" onclick="saveInline('${id}','${jsq(job.title)}','${jsq(job.company)}')">Save</button>
-          <button class="action-row-btn-more" id="job-mbtn-${id}" onclick="toggleJobMenu('${id}')">···</button>
-          <div class="all-row-menu" id="job-menu-${id}">
-            <button class="all-menu-item" onclick="saveInline('${id}','${jsq(job.title)}','${jsq(job.company)}');closeJobMenus()">Save to Pipeline</button>
-            ${job.url ? `<button class="all-menu-item" onclick="window.open('${job.url}','_blank');closeJobMenus()">View posting →</button>` : ''}
-            <button class="all-menu-item danger" onclick="rejectInline('${id}','${jsq(job.title)}','${jsq(job.company)}');closeJobMenus()">Reject</button>
-          </div>
+          <button class="action-row-btn-more" id="job-mbtn-${id}" onclick="toggleJobMenu('${id}', this)">···</button>
         </div>
       </div>`;
   }
@@ -2972,7 +3061,7 @@
     const risk = job.aiExposureRisk || null;
     const riskDotColor = risk === 'low' ? '#3E8E5A' : risk === 'medium' ? '#C99A2E' : risk === 'high' ? '#B14A33' : '#c9c2b2';
     const titleInner = job.url
-      ? `<a href="${job.url}" target="_blank" rel="noopener noreferrer">${radarEsc(job.title || 'Unknown role')}</a>`
+      ? `<a href="${safeUrl(job.url)}" target="_blank" rel="noopener noreferrer">${radarEsc(job.title || 'Unknown role')}</a>`
       : radarEsc(job.title || 'Unknown role');
     return `
       <div class="manual-card" data-job-id="${id}">
@@ -2986,8 +3075,8 @@
         ${risk ? `<div class="manual-card-risk"><span class="manual-card-risk-dot" style="background:${riskDotColor}"></span>AI risk ${risk}</div>` : ''}
         <div class="actions" style="margin-top:10px">
           <button class="action-row-btn-save" onclick="saveInline('${id}','${jsq(job.title)}','${jsq(job.company)}')">Save</button>
-          <button class="btn btn-apply" onclick="prepareInline('${id}','${jsq(job.title)}','${jsq(job.company)}')">Prepare to Apply</button>
-          ${job.url ? `<a class="btn btn-view" href="${job.url}" target="_blank">View →</a>` : ''}
+          <button class="btn btn-apply" onclick="prepareInline('${id}','${jsq(job.title)}','${jsq(job.company)}','${jsq(job.url)}')">Prepare to Apply</button>
+          ${job.url ? `<a class="btn btn-view" href="${safeUrl(job.url)}" target="_blank">View →</a>` : ''}
           <button class="btn btn-reject" onclick="rejectInline('${id}','${jsq(job.title)}','${jsq(job.company)}')">Reject</button>
         </div>
       </div>`;
@@ -3058,7 +3147,7 @@
 
   // Pipeline
   function renderPipeline() {
-    const stages = ['saved', 'preparing', 'applied', 'interviewing', 'offer'];
+    const stages = PIPELINE_STAGES;
     stages.forEach(stage => {
       const stageJobs = Object.entries(jobs).filter(([, j]) => j.status === stage);
       document.getElementById('count-' + stage).textContent = stageJobs.length;
@@ -3069,13 +3158,7 @@
 
   // Archive
   function renderArchive() {
-    const groups = {
-      'rejected_by_me': 'archive-rejected-me',
-      'rejected_by_them': 'archive-rejected-them',
-      'position_closed': 'archive-position-closed',
-      'ghosted': 'archive-ghosted',
-      'withdrew': 'archive-withdrew',
-    };
+    const groups = ARCHIVE_GROUPS;
     let total = 0;
     Object.entries(groups).forEach(([status, elId]) => {
       const these = Object.entries(jobs).filter(([, j]) => j.status === status);
@@ -3090,7 +3173,7 @@
     const all = Object.values(jobs);
     const saved = all.filter(j => j.status === 'saved');
     const preparing = all.filter(j => j.status === 'preparing');
-    const applied = all.filter(j => ['applied', 'interviewing', 'offer', 'rejected_by_them', 'ghosted', 'withdrew'].includes(j.status));
+    const applied = all.filter(j => APPLIED_STATUSES.includes(j.status));
     const interviewing = all.filter(j => ['interviewing', 'offer'].includes(j.status));
     const offers = all.filter(j => j.status === 'offer');
     const avgScore = applied.length
@@ -3193,19 +3276,9 @@
   }
 
   function statusStyle(status) {
-    switch (status) {
-      case 'saved':            return { label: 'saved',          color: '#5C7D63', bg: '#E7EFE6' };
-      case 'preparing':        return { label: 'preparing',      color: '#8A6D1F', bg: '#F5EFD9' };
-      case 'applied':          return { label: 'applied',        color: '#2D5A3D', bg: '#E0ECDF' };
-      case 'interviewing':     return { label: 'interviewing',   color: '#2D5A3D', bg: '#D4E8D8' };
-      case 'offer':            return { label: 'offer',          color: '#2D5A3D', bg: '#C6DFCA' };
-      case 'position_closed':  return { label: 'closed',         color: '#555555', bg: '#EAEAEA' };
-      case 'rejected_by_me':   return { label: 'passed on',      color: '#9C4A2F', bg: '#F3E3DC' };
-      case 'rejected_by_them': return { label: 'rejected',       color: '#9C4A2F', bg: '#F3E3DC' };
-      case 'ghosted':          return { label: 'ghosted',        color: '#C97A30', bg: '#F5EBD8' };
-      case 'withdrew':         return { label: 'withdrew',       color: '#6B7280', bg: '#F3F4F6' };
-      default:                 return { label: status || 'new',  color: '#6f7568', bg: '#EFEADF' };
-    }
+    const meta = JOB_STATUSES[status];
+    if (meta) return { label: meta.pillLabel, color: meta.pillColor, bg: meta.pillBg };
+    return { label: status || 'new', color: '#6f7568', bg: '#EFEADF' };
   }
 
   function renderAll() {
@@ -3240,61 +3313,113 @@
       const ss = statusStyle(job.status || 'new');
       const statusBadge = `<span class="all-status-badge" style="color:${ss.color};background:${ss.bg}">${job.status === 'applied' && job.docUrl ? '📄 ' : ''}${ss.label}</span>`;
       const roleHtml = job.url
-        ? `<a href="${job.url}" target="_blank" rel="noopener noreferrer">${job.title || '—'}</a>`
-        : (job.title || '—');
+        ? `<a href="${safeUrl(job.url)}" target="_blank" rel="noopener noreferrer">${radarEsc(job.title || '—')}</a>`
+        : radarEsc(job.title || '—');
       const isRestored = job.status === 'rejected_by_them' || job.status === 'rejected_by_me';
       const menuItems = [
-        job.url ? `<a class="all-menu-item" href="${job.url}" target="_blank" rel="noopener noreferrer">View posting →</a>` : '',
+        job.url ? `<a class="all-menu-item" href="${safeUrl(job.url)}" target="_blank" rel="noopener noreferrer">View posting →</a>` : '',
         job.docUrl ? `<a class="all-menu-item" href="${job.docUrl}" target="_blank" rel="noopener noreferrer">View packet →</a>` : '',
         isRestored ? `<button class="all-menu-item danger" onclick="restoreInline('${id}','${jsq(job.title)}','${jsq(job.company)}');closeJobMenus()">↩ Restore</button>` : '',
       ].filter(Boolean).join('') || `<div class="all-menu-item" style="color:#a3a99d;cursor:default">No actions</div>`;
 
       return `
         <div class="all-row all-cols" data-job-id="${id}">
-          <div class="all-company">${job.company || '—'}</div>
+          <div class="all-company">${radarEsc(job.company || '—')}</div>
           <div class="all-role">${roleHtml}</div>
-          <div class="all-loc">${job.location || '—'}${job.isRemote ? ' 🌐' : ''}</div>
+          <div class="all-loc">${radarEsc(job.location || '—')}${job.isRemote ? ' 🌐' : ''}</div>
           <div><span class="all-score-badge" style="${scoreStyle(job.score)}">${job.score ? job.score.toFixed(1) : '—'}</span></div>
           <div class="all-risk"><span class="all-risk-dot" style="background:${riskDotColor(job.aiExposureRisk)}"></span>${job.aiExposureRisk || '—'}</div>
           <div class="all-added">${fmt(job.firstSeenAt)}</div>
           <div>${statusBadge}</div>
           <div class="all-actions">
-            <button class="all-menu-btn" id="job-mbtn-${id}" onclick="toggleJobMenu('${id}')">···</button>
-            <div class="all-row-menu" id="job-menu-${id}">${menuItems}</div>
+            <button class="all-menu-btn" id="job-mbtn-${id}" onclick="toggleJobMenu('${id}', this)">···</button>
           </div>
         </div>`;
     }).join('');
   }
 
+  // Shared body-level menu — one instance, positioned via fixed coords
+  const sharedJobMenu = document.createElement('div');
+  sharedJobMenu.className = 'all-row-menu';
+  sharedJobMenu.id = 'shared-job-menu';
+  document.body.appendChild(sharedJobMenu);
+
   function closeJobMenus() {
-    document.querySelectorAll('.all-row-menu.open').forEach(m => m.classList.remove('open'));
-    document.querySelectorAll('.all-menu-btn.open').forEach(b => b.classList.remove('open'));
+    sharedJobMenu.classList.remove('open');
+    document.querySelectorAll('.all-menu-btn.open, .action-row-btn-more.open').forEach(b => b.classList.remove('open'));
   }
 
-  function toggleJobMenu(id) {
-    const menu = document.getElementById(`job-menu-${id}`);
-    const btn  = document.getElementById(`job-mbtn-${id}`);
-    if (!menu) return;
-    const isOpen = menu.classList.contains('open');
+  function handleJobMenuAction(action) {
+    const id = window.activeMenuJobId;
+    const job = id && jobs[id];
+    if (!job) return;
+    closeJobMenus();
+    if (action === 'pipeline') saveInline(id, job.title, job.company);
+    else if (action === 'view' && job.url) window.open(job.url, '_blank');
+    else if (action === 'packet' && job.docUrl) window.open(job.docUrl, '_blank');
+    else if (action === 'reject') rejectInline(id, job.title, job.company);
+    else if (action === 'restore') restoreInline(id, job.title, job.company);
+  }
+
+  function toggleJobMenu(id, btnEl) {
+    // Anchor to the actual clicked button. The id `job-mbtn-${id}` is emitted in both
+    // the Action view (worthLookRow) and the All Jobs view (renderAll), so
+    // getElementById can return a hidden duplicate whose zero-size rect pushes the menu
+    // off-screen — which looks like the button does nothing.
+    const btn = btnEl || document.getElementById(`job-mbtn-${id}`);
+    if (!btn) return;
+    const isOpen = sharedJobMenu.dataset.jobId === id && sharedJobMenu.classList.contains('open');
     closeJobMenus();
     if (!isOpen) {
+      window.activeMenuJobId = id;
+      sharedJobMenu.dataset.jobId = id;
+      const job = jobs[id] || {};
+      const isActionRow = !!btn.closest('.action-row-btns');
+      const isRestored = job.status === 'rejected_by_them' || job.status === 'rejected_by_me';
+      let items = [];
+      if (isActionRow) {
+        items.push(`<button class="all-menu-item" onclick="handleJobMenuAction('pipeline')">Save to Pipeline</button>`);
+        if (job.url) items.push(`<button class="all-menu-item" onclick="handleJobMenuAction('view')">View posting →</button>`);
+        items.push(`<button class="all-menu-item danger" onclick="handleJobMenuAction('reject')">Reject</button>`);
+      } else {
+        if (job.url) items.push(`<a class="all-menu-item" href="${safeUrl(job.url)}" target="_blank" rel="noopener noreferrer">View posting →</a>`);
+        if (job.docUrl) items.push(`<a class="all-menu-item" href="${job.docUrl}" target="_blank" rel="noopener noreferrer">View packet →</a>`);
+        if (isRestored) items.push(`<button class="all-menu-item danger" onclick="handleJobMenuAction('restore')">↩ Restore</button>`);
+        if (!items.length) items.push(`<div class="all-menu-item" style="color:#a3a99d;cursor:default">No actions</div>`);
+      }
+      sharedJobMenu.innerHTML = items.join('');
+      // Open first (display:block) so offsetWidth is measurable, then position.
+      sharedJobMenu.classList.add('open');
       const rect = btn.getBoundingClientRect();
-      const menuWidth = 160;
-      const left = Math.min(
-        Math.max(rect.right - menuWidth, 8),          // never off left edge
-        window.innerWidth - menuWidth - 8             // never off right edge
-      );
-      menu.style.top  = (rect.bottom + 6) + 'px';
-      menu.style.left = left + 'px';
-      menu.classList.add('open');
-      btn && btn.classList.add('open');
+      const menuWidth = sharedJobMenu.offsetWidth || 160;
+      // Anchor the menu BESIDE the button (same vertical level, spanning to its
+      // left via translateX(-100%)). The old "below + right-aligned" placement
+      // dropped the fixed-position menu directly onto the next 1–2 rows' ···
+      // buttons (rows are 67–83px apart), swallowing their clicks — and could
+      // fire the PREVIOUS job's menu actions (wrong-job Restore/Reject).
+      if (rect.left - 8 - menuWidth < 0) {
+        // Too close to the left edge to span left — fall back to below-left.
+        sharedJobMenu.style.top = (rect.bottom + 4) + 'px';
+        sharedJobMenu.style.left = rect.left + 'px';
+        sharedJobMenu.style.transform = 'none';
+      } else {
+        sharedJobMenu.style.top = rect.top + 'px';
+        sharedJobMenu.style.left = (rect.left - 8) + 'px';
+        sharedJobMenu.style.transform = 'translateX(-100%)';
+      }
+      btn.classList.add('open');
     }
   }
 
-  // Close menus when clicking outside
+  // Close menu when clicking outside
   document.addEventListener('click', e => {
-    if (!e.target.closest('.all-actions') && !e.target.closest('.action-row-btns')) closeJobMenus();
+    if (!e.target.closest('.all-actions') && !e.target.closest('.action-row-btns') && !e.target.closest('#shared-job-menu')) closeJobMenus();
   });
+
+  // Close menu on any scroll. The menu is position:fixed, so scrolling the page
+  // (or an inner scroll container) leaves it stranded over unrelated rows.
+  // Capture phase so scrolls on nested scrollers are caught too.
+  window.addEventListener('scroll', closeJobMenus, { capture: true, passive: true });
 
   // Table controls
   document.getElementById('search-input').addEventListener('input', renderAll);
@@ -4596,8 +4721,9 @@
     if (phase === 'done') {
       // Drive button: only show when Drive is configured AND a doc URL was returned
       document.getElementById('prep-doc-link').style.display     = (driveConfigured && prepDocUrl) ? '' : 'none';
-      // Download button: always show when done
-      document.getElementById('prep-download-btn').style.display = '';
+      // Download button: only when we actually have markdown content (the background
+      // job produces a Google Doc, not markdown, so it's hidden on that path).
+      document.getElementById('prep-download-btn').style.display = prepMarkdown ? '' : 'none';
       // Regeneration note: only show when Drive is not configured
       document.getElementById('prep-no-drive-note').style.display = driveConfigured ? 'none' : '';
     }
@@ -4663,6 +4789,11 @@
     isPrepWaiting = true;
     if (sendBtn) sendBtn.disabled = true;
 
+    // Snapshot history so a failed turn can be rolled back. Without this, the user
+    // message stays in the array with no assistant reply after it, so a retry sends
+    // a malformed (two-user-in-a-row) conversation the API rejects — and it stays broken.
+    const historyLenBefore = prepConversationHistory.length;
+
     if (userText !== null) {
       prepConversationHistory.push({ role: 'user', content: userText });
       appendPrepMessage('user', userText);
@@ -4701,7 +4832,9 @@
       }
     } catch (err) {
       console.error('[coach-prep] sendPrepTurn error:', err);
-      appendPrepMessage('assistant', 'Something went wrong — please try again.');
+      // Roll back this turn's pushed message(s) so a retry sends a valid conversation.
+      prepConversationHistory.length = historyLenBefore;
+      appendPrepMessage('assistant', `Something went wrong (${err.message}) — please try again.`);
     } finally {
       isPrepWaiting = false;
       if (sendBtn) sendBtn.disabled = false;
@@ -4886,6 +5019,8 @@
     const compEl = document.getElementById('mock-competency-text');
     compEl.textContent = q.competency || '';
     compEl.style.display = q.competency ? 'inline-block' : 'none';
+    stopMockRecording();
+    setMockRecordHint('', false);
     document.getElementById('mock-answer-textarea').value = '';
     document.getElementById('mock-feedback-panel').style.display = 'none';
     document.getElementById('mock-feedback-unavailable').style.display = 'none';
@@ -5004,7 +5139,139 @@
   }
 
   function exitMock() {
+    stopMockRecording();
+    setMockRecordHint('', false);
     switchCoachView('library');
+  }
+
+  // ── Voice dictation (mock interview answers) ─────────────────────────────
+  // Speech-to-text via the browser's built-in Web Speech API — free, fully
+  // client-side, no backend and no API key. Only Chromium browsers (Chrome,
+  // Edge) ship it today; on Firefox/most Safari we hide the Record button and
+  // the flow stays 100% usable by typing. Recording never auto-submits — the
+  // transcript lands in the textarea for the user to edit first.
+  const MockSpeech = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let mockRecognition = null;
+  let mockRecording = false;
+  let mockRecordBaseText = '';   // textarea contents captured when recording began
+  let mockLastPainted = '';      // last value we wrote to the textarea, to detect user edits mid-recording
+
+  function mockRecordSupported() {
+    // getUserMedia (and thus speech) requires a secure context.
+    return !!MockSpeech && window.isSecureContext;
+  }
+
+  // Hide the Record button on browsers without speech support so the answer
+  // flow degrades cleanly to typing. Safe to call once the DOM is ready.
+  function initMockRecording() {
+    const btn = document.getElementById('mock-record-btn');
+    if (!btn) return;
+    if (!mockRecordSupported()) {
+      btn.style.display = 'none';
+      const textarea = document.getElementById('mock-answer-textarea');
+      if (textarea) textarea.placeholder = 'Type your answer…';
+      return;
+    }
+    btn.title = 'Dictate your answer (Chrome or Edge). You can edit the text before submitting.';
+  }
+
+  function setMockRecordHint(msg, isError) {
+    const hint = document.getElementById('mock-record-hint');
+    if (!hint) return;
+    hint.textContent = msg || '';
+    hint.classList.toggle('error', !!isError);
+  }
+
+  function toggleMockRecording() {
+    if (!mockRecordSupported()) return;
+    if (mockRecording) { stopMockRecording(); return; }
+    startMockRecording();
+  }
+
+  function startMockRecording() {
+    const textarea = document.getElementById('mock-answer-textarea');
+    if (!textarea) return;
+    mockRecognition = new MockSpeech();
+    mockRecognition.lang = 'en-US';
+    mockRecognition.interimResults = true;
+    mockRecognition.continuous = true;
+
+    // Keep whatever's already typed; spoken words are appended after it.
+    mockRecordBaseText = textarea.value;
+    mockLastPainted = textarea.value;
+
+    mockRecognition.onresult = (event) => {
+      // If the user typed into the textarea since our last paint, their edit is
+      // now the source of truth — adopt it as the new base so keystrokes made
+      // mid-recording aren't clobbered when we repaint below.
+      if (textarea.value !== mockLastPainted) {
+        mockRecordBaseText = textarea.value;
+      }
+      let finalText = '';
+      let interimText = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const chunk = event.results[i][0].transcript;
+        if (event.results[i].isFinal) finalText += chunk;
+        else interimText += chunk;
+      }
+      // Commit finalized speech onto the base so it survives later events;
+      // interim words show live but aren't committed until finalized.
+      if (finalText) mockRecordBaseText = joinSpoken(mockRecordBaseText, finalText);
+      const painted = interimText ? joinSpoken(mockRecordBaseText, interimText) : mockRecordBaseText;
+      textarea.value = painted;
+      mockLastPainted = painted;
+    };
+
+    mockRecognition.onerror = (event) => {
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+        setMockRecordHint('Microphone access is blocked. Allow it in your browser to dictate — or just type your answer.', true);
+      } else if (event.error === 'no-speech') {
+        setMockRecordHint("Didn't catch any speech. Tap Record to try again, or type your answer.", true);
+      } else if (event.error !== 'aborted') {
+        setMockRecordHint('Voice input hit a snag. You can keep typing your answer.', true);
+      }
+    };
+
+    // Fires on stop, on error, or when the engine times out — always reset UI.
+    mockRecognition.onend = () => { finalizeMockRecordingUI(); };
+
+    try {
+      mockRecognition.start();
+    } catch (err) {
+      console.error('[mock] could not start speech recognition:', err);
+      setMockRecordHint('Voice input could not start. You can keep typing your answer.', true);
+      mockRecognition = null;
+      return;
+    }
+
+    mockRecording = true;
+    const btn = document.getElementById('mock-record-btn');
+    if (btn) { btn.classList.add('recording'); btn.textContent = '■ Stop'; }
+    setMockRecordHint('Listening… speak your answer, then tap Stop. You can edit it before submitting.', false);
+  }
+
+  function stopMockRecording() {
+    if (mockRecognition) {
+      try { mockRecognition.stop(); } catch (err) { /* already stopped */ }
+    }
+  }
+
+  function finalizeMockRecordingUI() {
+    mockRecording = false;
+    mockRecognition = null;
+    const btn = document.getElementById('mock-record-btn');
+    if (btn) { btn.classList.remove('recording'); btn.textContent = '● Record'; }
+    // Clear the "Listening…" note but leave any error message visible.
+    const hint = document.getElementById('mock-record-hint');
+    if (hint && !hint.classList.contains('error')) hint.textContent = '';
+  }
+
+  // Join existing text and newly spoken text with a single space, avoiding a
+  // double space when the base is empty or already ends in whitespace.
+  function joinSpoken(base, addition) {
+    if (!base) return addition;
+    if (/\s$/.test(base)) return base + addition;
+    return base + ' ' + addition;
   }
 
   async function saveMockSession() {
@@ -5178,6 +5445,7 @@
       'cv.md': 'cvMd',
       'bullet-bank.md': 'bulletBankMd',
       'article-digest.md': 'articleDigestMd',
+      'profile.yml': 'profileYml',
     };
 
     const loaded = {};
@@ -5204,8 +5472,9 @@
       cvMd: loaded.cvMd || null,
       bulletBankMd: loaded.bulletBankMd || null,
       articleDigestMd: loaded.articleDigestMd || null,
+      profileYml: loaded.profileYml || null,
     };
-    const names = Object.entries({ 'CLAUDE.md': loaded.claudeMd, 'cv.md': loaded.cvMd, 'bullet-bank.md': loaded.bulletBankMd, 'article-digest.md': loaded.articleDigestMd })
+    const names = Object.entries({ 'CLAUDE.md': loaded.claudeMd, 'cv.md': loaded.cvMd, 'bullet-bank.md': loaded.bulletBankMd, 'article-digest.md': loaded.articleDigestMd, 'config/profile.yml': loaded.profileYml })
       .filter(([, v]) => v).map(([k]) => k);
     const statusEl = document.getElementById('onboarding-existing-status');
     if (statusEl) statusEl.textContent = names.length ? `Loaded: ${names.join(', ')}` : 'No recognized files found (.md filenames must match exactly).';
@@ -5602,7 +5871,27 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
       const articleDigestMd = d4.articleDigestMd || '';
       setStatus('gen-status-digest', '✓');
 
-      onboardingResult = { claudeMd, cvMd, bulletBankMd, articleDigestMd };
+      // Step 5 — config/profile.yml (non-blocking: a failure shows a toast but
+      // still proceeds to download, since the other files are the required ones).
+      let profileYml = '';
+      try {
+        const r5 = await fetch('/api/coach?action=generate-profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
+          body: JSON.stringify(body),
+        });
+        const d5 = await r5.json();
+        if (d5.error) {
+          showToast(`config/profile.yml: ${d5.error}`);
+        } else {
+          profileYml = d5.profileYml || '';
+        }
+      } catch (e) {
+        showToast('config/profile.yml generation failed — other files are ready.');
+      }
+      setStatus('gen-status-profile', profileYml ? '✓' : '⚠️');
+
+      onboardingResult = { claudeMd, cvMd, bulletBankMd, articleDigestMd, profileYml };
       switchOnboardingStep('download');
     } catch (err) {
       showToast('Generation failed. Please try again.');
@@ -5628,6 +5917,36 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  }
+
+  // Save the generated files straight to the user's repo. The server refuses if
+  // the repo is public (these files hold personal background), so a public-repo
+  // response surfaces a clear message and the download buttons remain available.
+  async function onboardingSaveToRepo() {
+    if (!onboardingResult) {
+      showToast('No content to save. Please generate your profile first.');
+      return;
+    }
+    const btn = document.getElementById('onboarding-save-repo-btn');
+    const pw = sessionStorage.getItem('co_pw') || '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+    try {
+      const r = await fetch('/api/coach?action=save-onboarding', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
+        body: JSON.stringify(onboardingResult),
+      });
+      const d = await r.json();
+      if (r.ok && d.success) {
+        showToast(`Saved to your repo: ${(d.saved || []).join(', ')}`);
+      } else {
+        showToast(d.error || 'Could not save to your repo. Use the download buttons instead.');
+      }
+    } catch (e) {
+      showToast('Could not save to your repo. Use the download buttons instead.');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Save to my repo'; }
+    }
   }
 
   function onboardingDone() {
