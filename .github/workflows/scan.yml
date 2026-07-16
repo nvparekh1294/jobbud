@@ -55,7 +55,6 @@ jobs:
           SCAN_MODE: ${{ github.event.inputs.scan_mode || 'standard' }}
           SCAN_SOURCES: portals   # Daily scan is portals-only; API sources (JSearch/Adzuna) run in weekly-api-scan.yml
           RADAR_CADENCE: daily    # Include Company Radar (data/radar.json) companies set to 'daily'. The Monday 9am radar step below sets this to 'weekly'.
-          USE_BATCH_API: 'true'   # Scheduled scans are latency-insensitive — route both scoring stages through the Message Batches API (50% token discount). Vercel/interactive paths never set this and keep the synchronous flow.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
@@ -90,7 +89,6 @@ jobs:
           SCAN_MODE: standard
           SCAN_SOURCES: portals
           RADAR_CADENCE: weekly
-          USE_BATCH_API: 'true'   # Latency-insensitive scheduled scan — use the Message Batches API (50% token discount).
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}

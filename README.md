@@ -58,7 +58,7 @@ JobBud — your AI job search buddy — is a self-hosted job search pipeline. Yo
 - **Interview prep** — role-specific question sets and answer frameworks drawn from your story bank, with a link back to previous rounds
 - **Voice dictation** — answer mock-interview questions by speaking instead of typing (uses the browser Web Speech API; Chrome and Edge only)
 - **Coach library** — on-demand coaching on resume writing, negotiation, outreach, and interview strategy
-- **Automated scanning** — GitHub Actions cron job scans configured job boards on a schedule; scheduled scans route their AI scoring through Anthropic's Message Batches API, which bills every token at 50% of the standard price
+- **Automated scanning** — GitHub Actions cron job scans configured job boards on a schedule. Scans score jobs synchronously by default, so each run finishes in a few minutes and uses only a small slice of your free Actions minutes. An optional batch mode (`USE_BATCH_API`) halves the Anthropic scoring cost but keeps a runner busy far longer per scan — see [What it costs to run](#what-it-costs-to-run) for the tradeoff
 - **Radar** — track target companies and get notified when relevant roles open
 - **Outreach drafts** — AI-generated cold outreach and follow-up templates
 - **Notifications** — daily and weekly summaries via email (SendGrid) or push (Telegram)
@@ -101,6 +101,14 @@ If you only deploy to Vercel, the dashboard will load but no jobs will be scanne
 - A [GitHub account](https://github.com) with a personal access token that has `repo` scope
 - A [Vercel account](https://vercel.com) (free Hobby plan works)
 - An [Anthropic API key](https://console.anthropic.com)
+
+### What it costs to run
+
+JobBud is built to run on free tiers, with one paid piece: the Anthropic API.
+
+- **GitHub Actions** — free for the default setup. The daily scan scores jobs synchronously and finishes in about 6 minutes, which is well under GitHub's free 2,000 minutes/month for private repos. One thing to watch: those 2,000 minutes are shared across *all* your private repos, so if other private repos also run Actions, JobBud's usage counts against the same pool.
+- **Anthropic API** — the one cost that isn't free. JobBud needs your own Anthropic API key, and this is **separate from a Claude.ai subscription** — Claude Pro and Claude Max do **not** include any API credits, so a subscription alone will not run JobBud. Expect roughly **$5–15/month** depending on how many jobs you scan; higher scan volume means more scoring calls and a higher bill. The optional `USE_BATCH_API` mode can halve this, at the cost of much longer Actions runs (see the note under Automated scanning above).
+- **Vercel** — free. The dashboard and API fit within Vercel's free Hobby plan.
 
 ### 1. Get your own private copy of this repo
 
