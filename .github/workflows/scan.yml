@@ -20,6 +20,7 @@ on:
 jobs:
   scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     concurrency:
       group: jobbud-scan
       cancel-in-progress: false   # queue a new trigger; never abort a scan mid-scoring
@@ -30,14 +31,16 @@ jobs:
           node-version: '20'   # controls the scanner runtime — must stay 20, independent of the action wrapper versions above
 
       - name: Cache node_modules
+        id: cache-node-modules
         uses: actions/cache@v5
         with:
           path: node_modules
-          key: node-modules-${{ hashFiles('package-lock.json') }}
-          restore-keys: node-modules-
+          key: ${{ runner.os }}-node-modules-${{ hashFiles('package-lock.json') }}
+          restore-keys: ${{ runner.os }}-node-modules-
 
       - name: Install dependencies
-        run: npm install
+        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        run: npm ci
         working-directory: .
 
       # Durable scanner state (seen-jobs.json, company-cache.json, api-usage.json)
