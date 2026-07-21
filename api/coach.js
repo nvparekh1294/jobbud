@@ -5,6 +5,7 @@
 import { generateInterviewPrepDoc } from '../scanner/interviewPackage.mjs';
 import { readGithubText, writeGithubFile, assertRepoPrivate, RepoPublicError } from '../lib/github.js';
 import { safeEqual } from '../lib/auth.mjs';
+import { isExtractedTextEmpty, EMPTY_RESUME_ERROR } from '../lib/resumeParse.mjs';
 
 const SONNET_MODEL    = 'claude-sonnet-4-6';
 
@@ -823,7 +824,7 @@ async function handleParseResume(req, res) {
         const result = await pdfParse(buffer);
         text = result.text;
       } catch (parseErr) {
-        console.error(`[coach] parse-resume PDF error: ${parseErr.message}`);
+        console.error('[coach] parse-resume PDF error:', parseErr?.stack || parseErr);
         return res.status(200).json({ error: 'Could not parse file. Try pasting your resume instead.' });
       }
     } else if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
@@ -832,11 +833,19 @@ async function handleParseResume(req, res) {
         const result = await mammoth.extractRawText({ buffer });
         text = result.value;
       } catch (parseErr) {
-        console.error(`[coach] parse-resume DOCX error: ${parseErr.message}`);
+        console.error('[coach] parse-resume DOCX error:', parseErr?.stack || parseErr);
         return res.status(200).json({ error: 'Could not parse file. Try pasting your resume instead.' });
       }
     } else {
       return res.status(400).json({ error: 'Unsupported file type. Upload a PDF or DOCX.' });
+    }
+
+    // Guard: a scanned/image-based PDF (or an empty DOCX) parses without error
+    // but yields no usable text. Return a helpful message instead of {text:''},
+    // which the client would otherwise treat as a successful parse.
+    if (isExtractedTextEmpty(text)) {
+      console.error(`[coach] parse-resume empty extraction mimeType=${mimeType} bytes=${buffer.length}`);
+      return res.status(200).json({ error: EMPTY_RESUME_ERROR });
     }
 
     return res.status(200).json({ text });
