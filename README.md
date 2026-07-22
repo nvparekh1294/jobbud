@@ -232,7 +232,7 @@ dashboard instead. No configuration change is required, though setting a dedicat
 
 ### Vercel Hobby plan: 12 serverless function limit
 
-JobBud uses 9 of the 12 serverless functions allowed on Vercel's free Hobby plan. Three slots remain. Adding new files to `api/` without removing an existing one will cause deployment to fail. If you need to extend the API, upgrade to a paid Vercel plan or consolidate existing functions first.
+JobBud uses 10 of the 12 serverless functions allowed on Vercel's free Hobby plan. Two slots remain. Adding new files to `api/` without removing an existing one will cause deployment to fail. If you need to extend the API, upgrade to a paid Vercel plan or consolidate existing functions first.
 
 ### GitHub job data file size
 

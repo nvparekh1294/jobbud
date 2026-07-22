@@ -253,13 +253,24 @@ async function handleChat(req, res) {
       : m
   );
 
-  const systemPrompt = mode === 'authoring'
+  const baseSystem = mode === 'authoring'
     ? AUTHORING_SYSTEM(context.claudeMd || '')
     : mode === 'prep-intake'
     ? PREP_INTAKE_SYSTEM(context)
     : mode === 'onboarding' && systemContext
     ? systemContext
     : AUTHORING_SYSTEM(context.claudeMd || '');
+
+  // Prepend the user's accumulated memory to the STABLE, cached system prefix.
+  // The client loads memory once when the conversation starts and passes the SAME
+  // string (context.memory) on every turn, so this prefix stays byte-identical for
+  // the whole conversation and the cache breakpoint below still holds. Memory edits
+  // therefore take effect on the NEXT conversation, not mid-stream. Empty for new
+  // users (memory not seeded yet) → systemPrompt is identical to prior behavior.
+  const memoryPrefix = typeof context.memory === 'string' && context.memory.trim()
+    ? context.memory.trim() + '\n\n'
+    : '';
+  const systemPrompt = memoryPrefix + baseSystem;
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {

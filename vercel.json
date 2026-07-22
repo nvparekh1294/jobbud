@@ -18,6 +18,9 @@
     },
     "api/coach.js": {
       "maxDuration": 120
+    },
+    "api/memory.js": {
+      "maxDuration": 60
     }
   }
 }

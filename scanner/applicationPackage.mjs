@@ -1,6 +1,8 @@
 // NOTE FOR MAINTAINERS: This file is sanitized for public release.
 // When porting changes from a private instance, re-sanitize any
 // hardcoded name, bio, or background references before committing.
+import { MEMORY_KEYS, MEMORY_PATHS, assembleMemoryBlock } from '../lib/memory.mjs';
+
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const GITHUB_API = 'https://api.github.com';
 const GOOGLE_DOCS_API = 'https://docs.googleapis.com/v1/documents';
@@ -19,7 +21,7 @@ async function readFileFromRepo(githubToken, owner, repo, filePath) {
   return Buffer.from(data.content, 'base64').toString('utf8');
 }
 
-async function callClaude(anthropicApiKey, articleDigest, bulletBank, job, roleTypes, additionalGuidance) {
+async function callClaude(anthropicApiKey, articleDigest, bulletBank, job, roleTypes, additionalGuidance, memoryBlock = '') {
   const roleTypeStr = roleTypes && roleTypes.length ? roleTypes.join(', ') : 'ops';
 
   const bulletBankIntro = `\nBULLET BANK: The following file contains every possible resume bullet tagged with role types and priorities. You MUST use bullets from this file verbatim -- do not rewrite, paraphrase, or combine any bullet.\n\n`;
@@ -47,7 +49,15 @@ CRITICAL ACCURACY RULE: Use bullets verbatim from the Bullet Bank. Do not rewrit
 
 Respond with valid JSON only — no markdown fences.`;
 
+  // Accumulated user memory goes at the FRONT of the stable system prefix, as its
+  // own cached block, so it is prepended to every generate call without disturbing
+  // the bullet-bank cache breakpoint below. Empty for new users → unchanged prompt.
+  const memoryPrefixBlock = memoryBlock && memoryBlock.trim()
+    ? [{ type: 'text', text: memoryBlock.trim(), cache_control: { type: 'ephemeral' } }]
+    : [];
+
   const systemPrompt = bulletBank ? [
+    ...memoryPrefixBlock,
     {
       type: 'text',
       text: `You are JobBud, generating a tailored application package for the user.
@@ -62,8 +72,15 @@ ${bulletBankIntro}`,
       type: 'text',
       text: `${bulletSelectionRules}${guidanceSection}${resumeFormatAndClosing}`,
     },
+  ] : (memoryPrefixBlock.length ? [
+    ...memoryPrefixBlock,
+    {
+      type: 'text',
+      text: `You are JobBud, generating a tailored application package for the user.
+${guidanceSection}${resumeFormatAndClosing}`,
+    },
   ] : `You are JobBud, generating a tailored application package for the user.
-${guidanceSection}${resumeFormatAndClosing}`;
+${guidanceSection}${resumeFormatAndClosing}`);
 
   const response = await fetch(ANTHROPIC_API_URL, {
     method: 'POST',
@@ -854,11 +871,15 @@ export async function generateAndSendPackage(job, jobId, options = {}) {
   console.log('[appPkg] roleTypes:', roleTypes, '| additionalGuidance length:', additionalGuidance.length);
   console.log('[appPkg] GOOGLE_DRIVE_FOLDER_ID:', process.env.GOOGLE_DRIVE_FOLDER_ID || 'NOT SET');
 
-  // Read source files from the repo in parallel
-  const [articleDigest, bulletBankRaw] = await Promise.all([
+  // Read source files from the repo in parallel, including the three memory files
+  // (each soft-read: absent → '' so a new user degrades to pre-memory behavior).
+  const [articleDigest, bulletBankRaw, memProfile, memVoice, memStories] = await Promise.all([
     readFileFromRepo(githubToken, owner, repo, 'article-digest.md').catch(() => ''),
     readFileFromRepo(githubToken, owner, repo, 'bullet-bank.md').catch(() => null),
+    ...MEMORY_KEYS.map(k => readFileFromRepo(githubToken, owner, repo, MEMORY_PATHS[k]).catch(() => '')),
   ]);
+  const memoryBlock = assembleMemoryBlock({ profile: memProfile, voice: memVoice, stories: memStories });
+  if (memoryBlock) console.log(`[appPkg] memory loaded (${memoryBlock.length} chars)`);
 
   let bulletBank = bulletBankRaw;
   if (!bulletBank || bulletBank.length < 50) {
@@ -870,7 +891,7 @@ export async function generateAndSendPackage(job, jobId, options = {}) {
   }
 
   // Generate package + ATS analysis in a single Claude call
-  const pkg = await callClaude(anthropicApiKey, articleDigest, bulletBank, job, roleTypes, additionalGuidance);
+  const pkg = await callClaude(anthropicApiKey, articleDigest, bulletBank, job, roleTypes, additionalGuidance, memoryBlock);
 
   // Extract ATS text from the same response (no second API call needed)
   const atsText = pkg.atsText || '';
