@@ -120,22 +120,11 @@ JobBud is built to run on free tiers, with one paid piece: the Anthropic API.
 - **Vercel** — free. The dashboard and API fit within Vercel's free Hobby plan.
 - **Persistent memory** — a small add-on to your Anthropic bill, roughly **$1–3/month** for an active user. Memory rides in the model's cached prompt prefix, so re-reading it each conversation is billed at about 10% of the normal input price, and each learning event (an onboarding seed, a "remember…", or a **Remember this** click) is around a cent on the cheaper Haiku model.
 
-### 1. Get your own private copy of this repo
-
-Your copy must be **private** — JobBud stores your job data and personal profile files inside it. **Do not fork.** A fork of a public repo is itself public and cannot be made private, and JobBud's "Save to my repo" would then publish your personal data.
-
-- **If a "Use this template" button appears** at the top of this repo: click it, choose **Create a new repository**, and set the visibility to **Private**.
-- **Otherwise, duplicate it manually.** First create an empty **private** repo named `jobbud` under your account, then mirror this one into it:
-
-  ```bash
-  git clone --bare https://github.com/nvparekh1294/jobbud.git
-  cd jobbud.git
-  git push --mirror https://github.com/YOUR-USERNAME/jobbud.git
-  ```
-
-### 2. Deploy to Vercel
+### 1. Deploy to Vercel
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/nvparekh1294/jobbud&env=ANTHROPIC_API_KEY,GH_TOKEN,GH_REPO,DASHBOARD_PASSWORD&envDescription=Required%20API%20keys%20for%20JobBud%20-%20see%20README%20for%20setup%20instructions&envLink=https://github.com/nvparekh1294/jobbud%23getting-started)
+
+Clicking **Deploy** starts Vercel's clone flow: it creates your **own** copy of this repo in your GitHub account — **private by default** — and deploys that copy. Keep it private: your job data and personal profile files live inside it, and JobBud's "Save to my repo" refuses to write to a public repo. (Prefer to create the repo yourself, or already have one? See [Setting up without the deploy button](#setting-up-without-the-deploy-button) below.)
 
 During deploy, Vercel will prompt for four required environment variables:
 
@@ -148,7 +137,7 @@ During deploy, Vercel will prompt for four required environment variables:
 
 When the deploy finishes, your app lives at `https://<your-deployment>.vercel.app/dashboard` — that `/dashboard` at the end matters. If you open the bare root URL (`https://<your-deployment>.vercel.app` with nothing after it), Vercel shows a `404: NOT_FOUND` page. That is expected and does **not** mean your deploy failed — JobBud simply lives under `/dashboard`. Bookmark the `/dashboard` URL and use that.
 
-### 3. Configure your profile
+### 2. Configure your profile
 
 JobBud reads five personal files to score jobs and generate applications: `CLAUDE.md`, `cv.md`, `bullet-bank.md`, `article-digest.md`, and `config/profile.yml`. The easiest way to create them is the built-in onboarding — open your dashboard, go to the **Coach** tab, and follow **Onboarding**. It generates all five from your resume and a few short questions, then offers two ways to keep them:
 
@@ -169,7 +158,7 @@ cp story-bank.md.example story-bank.md
 
 `config/profile.yml` is the one that matters most — it tells the scanner what roles to target and drives how every job is scored against your profile. See the inline comments in the example file for guidance on each field.
 
-### 4. Configure GitHub Actions
+### 3. Configure GitHub Actions
 
 In your GitHub repo, go to **Settings → Secrets and variables → Actions** and add the same three variables:
 
@@ -180,6 +169,23 @@ In your GitHub repo, go to **Settings → Secrets and variables → Actions** an
 The scanner runs automatically on a cron schedule once secrets are set. To trigger a manual scan, go to the **Actions** tab and trigger the workflow from there.
 
 That's it — you're set up. Open your dashboard at `https://<your-deployment>.vercel.app/dashboard` (remember the `/dashboard` — the bare root URL returns a Vercel `404: NOT_FOUND`, which is expected) and start with the **Coach** tab's onboarding if you haven't configured your profile yet.
+
+### Setting up without the deploy button
+
+The Deploy button above creates your private repo for you, so most people can skip this. Use it only if you'd rather create the repo yourself first, or you already have one you want to use.
+
+Your copy must be **private** — JobBud stores your job data and personal profile files inside it. **Do not fork.** A fork of a public repo is itself public and cannot be made private, and JobBud's "Save to my repo" would then publish your personal data.
+
+- **If a "Use this template" button appears** at the top of this repo: click it, choose **Create a new repository**, and set the visibility to **Private**.
+- **Otherwise, duplicate it manually.** First create an empty **private** repo named `jobbud` under your account, then mirror this one into it:
+
+  ```bash
+  git clone --bare https://github.com/nvparekh1294/jobbud.git
+  cd jobbud.git
+  git push --mirror https://github.com/YOUR-USERNAME/jobbud.git
+  ```
+
+Then import your private `jobbud` repo into Vercel (Vercel dashboard → **Add New… → Project** → import the repo) and set the same four environment variables from step 1. Continue with **Configure your profile** and **Configure GitHub Actions** above.
 
 ---
 
@@ -225,7 +231,7 @@ With it: the dashboard identifies mutual LinkedIn connections at target companie
 
 ### Dashboard password
 
-`DASHBOARD_PASSWORD` is **required**, not optional — it is listed with the other required variables in [Deploy to Vercel](#2-deploy-to-vercel) above. The dashboard fails closed: without it set, the API returns 401 and serves no job data, so the dashboard cannot work. Set `DASHBOARD_PASSWORD` in your Vercel environment variables and use a strong value.
+`DASHBOARD_PASSWORD` is **required**, not optional — it is listed with the other required variables in [Deploy to Vercel](#1-deploy-to-vercel) above. The dashboard fails closed: without it set, the API returns 401 and serves no job data, so the dashboard cannot work. Set `DASHBOARD_PASSWORD` in your Vercel environment variables and use a strong value.
 
 (The GitHub Actions scanner pipeline does not use this variable — it runs without it. Only the Vercel dashboard needs it.)
 
