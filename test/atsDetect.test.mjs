@@ -36,6 +36,20 @@ test('detectAts recognises the boards-api.greenhouse.io REST form', () => {
   assert.equal(result.ats_id, 'anthropic');
 });
 
+test('detectAts pulls the slug from the greenhouse embed ?for= param', () => {
+  const result = detectAts('https://boards.greenhouse.io/embed/job_board?for=databricks');
+  assert.equal(result.ats, 'greenhouse');
+  assert.equal(result.ats_id, 'databricks');
+});
+
+test('detectAts falls back to custom for a greenhouse embed with no ?for=', () => {
+  // No board slug anywhere → the scanner would 404 on ats_id 'embed'; custom is safe.
+  const result = detectAts('https://boards.greenhouse.io/embed/job_board');
+  assert.equal(result.ats, 'custom');
+  assert.equal(result.ats_id, undefined);
+  assert.equal(result.careers_url, 'https://boards.greenhouse.io/embed/job_board');
+});
+
 // ── Lever ─────────────────────────────────────────────────────────────────────
 test('detectAts recognises a Lever board', () => {
   assert.deepEqual(detectAts('https://jobs.lever.co/acme'), {

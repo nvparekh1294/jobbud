@@ -1570,7 +1570,7 @@
               <h3>Upload existing profile files</h3>
               <p>Upload your CLAUDE.md, cv.md, bullet-bank.md, and/or article-digest.md. The AI will update them based on what's changed.</p>
               <input type="file" id="onboarding-existing-file-input" accept=".md,.yml" multiple style="display:none" onchange="onboardingLoadExistingFiles(event)">
-              <button class="draft-discard-btn" style="width:100%;margin-bottom:10px" onclick="document.getElementById('onboarding-existing-file-input').click()">Browse .md files</button>
+              <button class="draft-discard-btn" style="width:100%;margin-bottom:10px" onclick="document.getElementById('onboarding-existing-file-input').click()">Browse files</button>
               <div id="onboarding-existing-status" style="font-size:12px;color:var(--muted);min-height:18px"></div>
               <button class="coach-new-btn" id="onboarding-existing-continue-btn" style="width:100%;margin-top:10px;display:none" onclick="onboardingContinueFromExisting()">Continue →</button>
             </div>
@@ -5918,7 +5918,7 @@
     const companies = [];
     let current = null;
     for (const rawLine of yamlText.split('\n')) {
-      const line = rawLine.replace(/#.*$/, ''); // strip trailing comments
+      const line = onboardingStripYamlComment(rawLine); // strip trailing comments
       const nameMatch = line.match(/^\s*-\s*name:\s*(.+?)\s*$/);
       if (nameMatch) {
         if (current && current.name) companies.push(current);
@@ -5941,6 +5941,25 @@
       return t.slice(1, -1);
     }
     return t;
+  }
+
+  // Strip a trailing YAML comment without eating a '#' inside a quoted value
+  // (e.g. name: "Gamma #3"). A comment '#' must sit outside quotes and be at line
+  // start or preceded by whitespace. Quote-aware scan — enough for this
+  // best-effort prefill parser.
+  function onboardingStripYamlComment(line) {
+    let quote = null; // "'" or '"' when inside a quoted run, else null
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (quote) {
+        if (ch === quote) quote = null;
+      } else if (ch === '"' || ch === "'") {
+        quote = ch;
+      } else if (ch === '#' && (i === 0 || /\s/.test(line[i - 1]))) {
+        return line.slice(0, i);
+      }
+    }
+    return line;
   }
 
   // ── File upload ──
