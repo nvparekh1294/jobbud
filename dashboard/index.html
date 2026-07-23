@@ -1569,7 +1569,7 @@
             <div class="onboarding-option-card" id="onboarding-card-existing" style="display:none">
               <h3>Upload existing profile files</h3>
               <p>Upload your CLAUDE.md, cv.md, bullet-bank.md, and/or article-digest.md. The AI will update them based on what's changed.</p>
-              <input type="file" id="onboarding-existing-file-input" accept=".md" multiple style="display:none" onchange="onboardingLoadExistingFiles(event)">
+              <input type="file" id="onboarding-existing-file-input" accept=".md,.yml" multiple style="display:none" onchange="onboardingLoadExistingFiles(event)">
               <button class="draft-discard-btn" style="width:100%;margin-bottom:10px" onclick="document.getElementById('onboarding-existing-file-input').click()">Browse .md files</button>
               <div id="onboarding-existing-status" style="font-size:12px;color:var(--muted);min-height:18px"></div>
               <button class="coach-new-btn" id="onboarding-existing-continue-btn" style="width:100%;margin-top:10px;display:none" onclick="onboardingContinueFromExisting()">Continue →</button>
@@ -1616,7 +1616,7 @@
             </div>
           </div>
           <div id="onboarding-gen-wrap" style="display:none;margin-top:16px">
-            <button class="onboarding-gen-btn" id="onboarding-gen-btn" onclick="onboardingGenerateProfile()">Generate Profile</button>
+            <button class="onboarding-gen-btn" id="onboarding-gen-btn" onclick="onboardingEnterCompanies()">Generate Profile</button>
           </div>
         </div>
 
@@ -1654,6 +1654,37 @@
             </div>
             <div style="font-size:12px;color:var(--muted);margin-top:12px;margin-bottom:12px;line-height:1.5">⚠️ This takes 1–3 minutes to update all five files. Please don't close this tab or navigate to another section of the dashboard while it's running — doing so may interrupt the update.</div>
             <button class="draft-save-btn" onclick="onboardingStartGenerateFromNotes()">Update My Profile</button>
+          </div>
+        </div>
+
+        <!-- Step: companies (build a personalized scanner/portals.yml) -->
+        <div id="onboarding-step-companies" style="display:none">
+          <div style="max-width:560px">
+            <div style="font-size:15px;font-weight:700;margin-bottom:6px">Which companies do you want JobBud to watch?</div>
+            <div style="font-size:13px;color:var(--muted);margin-bottom:18px;line-height:1.6">
+              Paste each careers page URL — the link to their jobs page. JobBud checks these companies for new roles on every scan. You can add or change them any time later. Skip this to keep the built-in example list for now.
+            </div>
+
+            <!-- Phase 1: enter company rows -->
+            <div id="onboarding-companies-edit">
+              <div id="onboarding-companies-rows"></div>
+              <button type="button" class="coach-back-link" style="background:none;border:none;color:var(--accent);cursor:pointer;font-size:13px;padding:4px 0" onclick="onboardingAddCompanyRow()">+ Add another company</button>
+              <div id="onboarding-companies-error" style="display:none;color:#b3261e;font-size:13px;margin-top:10px"></div>
+              <div style="margin-top:20px;display:flex;gap:10px;flex-wrap:wrap">
+                <button class="draft-save-btn" id="onboarding-companies-continue-btn" onclick="onboardingCompaniesContinue()">Continue →</button>
+                <button class="draft-discard-btn" onclick="onboardingCompaniesSkip()">Skip — keep the example list for now</button>
+              </div>
+            </div>
+
+            <!-- Phase 2: review detected ATS per company -->
+            <div id="onboarding-companies-review" style="display:none">
+              <div style="font-size:13px;color:var(--muted);margin-bottom:12px;line-height:1.6">Here's what JobBud recognised. "Fully supported" companies are scanned via their official job API. "Custom" pages are scraped best-effort — they work better with a Firecrawl key set.</div>
+              <div id="onboarding-companies-detected"></div>
+              <div style="margin-top:20px;display:flex;gap:10px;flex-wrap:wrap">
+                <button class="draft-save-btn" onclick="onboardingCompaniesProceed()">Looks good — build my files →</button>
+                <button class="draft-discard-btn" onclick="onboardingCompaniesEdit()">← Edit companies</button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1721,13 +1752,17 @@
             <button class="onboarding-dl-btn" id="onboarding-dl-bulletbank" onclick="onboardingDownload('bullet-bank.md', 'bulletBankMd')">⬇ Download bullet-bank.md</button>
             <button class="onboarding-dl-btn" id="onboarding-dl-digest" onclick="onboardingDownload('article-digest.md', 'articleDigestMd')">⬇ Download article-digest.md</button>
             <button class="onboarding-dl-btn" id="onboarding-dl-profile" onclick="onboardingDownload('config/profile.yml', 'profileYml')">⬇ Download config/profile.yml</button>
+            <button class="onboarding-dl-btn" id="onboarding-dl-portals" style="display:none" onclick="onboardingDownload('scanner/portals.yml', 'portalsYml')">⬇ Download scanner/portals.yml</button>
+            <div class="onboarding-instruction-box" id="onboarding-portals-instruction" style="display:none;margin-bottom:14px">
+              <strong>scanner/portals.yml</strong> is your personalized company watch-list. Add it to the <strong>scanner/</strong> folder, replacing the example list that ships with the repo. Commit it so your next scan checks your companies.
+            </div>
             <div class="onboarding-instruction-box">
-              Download all five files. Add CLAUDE.md, cv.md, bullet-bank.md, and article-digest.md to the root of your JobBud repo. Add config/profile.yml to the config/ folder. Commit all five — your scanner and application generator will use them automatically.<br><br>
+              Download the files above. Add CLAUDE.md, cv.md, bullet-bank.md, and article-digest.md to the root of your JobBud repo. Add config/profile.yml to the config/ folder. Commit them — your scanner and application generator will use them automatically.<br><br>
               <strong>Priority order:</strong> CLAUDE.md and cv.md are required. bullet-bank.md, article-digest.md, and config/profile.yml are optional but significantly improve output quality — add them when you can.<br><br>
               <strong>article-digest.md</strong> is a starter file — enrich it over time by adding role context, proof points, and tailoring guidance specific to your background.
             </div>
             <div class="onboarding-instruction-box" style="margin-top:14px">
-              <strong>Prefer not to download?</strong> Save all five straight to your repo. This commits them for you — but only if your repo is <strong>private</strong>. A public repo is refused, since these files contain your real background.
+              <strong>Prefer not to download?</strong> Save them straight to your repo. This commits them for you — but only if your repo is <strong>private</strong>. A public repo is refused, since these files contain your real background.
             </div>
             <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">
               <button class="draft-save-btn" id="onboarding-save-repo-btn" onclick="onboardingSaveToRepo()">Save to my repo</button>
@@ -1862,6 +1897,9 @@
   let onboardingExistingFiles = null;
   let onboardingChangeNotes = '';
   let onboardingGenerationInProgress = false;
+  // Coach tab — personalized portals.yml (company watch-list) built in the
+  // 'companies' step. Null when the user skips it (starter list left untouched).
+  let onboardingPortalsYml = null;
   // Coach tab — mock interview state
   let mockQuestions = [];
   let mockCurrentIndex = 0;
@@ -5618,6 +5656,7 @@
     onboardingLoading = false;
     onboardingExistingFiles = null;
     onboardingChangeNotes = '';
+    onboardingPortalsYml = null;
 
     // Show/hide refresh UI elements
     const refreshNote = document.getElementById('onboarding-refresh-note');
@@ -5641,6 +5680,7 @@
       'bullet-bank.md': 'bulletBankMd',
       'article-digest.md': 'articleDigestMd',
       'profile.yml': 'profileYml',
+      'portals.yml': 'portalsYml',
     };
 
     const loaded = {};
@@ -5668,8 +5708,9 @@
       bulletBankMd: loaded.bulletBankMd || null,
       articleDigestMd: loaded.articleDigestMd || null,
       profileYml: loaded.profileYml || null,
+      portalsYml: loaded.portalsYml || null,
     };
-    const names = Object.entries({ 'CLAUDE.md': loaded.claudeMd, 'cv.md': loaded.cvMd, 'bullet-bank.md': loaded.bulletBankMd, 'article-digest.md': loaded.articleDigestMd, 'config/profile.yml': loaded.profileYml })
+    const names = Object.entries({ 'CLAUDE.md': loaded.claudeMd, 'cv.md': loaded.cvMd, 'bullet-bank.md': loaded.bulletBankMd, 'article-digest.md': loaded.articleDigestMd, 'config/profile.yml': loaded.profileYml, 'scanner/portals.yml': loaded.portalsYml })
       .filter(([, v]) => v).map(([k]) => k);
     const statusEl = document.getElementById('onboarding-existing-status');
     if (statusEl) statusEl.textContent = names.length ? `Loaded: ${names.join(', ')}` : 'No recognized files found (.md filenames must match exactly).';
@@ -5698,8 +5739,10 @@
     if (resumeEl && resumeEl.value.trim()) {
       onboardingResumeText = resumeEl.value.trim();
     }
-    switchOnboardingStep('generating');
-    onboardingGenerateSequential();
+    // Capture the change notes above BEFORE leaving refresh-notes, then run the
+    // companies step. onboardingGenerateProfile (called after companies) routes
+    // to the per-file sequential path because existingFiles is set.
+    onboardingEnterCompanies();
   }
 
   function exitOnboarding() {
@@ -5708,11 +5751,196 @@
 
   function switchOnboardingStep(step) {
     onboardingStep = step;
-    const steps = ['input', 'conversation', 'refresh-notes', 'generating', 'bulletbank', 'bulletbankchat', 'download'];
+    const steps = ['input', 'conversation', 'refresh-notes', 'companies', 'generating', 'bulletbank', 'bulletbankchat', 'download'];
     steps.forEach(s => {
       const el = document.getElementById(`onboarding-step-${s}`);
       if (el) el.style.display = s === step ? '' : 'none';
     });
+    // The portals.yml download button + note only make sense when the user
+    // actually built a company list (skipping leaves onboardingResult.portalsYml
+    // unset). Toggle them whenever the download step is shown.
+    if (step === 'download') {
+      const hasPortals = !!(onboardingResult && onboardingResult.portalsYml);
+      const dlBtn = document.getElementById('onboarding-dl-portals');
+      const note  = document.getElementById('onboarding-portals-instruction');
+      if (dlBtn) dlBtn.style.display = hasPortals ? '' : 'none';
+      if (note)  note.style.display  = hasPortals ? '' : 'none';
+    }
+  }
+
+  // ── Companies step (personalized scanner/portals.yml) ──
+
+  // Friendly, non-technical label for each detected ATS. Custom pages warn that
+  // they're scraped best-effort so the user knows a Firecrawl key helps.
+  const ONBOARDING_ATS_LABELS = {
+    greenhouse: '✓ Greenhouse — fully supported',
+    ashby:      '✓ Ashby — fully supported',
+    lever:      '✓ Lever — fully supported',
+    workday:    '✓ Workday — fully supported',
+    custom:     'Custom page — scanned best-effort; works better with a Firecrawl key',
+  };
+
+  // Enter the companies step from either path (first-time gen button or refresh
+  // "Update My Profile"). Prefills rows from an uploaded portals.yml on refresh,
+  // otherwise starts with one empty row.
+  function onboardingEnterCompanies() {
+    const container = document.getElementById('onboarding-companies-rows');
+    if (container) container.innerHTML = '';
+    const errEl = document.getElementById('onboarding-companies-error');
+    if (errEl) errEl.style.display = 'none';
+
+    const prefill = onboardingParsePortals(onboardingExistingFiles?.portalsYml || '');
+    if (prefill.length) {
+      prefill.forEach(c => onboardingAddCompanyRow(c.name, c.careers_url));
+    } else {
+      onboardingAddCompanyRow();
+    }
+
+    onboardingCompaniesEdit();
+    switchOnboardingStep('companies');
+  }
+
+  function onboardingAddCompanyRow(name = '', careersUrl = '') {
+    const container = document.getElementById('onboarding-companies-rows');
+    if (!container) return;
+    const row = document.createElement('div');
+    row.className = 'onboarding-company-row';
+    row.style.cssText = 'display:flex;gap:8px;margin-bottom:8px;align-items:center';
+    const inputStyle = 'padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;outline:none;background:var(--surface);color:var(--text)';
+    row.innerHTML =
+      `<input type="text" class="onboarding-company-name" style="flex:1;${inputStyle}" placeholder="Company name">` +
+      `<input type="text" class="onboarding-company-url" style="flex:2;${inputStyle}" placeholder="https://jobs.example.com/…">` +
+      `<button type="button" class="draft-discard-btn" title="Remove" style="padding:6px 10px" onclick="this.closest('.onboarding-company-row').remove()">✕</button>`;
+    container.appendChild(row);
+    // Set values via .value (not innerHTML) so prefilled text can't inject markup.
+    row.querySelector('.onboarding-company-name').value = name;
+    row.querySelector('.onboarding-company-url').value = careersUrl;
+  }
+
+  // Read the current rows into [{ name, careers_url }], dropping fully-empty rows.
+  function onboardingCollectCompanies() {
+    const rows = Array.from(document.querySelectorAll('#onboarding-companies-rows .onboarding-company-row'));
+    return rows.map(r => ({
+      name: r.querySelector('.onboarding-company-name').value.trim(),
+      careers_url: r.querySelector('.onboarding-company-url').value.trim(),
+    })).filter(c => c.name || c.careers_url);
+  }
+
+  function onboardingShowCompaniesError(msg) {
+    const errEl = document.getElementById('onboarding-companies-error');
+    if (errEl) { errEl.textContent = msg; errEl.style.display = ''; }
+  }
+
+  function onboardingCompaniesEdit() {
+    document.getElementById('onboarding-companies-edit').style.display = '';
+    document.getElementById('onboarding-companies-review').style.display = 'none';
+  }
+
+  // Continue from the edit phase: validate, call generate-portals, and show the
+  // detected-ATS review. Keeps the user on this step so they can go back and edit.
+  async function onboardingCompaniesContinue() {
+    const companies = onboardingCollectCompanies();
+    if (!companies.length) {
+      onboardingShowCompaniesError('Add at least one company, or use Skip to keep the example list.');
+      return;
+    }
+    const missing = companies.find(c => !c.name || !c.careers_url);
+    if (missing) {
+      onboardingShowCompaniesError('Each company needs both a name and a careers URL.');
+      return;
+    }
+    const errEl = document.getElementById('onboarding-companies-error');
+    if (errEl) errEl.style.display = 'none';
+
+    const btn = document.getElementById('onboarding-companies-continue-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+    const pw = sessionStorage.getItem('co_pw') || '';
+    try {
+      const res = await fetch('/api/coach?action=generate-portals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
+        body: JSON.stringify({ companies }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        onboardingShowCompaniesError(data.error || 'Could not read those URLs. Check them and try again.');
+        return;
+      }
+      onboardingPortalsYml = data.portalsYml || null;
+      onboardingRenderDetected(data.entries || []);
+      document.getElementById('onboarding-companies-edit').style.display = 'none';
+      document.getElementById('onboarding-companies-review').style.display = '';
+    } catch (e) {
+      onboardingShowCompaniesError('Could not reach the server. Please try again.');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Continue →'; }
+    }
+  }
+
+  function onboardingRenderDetected(entries) {
+    const wrap = document.getElementById('onboarding-companies-detected');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    entries.forEach(e => {
+      const label = ONBOARDING_ATS_LABELS[e.ats] || ONBOARDING_ATS_LABELS.custom;
+      const isCustom = e.ats === 'custom';
+      const div = document.createElement('div');
+      div.style.cssText = 'padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;background:var(--surface)';
+      const nameEl = document.createElement('div');
+      nameEl.style.cssText = 'font-weight:700;font-size:14px;margin-bottom:2px';
+      nameEl.textContent = e.name; // textContent — never trust the name as HTML
+      const atsEl = document.createElement('div');
+      atsEl.style.cssText = `font-size:12px;color:${isCustom ? '#8a6d00' : 'var(--accent)'}`;
+      atsEl.textContent = label;
+      div.appendChild(nameEl);
+      div.appendChild(atsEl);
+      wrap.appendChild(div);
+    });
+  }
+
+  // Proceed from review into generation. onboardingGenerateProfile picks single
+  // vs per-file sequential based on whether existing files are loaded.
+  function onboardingCompaniesProceed() {
+    onboardingGenerateProfile();
+  }
+
+  // Skip: leave portals.yml untouched (the starter list stays) and generate.
+  function onboardingCompaniesSkip() {
+    onboardingPortalsYml = null;
+    onboardingGenerateProfile();
+  }
+
+  // Best-effort client-side parse of an existing portals.yml to prefill rows on
+  // the refresh path. Not a full YAML parser — just pulls name + careers_url per
+  // company block, which is all the rows need.
+  function onboardingParsePortals(yamlText) {
+    if (!yamlText || typeof yamlText !== 'string') return [];
+    const companies = [];
+    let current = null;
+    for (const rawLine of yamlText.split('\n')) {
+      const line = rawLine.replace(/#.*$/, ''); // strip trailing comments
+      const nameMatch = line.match(/^\s*-\s*name:\s*(.+?)\s*$/);
+      if (nameMatch) {
+        if (current && current.name) companies.push(current);
+        current = { name: onboardingUnquote(nameMatch[1]), careers_url: '' };
+        continue;
+      }
+      const urlMatch = line.match(/^\s*careers_url:\s*(.+?)\s*$/);
+      if (urlMatch && current) {
+        const val = onboardingUnquote(urlMatch[1]);
+        current.careers_url = val === 'null' ? '' : val;
+      }
+    }
+    if (current && current.name) companies.push(current);
+    return companies.filter(c => c.name);
+  }
+
+  function onboardingUnquote(s) {
+    const t = s.trim();
+    if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
+      return t.slice(1, -1);
+    }
+    return t;
   }
 
   // ── File upload ──
@@ -5990,6 +6218,9 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
         return;
       }
       onboardingResult = data;
+      // Attach the personalized portals.yml (if the user built one) so it rides
+      // the same download + save-to-repo path as the generated profile files.
+      if (onboardingPortalsYml) onboardingResult.portalsYml = onboardingPortalsYml;
       // Trigger (a): seed persistent memory from the resume + onboarding chat so
       // JobBud no longer "forgets everything after onboarding". Fire-and-forget —
       // never blocks the download step.
@@ -6096,6 +6327,9 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
       setStatus('gen-status-profile', profileYml ? '✓' : '⚠️');
 
       onboardingResult = { claudeMd, cvMd, bulletBankMd, articleDigestMd, profileYml };
+      // Attach the personalized portals.yml (if the user built one) so it rides
+      // the same download + save-to-repo path as the generated profile files.
+      if (onboardingPortalsYml) onboardingResult.portalsYml = onboardingPortalsYml;
       // Trigger (a): seed/refresh persistent memory from the resume + conversation.
       fireMemoryUpdate('onboarding', { resumeText: onboardingResumeText, transcript: transcriptText });
       switchOnboardingStep('download');
