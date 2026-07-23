@@ -157,6 +157,8 @@ JobBud reads five personal files to score jobs and generate applications: `CLAUD
 
 Either way, these files live **in your private repo** — that is how the scanner (which runs from a fresh checkout in GitHub Actions) and the dashboard read them. The `.gitignore` lists them for a different reason: if you also work in a local clone, it stops you from hand-committing a second, stale copy — JobBud keeps the canonical versions in your repo for you. (This is also why your repo must be private: it holds these files.)
 
+**Your company watch-list.** Onboarding also asks which companies you want JobBud to watch and builds a personalized `scanner/portals.yml` from their careers-page URLs — this **replaces** the example company list that ships with the repo, so your scans target *your* companies from day one instead of the maintainer's. You can **Skip** that step to keep the example list for now. Hand-editing `scanner/portals.yml` stays the power-user path for tuning per-company keywords, marking stealth companies, or filling in Workday tenant/site details; see the comments at the top of that file.
+
 Prefer to start from templates instead of onboarding? Copy the examples and fill them in by hand:
 
 ```bash
