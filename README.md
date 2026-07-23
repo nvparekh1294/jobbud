@@ -22,7 +22,7 @@
 - [Getting Started](#getting-started)
 - [Optional Integrations](#optional-integrations)
 - [LinkedIn Research](#linkedin-research--mutual-connection-lookup)
-- [Upgrading](#upgrading)
+- [Keeping your copy up to date](#keeping-your-copy-up-to-date)
 - [Known Limitations](#known-limitations)
 - [Contributing](#contributing)
 - [License](#license)
@@ -229,7 +229,55 @@ With it: the dashboard identifies mutual LinkedIn connections at target companie
 
 ---
 
-## Upgrading
+## Keeping your copy up to date
+
+Your copy of JobBud is a **snapshot** — the state of this project at the moment you
+made your private mirror. When bugs are fixed or features are added upstream, those
+changes do **not** reach your copy automatically. You have to pull them in. There are
+two ways to do that, and you only need one.
+
+### The automatic path (recommended)
+
+Your repo ships with a bundled update-check workflow (`.github/workflows/update-check.yml`).
+Once a week it looks at the upstream JobBud repo, and if there are new commits it opens
+a **pull request** in your own repo with those changes. You just review the PR and click
+**Merge**. Nothing is applied until you approve it.
+
+It needs one one-time setting to be allowed to open PRs for you. In your repo, go to
+**Settings → Actions → General**, scroll to **Workflow permissions**, and enable
+**"Allow GitHub Actions to create and approve pull requests."** Without this, the
+workflow can't open the PR.
+
+You don't have to wait for the weekly run — you can trigger a check anytime from the
+**Actions** tab: pick **update-check** and click **Run workflow**.
+
+### The manual path (always works)
+
+If you'd rather pull updates yourself — or the automatic PR ever runs into a conflict —
+do it from a local clone. Point your clone at the upstream repo once:
+
+```bash
+git remote add upstream https://github.com/nvparekh1294/jobbud.git
+```
+
+Then, whenever you want the latest changes:
+
+```bash
+git fetch upstream
+git merge upstream/main
+git push
+```
+
+### Will this clobber my data?
+
+Normally, no. Your personal files — `config/profile.yml`, your profile/CV markdown,
+and everything under `data/` — are yours; upstream changes don't touch them, so merges
+are usually clean. The one case where a merge can hit a conflict is if you edited
+JobBud's own tool files (code, workflows, configuration) yourself. If that happens, Git
+will flag the conflicting files and you'll need to resolve them by hand before finishing
+the merge. If you never edited the tool code, you shouldn't run into this.
+
+### Breaking change: signed action links
 
 If you deployed an earlier version of JobBud, note one breaking change: the action
 links embedded in digest and reminder emails (the one-click "mark applied",
