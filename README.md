@@ -249,7 +249,7 @@ It needs one one-time setting to be allowed to open PRs for you. In your repo, g
 workflow can't open the PR.
 
 You don't have to wait for the weekly run — you can trigger a check anytime from the
-**Actions** tab: pick **update-check** and click **Run workflow**.
+**Actions** tab: pick **JobBud update check** and click **Run workflow**.
 
 ### The manual path (always works)
 
