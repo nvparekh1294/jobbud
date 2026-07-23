@@ -1,0 +1,110 @@
+name: JobBud update check
+
+# Weekly check for new upstream JobBud commits. When upstream is ahead of your copy,
+# this opens (or updates) a pull request in YOUR OWN repo listing the incoming changes,
+# so you can review and merge on your own terms. If the changes can't be merged cleanly
+# (usually because you edited JobBud's own tool files), it opens an issue pointing you at
+# the manual merge steps in the README instead.
+#
+# Safety: this never pushes to upstream. Upstream is only ever fetched read-only, and the
+# only remote it writes to is your own repo's `origin`. It writes nothing outside your
+# private repo. The job-level guard below stops it from ever running on the source repo.
+
+on:
+  # Quiet weekly slot. NOTE: the schedule only takes effect once this file is on your
+  # repo's default branch. You can also run it any time from the Actions tab.
+  schedule:
+    - cron: '0 14 * * 1'    # Every Monday at 14:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  update-check:
+    # Never run on the upstream source repo — only on downstream private copies.
+    if: github.repository != 'nvparekh1294/jobbud'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout with full history
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Check upstream and open PR or issue
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM_URL: https://github.com/nvparekh1294/jobbud.git
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          UPDATE_BRANCH: jobbud-update
+          PR_TITLE: 'JobBud update: new upstream changes'
+          ISSUE_TITLE: 'JobBud update available — manual merge needed'
+        run: |
+          set -euo pipefail
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          BASE_SHA="$(git rev-parse HEAD)"
+
+          # 1. Add upstream as a read-only remote and fetch its main branch.
+          git remote add upstream "$UPSTREAM_URL"
+          git fetch --no-tags upstream main
+
+          # 2. If we already contain everything upstream has, there is nothing to do.
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "Up to date with upstream — no update needed."
+            exit 0
+          fi
+
+          # 2b. Idempotency: if a previous run already pushed an update branch that
+          #     contains these upstream commits on top of the current default branch,
+          #     the PR is already current — don't churn it or open a duplicate.
+          git fetch --no-tags origin "$UPDATE_BRANCH" 2>/dev/null || true
+          if git rev-parse --verify --quiet "refs/remotes/origin/$UPDATE_BRANCH" >/dev/null; then
+            if git merge-base --is-ancestor upstream/main "origin/$UPDATE_BRANCH" \
+               && git merge-base --is-ancestor "$BASE_SHA" "origin/$UPDATE_BRANCH"; then
+              echo "Update branch already includes these upstream changes — PR is current."
+              exit 0
+            fi
+          fi
+
+          # 3. Capture the incoming commit subjects BEFORE merging (used in the PR body).
+          INCOMING="$(git log --oneline --no-merges "HEAD..upstream/main")"
+          echo "Incoming upstream commits:"
+          echo "$INCOMING"
+
+          # 4. Rebuild the update branch from the current default branch and try to merge.
+          git checkout -B "$UPDATE_BRANCH"
+          if git merge --no-edit -m "Merge upstream JobBud updates into $UPDATE_BRANCH" upstream/main; then
+            echo "Clean merge — pushing branch and opening/updating a PR."
+            git push --force origin "$UPDATE_BRANCH"
+
+            PR_BODY="$(printf 'This PR brings in new changes from the upstream JobBud repo (%s).\n\nIncoming commits:\n\n```\n%s\n```\n\nReview the diff and click **Merge** to update your copy. Nothing is applied until you approve.' "$UPSTREAM_URL" "$INCOMING")"
+
+            EXISTING_PR="$(gh pr list --head "$UPDATE_BRANCH" --state open --json number --jq '.[0].number // empty')"
+            if [ -n "$EXISTING_PR" ]; then
+              gh pr edit "$EXISTING_PR" --title "$PR_TITLE" --body "$PR_BODY"
+              echo "Updated existing PR #$EXISTING_PR."
+            else
+              gh pr create --base "$DEFAULT_BRANCH" --head "$UPDATE_BRANCH" --title "$PR_TITLE" --body "$PR_BODY"
+              echo "Opened a new PR."
+            fi
+          else
+            echo "Merge conflict — aborting merge and opening/updating an issue."
+            git merge --abort
+
+            ISSUE_BODY="$(printf 'Upstream JobBud has new changes, but they could not be merged automatically because of a conflict (most likely you edited some of JobBud'"'"'s own tool files).\n\nMerge them by hand using the manual path in the README section **Keeping your copy up to date**:\n\n```\ngit fetch upstream\ngit merge upstream/main\ngit push\n```\n\nIncoming commits:\n\n```\n%s\n```' "$INCOMING")"
+
+            EXISTING_ISSUE="$(gh issue list --state open --json number,title --jq 'map(select(.title == env.ISSUE_TITLE)) | .[0].number // empty')"
+            if [ -n "$EXISTING_ISSUE" ]; then
+              gh issue edit "$EXISTING_ISSUE" --body "$ISSUE_BODY"
+              echo "Updated existing issue #$EXISTING_ISSUE."
+            else
+              gh issue create --title "$ISSUE_TITLE" --body "$ISSUE_BODY"
+              echo "Opened a new issue."
+            fi
+          fi
