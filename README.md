@@ -235,6 +235,10 @@ With it: the dashboard identifies mutual LinkedIn connections at target companie
 
 (The GitHub Actions scanner pipeline does not use this variable — it runs without it. Only the Vercel dashboard needs it.)
 
+### What your deployment serves (and what it doesn't)
+
+`DASHBOARD_PASSWORD` gates the **API** (job data, memory, generation), but it does **not** gate static files. By default Vercel uploads your whole repo, so any personal file you committed — `cv.md`, `config/profile.yml`, `CLAUDE.md`, `bullet-bank.md`, `story-bank.md`, `article-digest.md`, and the `data/*.json` the dashboard writes back — would have been fetchable at your deployment URL (e.g. `https://<your-deployment>.vercel.app/cv.md`) with no password. A `.vercelignore` now ships **only** the app code the functions and dashboard need at runtime, so those files are no longer uploaded to the deployment at all. Your personal files still live safely in your private GitHub repo, where the scanner and dashboard read them via the GitHub API. **If you deployed before this change, pull the update and redeploy** (a fresh deploy re-uploads with the new `.vercelignore`) so the previously exposed files are removed from your live deployment.
+
 ---
 
 ## Keeping your copy up to date
