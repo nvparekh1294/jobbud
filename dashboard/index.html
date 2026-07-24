@@ -5765,6 +5765,12 @@
       const note  = document.getElementById('onboarding-portals-instruction');
       if (dlBtn) dlBtn.style.display = hasPortals ? '' : 'none';
       if (note)  note.style.display  = hasPortals ? '' : 'none';
+      // Same guard for config/profile.yml: hide its button when generation
+      // produced nothing (e.g. generate-profile failed), so an empty file can
+      // never be downloaded on any path.
+      const hasProfile = !!(onboardingResult && onboardingResult.profileYml && onboardingResult.profileYml.trim());
+      const profBtn = document.getElementById('onboarding-dl-profile');
+      if (profBtn) profBtn.style.display = hasProfile ? '' : 'none';
     }
   }
 
@@ -6237,6 +6243,30 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
         return;
       }
       onboardingResult = data;
+      // generate-onboarding does NOT produce config/profile.yml, so fetch it
+      // separately here (the sequential/refresh path already does this). Without
+      // it a brand-new user's scanner runs with no profile. Non-blocking, exactly
+      // like the sequential path: a failure toasts a warning and proceeds, leaving
+      // profileYml absent so the download button self-hides.
+      try {
+        const conversationText = onboardingTranscript
+          .filter(m => m.content !== '__init__')
+          .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+          .join('\n\n');
+        const rp = await fetch('/api/coach?action=generate-profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
+          body: JSON.stringify({ resumeText: onboardingResumeText, transcriptText: conversationText, existingFiles: null }),
+        });
+        const rpData = await rp.json();
+        if (rpData.error) {
+          showToast(`config/profile.yml: ${rpData.error}`);
+        } else if (rpData.profileYml) {
+          onboardingResult.profileYml = rpData.profileYml;
+        }
+      } catch (e) {
+        showToast('config/profile.yml generation failed — other files are ready.');
+      }
       // Attach the personalized portals.yml (if the user built one) so it rides
       // the same download + save-to-repo path as the generated profile files.
       if (onboardingPortalsYml) onboardingResult.portalsYml = onboardingPortalsYml;
