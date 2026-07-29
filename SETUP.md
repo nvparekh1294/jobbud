@@ -1,6 +1,6 @@
 # JobBud — Advanced Setup
 
-The [README](README.md) covers the core setup (deploy to Vercel, add your three
+The [README](README.md) covers the core setup (deploy to Vercel, add your four
 required environment variables, configure your profile). This file documents the
 **optional** integrations that need a few extra steps.
 
