@@ -276,9 +276,16 @@ Then, whenever you want the latest changes:
 
 ```bash
 git fetch upstream
-git merge upstream/main
+git merge --allow-unrelated-histories upstream/main
 git push
 ```
+
+That `--allow-unrelated-histories` flag is needed the first time because a copy made
+with the Deploy button starts its own fresh Git history, so Git doesn't yet know the
+two repos are related; after that first merge they're joined for good and the flag just
+does nothing. If this first merge reports conflicts in files you never touched, your
+copy's starting point doesn't line up with upstream's — run the **JobBud update check**
+workflow from the Actions tab instead, which works out the right starting point for you.
 
 ### Will this clobber my data?
 
