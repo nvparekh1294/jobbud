@@ -135,6 +135,13 @@ During deploy, Vercel will prompt for four required environment variables:
 | `GH_REPO` | Your GitHub repo in the format `username/jobbud` |
 | `DASHBOARD_PASSWORD` | Password gate for the dashboard. The dashboard fails closed — it will not serve your job data unless this is set, so choose a strong value. (The GitHub Actions scanner pipeline runs without it; this one is needed only by the Vercel dashboard.) |
 
+> **Adding or editing a variable by hand? Two things to get right.** The Deploy button sets all of this up for you, but if you ever add or change a variable yourself in Vercel → **Settings → Environment Variables**:
+>
+> 1. **Tick "Production" for every variable.** Vercel lets you scope a variable to Production, Preview, and Development separately. Your live site reads **Production** only — a variable ticked for Development alone does nothing for it. (Ticking **Preview** as well is recommended.)
+> 2. **Redeploy afterwards.** Variable changes do not reach a site that is already live. Go to **Deployments → ⋯ → Redeploy** on the latest deployment.
+>
+> **The symptom to watch for:** if your dashboard loads without ever asking for a password, but nothing actually works — uploads come back "Unauthorized", the chat stays silent — your variables are almost certainly missing from Production.
+
 When the deploy finishes, your app lives at `https://<your-deployment>.vercel.app/dashboard` — that `/dashboard` at the end matters. If you open the bare root URL (`https://<your-deployment>.vercel.app` with nothing after it), Vercel shows a `404: NOT_FOUND` page. That is expected and does **not** mean your deploy failed — JobBud simply lives under `/dashboard`. Bookmark the `/dashboard` URL and use that.
 
 ### 2. Configure your profile
@@ -185,13 +192,15 @@ Your copy must be **private** — JobBud stores your job data and personal profi
   git push --mirror https://github.com/YOUR-USERNAME/jobbud.git
   ```
 
-Then import your private `jobbud` repo into Vercel (Vercel dashboard → **Add New… → Project** → import the repo) and set the same four environment variables from step 1. Continue with **Configure your profile** and **Configure GitHub Actions** above.
+Then import your private `jobbud` repo into Vercel (Vercel dashboard → **Add New… → Project** → import the repo) and set the same four environment variables from step 1 — tick **Production** for each one, as described there. Continue with **Configure your profile** and **Configure GitHub Actions** above.
 
 ---
 
 ## Optional Integrations
 
 All optional integrations fail silently when not configured. The dashboard works without any of them.
+
+Every variable below is one you add by hand in Vercel → **Settings → Environment Variables**, so the same two rules from [Deploy to Vercel](#1-deploy-to-vercel) apply: tick **Production** (Development alone does nothing for your live site), then **redeploy** so the change takes effect.
 
 ### Google Drive — automatic prep doc saving
 
@@ -231,7 +240,7 @@ With it: the dashboard identifies mutual LinkedIn connections at target companie
 
 ### Dashboard password
 
-`DASHBOARD_PASSWORD` is **required**, not optional — it is listed with the other required variables in [Deploy to Vercel](#1-deploy-to-vercel) above. The dashboard fails closed: without it set, the API returns 401 and serves no job data, so the dashboard cannot work. Set `DASHBOARD_PASSWORD` in your Vercel environment variables and use a strong value.
+`DASHBOARD_PASSWORD` is **required**, not optional — it is listed with the other required variables in [Deploy to Vercel](#1-deploy-to-vercel) above. The dashboard fails closed: without it set, the API returns 401 and serves no job data, so the dashboard cannot work. Set `DASHBOARD_PASSWORD` in your Vercel environment variables, ticked for **Production**, and use a strong value. If your dashboard opens with no password prompt at all, that variable is not reaching Production — see the note in [Deploy to Vercel](#1-deploy-to-vercel).
 
 (The GitHub Actions scanner pipeline does not use this variable — it runs without it. Only the Vercel dashboard needs it.)
 
