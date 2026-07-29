@@ -266,19 +266,19 @@ You don't have to wait for the weekly run — you can trigger a check anytime fr
 ### The manual path
 
 If you'd rather pull updates yourself — or the automatic PR ever runs into a conflict —
-do it from a local clone. Point your clone at the upstream repo once:
+do it from a local clone.
 
-```bash
-git remote add upstream https://github.com/nvparekh1294/jobbud.git
-```
-
-**The first update needs one extra step.** A copy made with the Deploy button starts
+**The first update needs some extra steps.** A copy made with the Deploy button starts
 its own brand-new Git history, so Git has no idea the two repos are related and no
 reference point for comparing them — and without a reference point it flags *every*
 file that differs as a conflict, even files you've never opened. The fix is to tell Git
 which upstream commit your copy was made from. Run these once, one line at a time:
 
 ```bash
+# Point your clone at the upstream repo. Safe to re-run — if it is already set
+# up, this does nothing.
+git remote add upstream https://github.com/nvparekh1294/jobbud.git 2>/dev/null || true
+
 # Get upstream's latest commits. Nothing on your machine changes yet.
 git fetch upstream
 
@@ -304,12 +304,24 @@ git merge upstream/main
 git push
 ```
 
-If the `git replace` line fails with an error about a missing commit, no upstream
-snapshot matches your starting point — usually because files were changed before your
-copy's first commit. In that case run `git merge --allow-unrelated-histories
-upstream/main` and expect to resolve a long list of conflicts by hand: keep upstream's
-version of JobBud's own tool files, and keep your own version of anything under `data/`
-or `config/`.
+If the `git replace` line fails with this:
+
+```
+error: new commit is the same as the old one: '<a long string of letters and numbers>'
+```
+
+then no upstream snapshot matches your starting point — usually because files were
+changed before your copy's first commit. In that case run `git merge
+--allow-unrelated-histories upstream/main` and expect to resolve a long list of
+conflicts by hand:
+
+- Anything under `api/`, `lib/`, `scanner/`, `dashboard/`, `.github/` — JobBud's own
+  tool files. Keep **upstream's** version.
+- Anything under `data/` or `config/` — your job data and your profile. Keep **your**
+  version.
+- Anything else at the top level (`README.md`, `SETUP.md`, `package.json`,
+  `vercel.json`, and friends) — keep **upstream's** version, unless you deliberately
+  customised the file.
 
 ### Will this clobber my data?
 
