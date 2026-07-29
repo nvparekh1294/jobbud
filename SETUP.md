@@ -90,8 +90,14 @@ GOOGLE_REFRESH_TOKEN=...
 GOOGLE_DRIVE_FOLDER_ID=...   # optional
 ```
 
-Redeploy Vercel so the new variables take effect. Generate a prep doc — the job
-card should now show a Google Doc link.
+In Vercel, tick **Production** for each variable as you add it — your live site
+reads Production only, so a variable left on Development alone does nothing for
+it. Then redeploy so the new variables take effect. Generate a prep doc — the
+job card should now show a Google Doc link.
+
+> If nothing changes — the feature stays dead, or the API comes back
+> "Unauthorized" — the variables are almost certainly missing from Production.
+> The [README](README.md#1-deploy-to-vercel) explains this trap in full.
 
 To find a `GOOGLE_DRIVE_FOLDER_ID`: open the folder in Google Drive and copy the
 last path segment of the URL (`.../folders/THIS_PART`).
