@@ -833,8 +833,13 @@ async function handleParseResume(req, res) {
 
     if (mimeType === 'application/pdf') {
       try {
-        const { default: pdfParse } = await import('pdf-parse');
-        const result = await pdfParse(buffer);
+        // unpdf wraps a modern, serverless-safe pdf.js build (no worker, no
+        // canvas, no native deps). The previous dependency, pdf-parse, bundles
+        // pdf.js v1.10.100 (2018), whose UMD module init throws under Vercel's
+        // bytecode-caching module loader — every PDF failed at import time.
+        const { extractText, getDocumentProxy } = await import('unpdf');
+        const pdf = await getDocumentProxy(new Uint8Array(buffer));
+        const result = await extractText(pdf, { mergePages: true });
         text = result.text;
       } catch (parseErr) {
         console.error('[coach] parse-resume PDF error:', parseErr?.stack || parseErr);
