@@ -263,7 +263,7 @@ workflow can't open the PR.
 You don't have to wait for the weekly run — you can trigger a check anytime from the
 **Actions** tab: pick **JobBud update check** and click **Run workflow**.
 
-### The manual path (always works)
+### The manual path
 
 If you'd rather pull updates yourself — or the automatic PR ever runs into a conflict —
 do it from a local clone. Point your clone at the upstream repo once:
@@ -272,29 +272,59 @@ do it from a local clone. Point your clone at the upstream repo once:
 git remote add upstream https://github.com/nvparekh1294/jobbud.git
 ```
 
-Then, whenever you want the latest changes:
+**The first update needs one extra step.** A copy made with the Deploy button starts
+its own brand-new Git history, so Git has no idea the two repos are related and no
+reference point for comparing them — and without a reference point it flags *every*
+file that differs as a conflict, even files you've never opened. The fix is to tell Git
+which upstream commit your copy was made from. Run these once, one line at a time:
 
 ```bash
+# Get upstream's latest commits. Nothing on your machine changes yet.
 git fetch upstream
-git merge --allow-unrelated-histories upstream/main
+
+# Find your repo's very first commit, and the exact snapshot of files it holds.
+ROOT=$(git rev-list --max-parents=0 HEAD | tail -1)
+TREE=$(git rev-parse $ROOT^{tree})
+
+# Look through upstream's history for the commit holding that identical snapshot,
+# and record it as your copy's starting point.
+git replace --graft $ROOT $(git log --format='%H %T' upstream/main | awk -v t=$TREE '$2==t && !f {print $1; f=1}')
+
+# Merge. Now that Git has a reference point, this behaves like any normal update.
+git merge upstream/main
 git push
 ```
 
-That `--allow-unrelated-histories` flag is needed the first time because a copy made
-with the Deploy button starts its own fresh Git history, so Git doesn't yet know the
-two repos are related; after that first merge they're joined for good and the flag just
-does nothing. If this first merge reports conflicts in files you never touched, your
-copy's starting point doesn't line up with upstream's — run the **JobBud update check**
-workflow from the Actions tab instead, which works out the right starting point for you.
+You only do that once. The merge links the two histories for good, so from then on
+updating is just:
+
+```bash
+git fetch upstream
+git merge upstream/main
+git push
+```
+
+If the `git replace` line fails with an error about a missing commit, no upstream
+snapshot matches your starting point — usually because files were changed before your
+copy's first commit. In that case run `git merge --allow-unrelated-histories
+upstream/main` and expect to resolve a long list of conflicts by hand: keep upstream's
+version of JobBud's own tool files, and keep your own version of anything under `data/`
+or `config/`.
 
 ### Will this clobber my data?
 
-Normally, no. Your personal files — `config/profile.yml`, your profile/CV markdown,
-and everything under `data/` — are yours; upstream changes don't touch them, so merges
-are usually clean. The one case where a merge can hit a conflict is if you edited
-JobBud's own tool files (code, workflows, configuration) yourself. If that happens, Git
-will flag the conflicting files and you'll need to resolve them by hand before finishing
-the merge. If you never edited the tool code, you shouldn't run into this.
+No. Your personal files — `config/profile.yml`, your profile/CV markdown, and
+everything under `data/` — are yours, and upstream never changes them, so a merge
+leaves them exactly as they are.
+
+Conflicts are a separate thing from data loss, and there are two reasons you might see
+one. The ordinary reason is that you edited JobBud's own tool files (code, workflows,
+configuration) and upstream changed the same lines; Git flags those files and you
+resolve them by hand before finishing the merge. If you never edited the tool code, you
+won't hit this. The other reason is the missing starting point described above, which
+makes Git report conflicts in files nobody edited — the `git replace --graft` step
+prevents those, and the update-check workflow does the same thing for you
+automatically.
 
 ### Breaking change: signed action links
 
