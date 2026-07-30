@@ -262,6 +262,14 @@ All optional integrations fail silently when not configured. The dashboard works
 
 Every variable below is one you add by hand in Vercel → **Settings → Environment Variables**, so the same two rules from [Deploy to Vercel](#1-deploy-to-vercel) apply: tick **Production** (Development alone does nothing for your live site), then **redeploy** so the change takes effect.
 
+**One exception:** the API job sources below are read by the scanner, not by the dashboard, so their keys go in **GitHub Actions secrets only** — the both-vaults rule does *not* apply to them.
+
+### API job sources — jobs from across the web
+
+Without them: JobBud only sees jobs on the companies in your watch list (`scanner/portals.yml`). With them: the weekly API scan also pulls listings from across the web — roles at companies you have never heard of, matched against the same profile and scored by the same pipeline. Each source is independent; set only the ones you have.
+
+The four secret names are `JSEARCH_API_KEY`, `ADZUNA_APP_ID`, `ADZUNA_API_KEY`, and `SERP_API_KEY`, and they belong in your repo's **Settings → Secrets and variables → Actions** — *not* in Vercel, because only the GitHub Actions scanner reads them. Each service has its own signup and pricing, usually with a small free tier. The step-by-step walkthrough — which service is which, where to sign up, and how to tell a missing key from a misplaced one — is in **[SETUP.md](SETUP.md#optional-api-job-sources-jsearch-adzuna-serpapi)**.
+
 ### Google Drive — automatic prep doc saving
 
 Without it: application packages and prep docs are generated and available in a popup window to copy or reference. You can regenerate them anytime. With it: prep docs save automatically to a folder in your Google Drive, with a persistent link on the job card.
