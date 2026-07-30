@@ -11,7 +11,7 @@
 // clone of the repo (e.g. ~/linkedin-research) gets it on `git pull`, and the
 // LinkedIn research agent reads it instead of asking the user to fill placeholders.
 
-import { readGithubFile, writeGithubFile } from '../lib/github.js';
+import { readGithubFile, writeGithubFile, normalizeJsonDoc } from '../lib/github.js';
 
 // This function does a heavy read (job-status.json is now ~2MB and served via the
 // slow Contents API download_url path) followed by a 6-request Git Data API write.
@@ -48,7 +48,8 @@ function researchSlug(company) {
 async function getJobStatus(githubToken, owner, repo) {
   const { exists, content } = await readGithubFile(githubToken, owner, repo, 'data/job-status.json');
   if (!exists) throw new Error('GitHub GET job-status.json failed: not found (404)');
-  return JSON.parse(content);
+  // The committed seed is the array `[]`; normalize it to the { jobs: {} } model.
+  return normalizeJsonDoc(JSON.parse(content), { jobs: {} });
 }
 
 // ── Handler ──────────────────────────────────────────────────────────────────

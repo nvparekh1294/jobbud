@@ -3,6 +3,7 @@
 // even though the repo is private.
 
 import { safeEqual } from '../lib/auth.mjs';
+import { normalizeJsonDoc } from '../lib/github.js';
 
 export default async function handler(req, res) {
   const password = process.env.DASHBOARD_PASSWORD;
@@ -75,10 +76,13 @@ export default async function handler(req, res) {
 
   let jobs;
   try {
-    jobs = JSON.parse(rawJson);
+    // The committed seed is the array `[]`; the dashboard reads `data.jobs`, so
+    // normalize to the { jobs: {} } model rather than serving a bare array.
+    jobs = normalizeJsonDoc(JSON.parse(rawJson), { jobs: {} });
   } catch (err) {
     console.error('[jobs] Failed to parse job-status.json:', err.message);
-    return res.status(200).json([]);
+    // Match the other failure paths above — an empty document, not a bare array.
+    return res.status(200).json({ jobs: {} });
   }
 
   // No CDN caching — status changes must be visible immediately on next load.

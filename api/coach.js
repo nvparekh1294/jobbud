@@ -4,7 +4,7 @@
 
 import { stringify as stringifyYaml } from 'yaml';
 import { generateInterviewPrepDoc } from '../scanner/interviewPackage.mjs';
-import { readGithubText, writeGithubFile, assertRepoPrivate, RepoPublicError } from '../lib/github.js';
+import { readGithubText, writeGithubFile, assertRepoPrivate, RepoPublicError, normalizeJsonDoc } from '../lib/github.js';
 import { detectAts } from '../lib/atsDetect.js';
 import { safeEqual } from '../lib/auth.mjs';
 import { isExtractedTextEmpty, EMPTY_RESUME_ERROR } from '../lib/resumeParse.mjs';
@@ -126,9 +126,9 @@ async function readRadar(githubToken, owner, repo) {
   const raw = await readGithubFile(githubToken, owner, repo, 'data/radar.json');
   if (!raw) return { companies: {} };
   try {
-    const parsed = JSON.parse(raw);
-    if (!parsed.companies || typeof parsed.companies !== 'object') parsed.companies = {};
-    return parsed;
+    // The committed seed is the array `[]`; normalize it to the { companies: {} }
+    // model rather than patching a property onto an array (see lib/github.js).
+    return normalizeJsonDoc(JSON.parse(raw), { companies: {} });
   } catch (e) {
     console.warn(`[coach] radar.json parse error: ${e.message}`);
     return { companies: {} };
@@ -491,8 +491,8 @@ async function handleGeneratePrep(req, res, githubToken, owner, repo) {
         await writeGithubFile(
           githubToken, owner, repo, 'data/job-status.json',
           (current) => {
-            const status = current ? JSON.parse(current) : { jobs: {} };
-            if (status.jobs?.[jobId]) status.jobs[jobId].prepDocUrl = docUrl;
+            const status = normalizeJsonDoc(current ? JSON.parse(current) : { jobs: {} }, { jobs: {} });
+            if (status.jobs[jobId]) status.jobs[jobId].prepDocUrl = docUrl;
             return JSON.stringify(status, null, 2);
           },
           'chore: update job status [skip ci]',
@@ -1461,8 +1461,9 @@ async function writeMockSessions(githubToken, owner, repo, content) {
 async function handleGetMockSessions(req, res, githubToken, owner, repo) {
   try {
     const raw = await readGithubFile(githubToken, owner, repo, 'data/mock-sessions.json');
-    const data = raw ? JSON.parse(raw) : { sessions: [] };
-    console.log(`[coach] action=get-mock-sessions count=${(data.sessions || []).length}`);
+    // The committed seed is the array `[]`; the model is { sessions: [] }.
+    const data = normalizeJsonDoc(raw ? JSON.parse(raw) : { sessions: [] }, { sessions: [] });
+    console.log(`[coach] action=get-mock-sessions count=${data.sessions.length}`);
     return res.status(200).json(data);
   } catch (err) {
     console.error('[coach] get-mock-sessions error:', err);
@@ -1476,8 +1477,10 @@ async function handleSaveMockSession(req, res, githubToken, owner, repo) {
     if (!session || !session.id) return res.status(400).json({ error: 'session with id is required' });
 
     const raw = await readGithubFile(githubToken, owner, repo, 'data/mock-sessions.json');
-    const data = raw ? JSON.parse(raw) : { sessions: [] };
-    data.sessions = [session, ...(data.sessions || [])].slice(0, 20);
+    // On a fresh install the seed is the array `[]`. Assigning .sessions to it would
+    // be dropped by JSON.stringify and the saved session would vanish on reload.
+    const data = normalizeJsonDoc(raw ? JSON.parse(raw) : { sessions: [] }, { sessions: [] });
+    data.sessions = [session, ...data.sessions].slice(0, 20);
 
     await writeMockSessions(githubToken, owner, repo, data);
     console.log(`[coach] action=save-mock-session sessionId=${session.id}`);

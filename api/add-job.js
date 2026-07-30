@@ -16,7 +16,7 @@
  */
 
 import { haikuHardFilter, sonnetScore, classifyJobType, sanitizeLocation } from '../scanner/evaluate.mjs';
-import { readGithubFile, writeGithubFile } from '../lib/github.js';
+import { readGithubFile, writeGithubFile, normalizeJsonDoc } from '../lib/github.js';
 import { safeEqual } from '../lib/auth.mjs';
 
 const GITHUB_API = 'https://api.github.com';
@@ -105,7 +105,8 @@ async function scrapeJobPage(url) {
 async function loadJobStatus(githubToken, owner, repo) {
   const { exists, content } = await readGithubFile(githubToken, owner, repo, 'data/job-status.json');
   if (!exists) return { jobs: {} };
-  return JSON.parse(content);
+  // The committed seed is the array `[]`; normalize it to the { jobs: {} } model.
+  return normalizeJsonDoc(JSON.parse(content), { jobs: {} });
 }
 
 // Field-safe add: re-read job-status.json on every attempt and set only THIS entry,
@@ -115,8 +116,10 @@ async function addJobRecord(githubToken, owner, repo, fingerprint, jobRecord) {
   const commitSha = await writeGithubFile(
     githubToken, owner, repo, 'data/job-status.json',
     (current) => {
-      const doc = current ? JSON.parse(current) : { jobs: {} };
-      if (!doc.jobs) doc.jobs = {};
+      // On a fresh install `current` is the array seed `[]`. Patching .jobs onto an
+      // array would be dropped by JSON.stringify and the manual job would vanish —
+      // normalizeJsonDoc replaces it with a real { jobs: {} } document instead.
+      const doc = normalizeJsonDoc(current ? JSON.parse(current) : { jobs: {} }, { jobs: {} });
       doc.jobs[fingerprint] = jobRecord; // add/replace only this job
       return JSON.stringify(doc, null, 2);
     },

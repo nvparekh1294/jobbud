@@ -1,6 +1,6 @@
 import { generateAndSendPackage } from '../scanner/applicationPackage.mjs';
 import { esc } from '../scanner/html.mjs';
-import { readGithubFile, writeGithubFile } from '../lib/github.js';
+import { readGithubFile, writeGithubFile, normalizeJsonDoc } from '../lib/github.js';
 import { safeEqual, verifyActionToken, actionTokenSecret, actionKeySource, actionKeyFingerprint } from '../lib/auth.mjs';
 
 const VALID_STATUSES = [
@@ -86,7 +86,8 @@ const SNOOZE_MESSAGE = (company, title) => `
 async function getJobStatus(githubToken, owner, repo) {
   const { exists, content } = await readGithubFile(githubToken, owner, repo, 'data/job-status.json');
   if (!exists) throw new Error('GitHub GET failed: data/job-status.json not found (404)');
-  return { content: JSON.parse(content) };
+  // The committed seed is the array `[]`; normalize it to the { jobs: {} } model.
+  return { content: normalizeJsonDoc(JSON.parse(content), { jobs: {} }) };
 }
 
 // Field-safe update of a single job in job-status.json.
@@ -99,8 +100,9 @@ async function updateJobStatus(githubToken, owner, repo, jobId, applyChange) {
   await writeGithubFile(
     githubToken, owner, repo, 'data/job-status.json',
     (current) => {
-      const doc = current ? JSON.parse(current) : { jobs: {} };
-      if (!doc.jobs) doc.jobs = {};
+      // The array seed `[]` cannot carry a .jobs property through JSON.stringify —
+      // normalize it to a real { jobs: {} } document before mutating.
+      const doc = normalizeJsonDoc(current ? JSON.parse(current) : { jobs: {} }, { jobs: {} });
       if (!doc.jobs[jobId]) doc.jobs[jobId] = {};
       applyChange(doc.jobs[jobId]);
       return JSON.stringify(doc, null, 2);

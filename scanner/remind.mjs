@@ -1,5 +1,5 @@
 import { esc, safeUrl } from './html.mjs';
-import { readGithubFile, writeGithubFile } from '../lib/github.js';
+import { readGithubFile, writeGithubFile, normalizeJsonDoc } from '../lib/github.js';
 import { signActionToken, actionKeySource, actionKeyFingerprint } from '../lib/auth.mjs';
 
 const GITHUB_REPO = process.env.GH_REPO;
@@ -61,7 +61,8 @@ async function loadJobStatus() {
   // never written back: saveJobStatus re-reads the current file and replays the
   // run's recorded mutations, so a stale snapshot cannot clobber concurrent writes.
   if (!exists) return { content: { jobs: {} } };
-  return { content: JSON.parse(content) };
+  // The committed seed is the array `[]`; normalize it to the { jobs: {} } model.
+  return { content: normalizeJsonDoc(JSON.parse(content), { jobs: {} }) };
 }
 
 // The save goes through writeGithubFile's BUILDER form, never the string form. The
@@ -95,8 +96,9 @@ async function saveJobStatus() {
   await writeGithubFile(
     GITHUB_TOKEN, owner, repo, 'data/job-status.json',
     (current) => {
-      const doc = current ? JSON.parse(current) : { jobs: {} };
-      if (!doc.jobs) doc.jobs = {};
+      // The array seed `[]` cannot carry a .jobs property through JSON.stringify —
+      // normalize it to a real { jobs: {} } document before replaying mutations.
+      const doc = normalizeJsonDoc(current ? JSON.parse(current) : { jobs: {} }, { jobs: {} });
       for (const { id, mutate } of toPersist) {
         if (!doc.jobs[id]) doc.jobs[id] = {};
         mutate(doc.jobs[id]);
