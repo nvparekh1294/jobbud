@@ -30,6 +30,10 @@ including which symptom points at which missing vault:
   them → `ANTHROPIC_API_KEY` is missing from **GitHub Actions secrets**
 - a dashboard whose Coach chat stays silent → `ANTHROPIC_API_KEY` is missing from
   **Vercel**
+- a working dashboard but dead Apply/Reject buttons in your emails → the two
+  vaults disagree on the signing key (`DASHBOARD_PASSWORD`, or
+  `ACTION_TOKEN_SECRET` if you set one). The scanner signs those links and the
+  dashboard verifies them, so the value must be **identical** in both.
 
 Every optional integration below follows the same rule.
 

@@ -4441,7 +4441,7 @@
   }
 
   // Close radar overlays on backdrop click (elements already exist by now).
-  ['radar-add-overlay', 'radar-detail-overlay', 'radar-research-overlay'].forEach(oid => {
+  ['radar-add-overlay', 'radar-detail-overlay', 'radar-research-overlay', 'watchlist-overlay'].forEach(oid => {
     const ov = document.getElementById(oid);
     if (ov) ov.addEventListener('click', e => { if (e.target === ov) ov.classList.remove('open'); });
   });
@@ -6061,7 +6061,11 @@
     const overlay = document.getElementById('watchlist-overlay');
     if (overlay) overlay.classList.add('open');
     watchListClearError();
-    document.getElementById('wl-loading').style.display = 'block';
+    // Reset the text too, not just visibility — a previous failed open leaves the
+    // error message in this element, and it would flash on the next open.
+    const loadingEl = document.getElementById('wl-loading');
+    loadingEl.textContent = 'Loading your watch list...';
+    loadingEl.style.display = 'block';
     document.getElementById('wl-body').style.display = 'none';
     document.getElementById('wl-rows').innerHTML = '';
     document.getElementById('wl-starter-banner').style.display = 'none';

@@ -6,7 +6,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isStarterPortalsList, PORTALS_GENERATED_MARKER, STARTER_LIST_NOTICE } from '../lib/portalsMeta.mjs';
@@ -144,6 +144,15 @@ test('the editor saves through the existing generate + private-repo write path',
   assert.match(save, /portalsYml: gen\.portalsYml/);
 });
 
+test('the watch list closes on a backdrop click like the other radar modals', () => {
+  assert.match(html, /'radar-add-overlay', 'radar-detail-overlay', 'radar-research-overlay', 'watchlist-overlay'/);
+});
+
+test('opening the editor resets the loading text, not just its visibility', () => {
+  const open = html.slice(html.indexOf('async function openWatchList'));
+  assert.match(open.slice(0, 900), /loadingEl\.textContent = 'Loading your watch list\.\.\.'/);
+});
+
 test('the editor bridges the Radar with one-click import', () => {
   assert.match(html, /On your radar — add to watch list\?/);
   const render = html.slice(html.indexOf('function watchListRenderSuggestions'));
@@ -165,9 +174,59 @@ test('the README spells out the two-vaults requirement and its symptoms', () => 
   const readme = readFileSync(join(__dirname, '..', 'README.md'), 'utf8');
   assert.match(readme, /Settings → Secrets and variables → Actions/);
   assert.match(readme, /entered \*\*twice, under the same\s*\nname, in both settings screens/);
-  // Both symptom rows, each naming the vault that is missing the key.
+  // Symptom rows, each naming the vault that is missing the key.
   assert.match(readme, /none of them ever get scored \| `ANTHROPIC_API_KEY` is missing from \*\*GitHub Actions secrets\*\*/);
   assert.match(readme, /Coach chat stays silent[^|]*\| `ANTHROPIC_API_KEY` is missing from \*\*Vercel\*\*/);
+  assert.match(readme, /invalid or expired link \| The two vaults disagree on the signing key/);
+  assert.match(readme, /point at `localhost`[^|]*\| `VERCEL_URL` is missing/);
+});
+
+// The README once said DASHBOARD_PASSWORD was "only needed by Vercel". It is the
+// fallback signing key for email action links (lib/auth.mjs), and both scan
+// workflows wire it, so following that advice silently broke every Apply/Reject
+// button in every digest. These two tests pin the docs to what the code and the
+// workflows actually do.
+
+test('every secret in the README Actions table is really read by a workflow', () => {
+  const readme = readFileSync(join(__dirname, '..', 'README.md'), 'utf8');
+  const wfDir = join(__dirname, '..', '.github', 'workflows');
+  const workflows = readdirSync(wfDir).map(f => readFileSync(join(wfDir, f), 'utf8')).join('\n');
+
+  // The table under step 3: rows between the header and the following blank line.
+  const table = readme.slice(readme.indexOf('| Secret name |'));
+  const rows = table.slice(0, table.indexOf('\n\n')).split('\n').slice(2);
+  const named = rows.map(r => (r.match(/`([A-Z_]+)`/) || [])[1]).filter(Boolean);
+
+  assert.ok(named.length >= 4, `expected the secrets table to list several secrets, got ${named}`);
+  for (const name of named) {
+    assert.ok(
+      workflows.includes(`secrets.${name}`),
+      `README tells users to add "${name}" as an Actions secret, but no workflow reads secrets.${name}`,
+    );
+  }
+  // DASHBOARD_PASSWORD specifically: the claim it was Vercel-only was the bug.
+  assert.ok(named.includes('DASHBOARD_PASSWORD'), 'DASHBOARD_PASSWORD must be listed as an Actions secret');
+  assert.doesNotMatch(readme, /only needed by Vercel/);
+  assert.doesNotMatch(readme, /GitHub Actions scanner pipeline runs without it/);
+});
+
+test('the README does not ask for GH_REPO as an Actions secret', () => {
+  const readme = readFileSync(join(__dirname, '..', 'README.md'), 'utf8');
+  const wfDir = join(__dirname, '..', '.github', 'workflows');
+  const workflows = readdirSync(wfDir).map(f => readFileSync(join(wfDir, f), 'utf8')).join('\n');
+
+  // Workflows set GH_REPO from github.repository, never from a secret.
+  assert.ok(workflows.includes('GH_REPO: ${{ github.repository }}'));
+  assert.ok(!workflows.includes('secrets.GH_REPO'));
+  assert.match(readme, /do \*\*not\*\* need to add `GH_REPO` here/);
+});
+
+test('the signing-key requirement is explained, not just listed', () => {
+  const readme = readFileSync(join(__dirname, '..', 'README.md'), 'utf8');
+  assert.match(readme, /scanner \(GitHub Actions\) \*\*signs\*\* them; the dashboard \(Vercel\) \*\*verifies\*\*/);
+  assert.match(readme, /`ACTION_TOKEN_SECRET` if\s*\n> it is set, otherwise `DASHBOARD_PASSWORD`/);
+  // And the alternative has the same both-vaults constraint.
+  assert.match(readme, /it has to\s*\n> be in \*\*both\*\* vaults too/);
 });
 
 test('the README says where the watch list lives and how to edit it', () => {

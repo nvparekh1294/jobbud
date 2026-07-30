@@ -133,7 +133,7 @@ During deploy, Vercel will prompt for four required environment variables:
 | `ANTHROPIC_API_KEY` | Your Anthropic API key |
 | `GH_TOKEN` | GitHub personal access token with `repo` scope |
 | `GH_REPO` | Your GitHub repo in the format `username/jobbud` |
-| `DASHBOARD_PASSWORD` | Password gate for the dashboard. The dashboard fails closed — it will not serve your job data unless this is set, so choose a strong value. (The GitHub Actions scanner pipeline runs without it; this one is needed only by the Vercel dashboard.) |
+| `DASHBOARD_PASSWORD` | Password gate for the dashboard. The dashboard fails closed — it will not serve your job data unless this is set, so choose a strong value. It is also the default signing key for the Apply/Reject buttons in your digest emails, so [step 3](#3-configure-github-actions--yes-the-same-keys-again) has you add the **same value** to GitHub Actions secrets — the scanner signs those links and the dashboard verifies them. |
 
 > **Adding or editing a variable by hand? Two things to get right.** The Deploy button sets all of this up for you, but if you ever add or change a variable yourself in Vercel → **Settings → Environment Variables**:
 >
@@ -189,13 +189,32 @@ half that has the key works, the half that doesn't fails quietly.
 In your GitHub repo, go to **Settings → Secrets and variables → Actions**, open
 the **Secrets** tab, and click **New repository secret** for each of these:
 
-| Secret name | Same value you gave Vercel |
-|-------------|---------------------------|
-| `ANTHROPIC_API_KEY` | yes — the same key |
-| `GH_TOKEN` | yes |
-| `GH_REPO` | yes (`username/jobbud`) |
+| Secret name | Value | Why the scanner needs it |
+|-------------|-------|--------------------------|
+| `ANTHROPIC_API_KEY` | the same key you gave Vercel | Scoring every job it finds |
+| `GH_TOKEN` | the same token you gave Vercel | Reading your profile files and committing results back |
+| `DASHBOARD_PASSWORD` | **must match Vercel exactly** | Signs the Apply/Reject buttons in your digest emails — see below |
+| `VERCEL_URL` | your deployment host, e.g. `your-app.vercel.app` (no `https://`) | Builds the links in your emails. Without it they point at `localhost` and go nowhere |
 
-`DASHBOARD_PASSWORD` is the exception: it is only needed by Vercel.
+You do **not** need to add `GH_REPO` here — GitHub Actions fills it in
+automatically from the repo the workflow is running in.
+
+> **`DASHBOARD_PASSWORD` must be identical in both places, and here's why.**
+> The Apply / Reject / Save buttons in your digest emails are signed links. The
+> scanner (GitHub Actions) **signs** them; the dashboard (Vercel) **verifies**
+> them — and both derive the signing key the same way: `ACTION_TOKEN_SECRET` if
+> it is set, otherwise `DASHBOARD_PASSWORD` (`lib/auth.mjs`). So the two halves
+> must arrive at the *same* key or no signature will ever match.
+>
+> **The symptom:** every button in every digest email fails, usually as an
+> "invalid or expired link" — while the dashboard itself works perfectly. That
+> means the two vaults disagree: `DASHBOARD_PASSWORD` is set in Vercel but
+> missing from (or different in) GitHub Actions secrets.
+>
+> Setting a dedicated `ACTION_TOKEN_SECRET` is the cleaner option — it stops
+> your dashboard password from doubling as a signing key. If you do, it has to
+> be in **both** vaults too, with the same value. Setting it in only one place
+> breaks the links in exactly the same way.
 
 **Which symptom means which vault is missing the key:**
 
@@ -203,6 +222,8 @@ the **Secrets** tab, and click **New repository secret** for each of these:
 |--------------|----------------|
 | A scan run finishes but says the API key is not set, or it finds jobs and none of them ever get scored | `ANTHROPIC_API_KEY` is missing from **GitHub Actions secrets** |
 | The dashboard's Coach chat stays silent, or onboarding never produces your files | `ANTHROPIC_API_KEY` is missing from **Vercel** environment variables (and check it's ticked for **Production**) |
+| The dashboard works fine, but every Apply/Reject button in your emails fails as an invalid or expired link | The two vaults disagree on the signing key — `DASHBOARD_PASSWORD` (or `ACTION_TOKEN_SECRET`) differs between **Vercel** and **GitHub Actions secrets** |
+| Email buttons point at `localhost` and go nowhere | `VERCEL_URL` is missing from **GitHub Actions secrets** |
 
 The same two-places rule applies to every optional integration you add later —
 Google Drive, SendGrid, Telegram, Firecrawl. [SETUP.md](SETUP.md) repeats it for
