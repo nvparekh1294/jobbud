@@ -153,7 +153,15 @@ JobBud reads five personal files to score jobs and generate applications: `CLAUD
 
 Either way, these files live **in your private repo** — that is how the scanner (which runs from a fresh checkout in GitHub Actions) and the dashboard read them. The `.gitignore` lists them for a different reason: if you also work in a local clone, it stops you from hand-committing a second, stale copy — JobBud keeps the canonical versions in your repo for you. (This is also why your repo must be private: it holds these files.)
 
-**Your company watch-list.** Onboarding also asks which companies you want JobBud to watch and builds a personalized `scanner/portals.yml` from their careers-page URLs — this **replaces** the example company list that ships with the repo, so your scans target *your* companies from day one instead of the maintainer's. You can **Skip** that step to keep the example list for now. Hand-editing `scanner/portals.yml` stays the power-user path for tuning per-company keywords, marking stealth companies, or filling in Workday tenant/site details; see the comments at the top of that file.
+**Your company watch-list.** Onboarding also asks which companies you want JobBud to watch and builds a personalized `scanner/portals.yml` from their careers-page URLs — this **replaces** the example company list that ships with the repo, so your scans target *your* companies from day one instead of the maintainer's. You can **Skip** that step and set your companies later.
+
+**Where the watch list lives, and how to change it any time.** The list is one file in your repo, `scanner/portals.yml`, and it is the only thing that decides which companies get checked on every scan. Three ways to edit it:
+
+- **The dashboard — Radar tab → "⚙ Edit Watch List".** The everyday way, and the one to use if you skipped the onboarding step. It shows the companies currently being scanned, lets you add, edit, or remove them, works out each company's job board from its careers URL, and saves the whole list back to your repo. Saving **replaces** the list with exactly what's on screen. It also offers any company on your **Radar** that isn't being scanned yet as a one-click add — Radar and the watch list are two separate lists, and this is how you connect them.
+- **Onboarding's companies step** (Coach tab → Onboarding), which builds the list from scratch as part of first-time setup.
+- **Hand-editing `scanner/portals.yml`**, still the power-user path for tuning per-company keywords, marking stealth companies, or filling in Workday tenant/site details; see the comments at the top of that file.
+
+If you never set your own list, every scan runs on the example companies and your digests say so, with one line at the top pointing you back here.
 
 Prefer to start from templates instead of onboarding? Copy the examples and fill them in by hand:
 
@@ -165,15 +173,42 @@ cp story-bank.md.example story-bank.md
 
 `config/profile.yml` is the one that matters most — it tells the scanner what roles to target and drives how every job is scored against your profile. See the inline comments in the example file for guidance on each field.
 
-### 3. Configure GitHub Actions
+### 3. Configure GitHub Actions — yes, the same keys again
 
-In your GitHub repo, go to **Settings → Secrets and variables → Actions** and add the same three variables:
+**This step is not optional, and it is the one people miss.** JobBud runs in two
+places that cannot see each other's settings:
 
-- `ANTHROPIC_API_KEY`
-- `GH_TOKEN`
-- `GH_REPO`
+- the **dashboard**, which runs on Vercel and reads Vercel's environment variables, and
+- the **scanner**, which runs on GitHub Actions and reads GitHub's repository secrets.
 
-The scanner runs automatically on a cron schedule once secrets are set. To trigger a manual scan, go to the **Actions** tab and trigger the workflow from there.
+Setting a key in Vercel does **not** make it available to the scanner, and vice
+versa. Each key you need in both places has to be entered **twice, under the same
+name, in both settings screens.** Nothing warns you when only one is set — the
+half that has the key works, the half that doesn't fails quietly.
+
+In your GitHub repo, go to **Settings → Secrets and variables → Actions**, open
+the **Secrets** tab, and click **New repository secret** for each of these:
+
+| Secret name | Same value you gave Vercel |
+|-------------|---------------------------|
+| `ANTHROPIC_API_KEY` | yes — the same key |
+| `GH_TOKEN` | yes |
+| `GH_REPO` | yes (`username/jobbud`) |
+
+`DASHBOARD_PASSWORD` is the exception: it is only needed by Vercel.
+
+**Which symptom means which vault is missing the key:**
+
+| What you see | What's missing |
+|--------------|----------------|
+| A scan run finishes but says the API key is not set, or it finds jobs and none of them ever get scored | `ANTHROPIC_API_KEY` is missing from **GitHub Actions secrets** |
+| The dashboard's Coach chat stays silent, or onboarding never produces your files | `ANTHROPIC_API_KEY` is missing from **Vercel** environment variables (and check it's ticked for **Production**) |
+
+The same two-places rule applies to every optional integration you add later —
+Google Drive, SendGrid, Telegram, Firecrawl. [SETUP.md](SETUP.md) repeats it for
+each one.
+
+The scanner runs automatically on a cron schedule once secrets are set. To trigger a manual scan, go to the **Actions** tab and trigger the workflow from there — if a key is missing, that run's log is where it will say so.
 
 That's it — you're set up. Open your dashboard at `https://<your-deployment>.vercel.app/dashboard` (remember the `/dashboard` — the bare root URL returns a Vercel `404: NOT_FOUND`, which is expected) and start with the **Coach** tab's onboarding if you haven't configured your profile yet.
 

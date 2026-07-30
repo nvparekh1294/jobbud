@@ -9,6 +9,32 @@ integrations fail silently when their environment variables are absent.
 
 ---
 
+## First, the rule that applies to everything below
+
+JobBud runs in **two separate places**, and they cannot see each other's settings:
+
+| Where | What runs there | Where it reads keys from |
+|-------|-----------------|--------------------------|
+| **Vercel** | the dashboard and its API | **Settings → Environment Variables** (tick **Production**) |
+| **GitHub Actions** | the scheduled scanner | **Settings → Secrets and variables → Actions** |
+
+Any key both halves need must be entered **twice, under the same name, in both
+screens**. Setting it in one place does nothing for the other, and nothing warns
+you — the half with the key works and the half without it fails quietly.
+
+This is the single most common setup problem. The core keys are covered in the
+README's [step 3](README.md#3-configure-github-actions--yes-the-same-keys-again),
+including which symptom points at which missing vault:
+
+- a scan run that says the API key is not set, or finds jobs and never scores
+  them → `ANTHROPIC_API_KEY` is missing from **GitHub Actions secrets**
+- a dashboard whose Coach chat stays silent → `ANTHROPIC_API_KEY` is missing from
+  **Vercel**
+
+Every optional integration below follows the same rule.
+
+---
+
 ## Optional: Auto-save prep docs to Google Drive
 
 **What you get:** when you generate an interview prep doc, JobBud creates a real
@@ -111,8 +137,9 @@ the portal and company-career-page scan. Each source is independent — set only
 the keys you have. See `.env.example` for the variable names
 (`JSEARCH_API_KEY`, `ADZUNA_APP_ID`, `ADZUNA_API_KEY`, `SERP_API_KEY`).
 
-Without any of them, JobBud still scans everything configured in
-`scanner/portals.yml`.
+Without any of them, JobBud still scans everything on your company watch list —
+the file `scanner/portals.yml`, which you edit from the dashboard's **Radar tab →
+⚙ Edit Watch List**.
 
 ---
 

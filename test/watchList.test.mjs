@@ -159,6 +159,37 @@ test('onboarding and the editor share one row implementation', () => {
   assert.match(html, /function watchListAddRow[\s\S]{0,160}companyRowsAdd\('wl-rows'/);
 });
 
+// ── Docs ──────────────────────────────────────────────────────────────────────
+
+test('the README spells out the two-vaults requirement and its symptoms', () => {
+  const readme = readFileSync(join(__dirname, '..', 'README.md'), 'utf8');
+  assert.match(readme, /Settings → Secrets and variables → Actions/);
+  assert.match(readme, /entered \*\*twice, under the same\s*\nname, in both settings screens/);
+  // Both symptom rows, each naming the vault that is missing the key.
+  assert.match(readme, /none of them ever get scored \| `ANTHROPIC_API_KEY` is missing from \*\*GitHub Actions secrets\*\*/);
+  assert.match(readme, /Coach chat stays silent[^|]*\| `ANTHROPIC_API_KEY` is missing from \*\*Vercel\*\*/);
+});
+
+test('the README says where the watch list lives and how to edit it', () => {
+  const readme = readFileSync(join(__dirname, '..', 'README.md'), 'utf8');
+  assert.match(readme, /Where the watch list lives/);
+  assert.match(readme, /Radar tab → "⚙ Edit Watch List"/);
+  assert.match(readme, /`scanner\/portals\.yml`/);
+});
+
+test('SETUP.md leads with the two-vaults rule and links to the README step', () => {
+  const setup = readFileSync(join(__dirname, '..', 'SETUP.md'), 'utf8');
+  assert.match(setup, /two separate places/);
+  assert.match(setup, /Settings → Secrets and variables → Actions/);
+  // The cross-ref must point at a heading that actually exists in the README.
+  const anchor = setup.match(/README\.md(#[a-z0-9-]+)\)/);
+  assert.ok(anchor, 'SETUP.md cross-references a README anchor');
+  const readme = readFileSync(join(__dirname, '..', 'README.md'), 'utf8');
+  const slugs = [...readme.matchAll(/^#{2,4} (.+)$/gm)].map(m =>
+    m[1].toLowerCase().replace(/[^\w\s-]/g, '').trim().replace(/\s/g, '-'));
+  assert.ok(slugs.includes(anchor[1].slice(1)), `README has no heading for ${anchor[1]}`);
+});
+
 test('the onboarding companies step is still wired to its own container', () => {
   assert.match(html, /id="onboarding-step-companies"/);
   assert.match(html, /id="onboarding-companies-rows"/);
