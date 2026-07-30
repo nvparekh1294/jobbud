@@ -332,6 +332,9 @@ Once a week it looks at the upstream JobBud repo, and if there are new commits i
 a **pull request** in your own repo with those changes. You just review the PR and click
 **Merge**. Nothing is applied until you approve it.
 
+Updates deliver vetted **releases** — the newest tagged version, not whatever is
+mid-flight on upstream's main branch.
+
 It needs one one-time setting to be allowed to open PRs for you. In your repo, go to
 **Settings → Actions → General**, scroll to **Workflow permissions**, and enable
 **"Allow GitHub Actions to create and approve pull requests."** Without this, the
