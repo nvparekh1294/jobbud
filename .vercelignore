@@ -28,6 +28,7 @@
 !/lib/auth.mjs
 !/lib/github.js
 !/lib/memory.mjs
+!/lib/portalsMeta.mjs
 !/lib/resumeParse.mjs
 
 # 4. scanner: ONLY the modules imported by api/*.js at runtime.

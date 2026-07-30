@@ -28,7 +28,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { builtinModules } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
@@ -82,9 +84,13 @@ function resolveRelative(fromFile, spec) {
   return null;
 }
 
-// Walk the graph from every api/*.js entry point. Returns a Map of
-// package name -> sorted list of files that import it.
-function traceExternalPackages() {
+// Walk the graph from every api/*.js entry point.
+// Returns { external, files }:
+//   external — Map of package name -> sorted list of files that import it
+//   files    — sorted repo-relative paths of every FILE reachable from api/,
+//              including the api entry points themselves. This is the set that
+//              must survive .vercelignore (see the bundling test below).
+function traceApiGraph() {
   const entries = fs
     .readdirSync(API_DIR)
     .filter((f) => f.endsWith('.js') || f.endsWith('.mjs'))
@@ -120,9 +126,14 @@ function traceExternalPackages() {
     }
   }
 
-  return new Map(
-    [...external].map(([pkg, files]) => [pkg, [...files].sort()]),
-  );
+  return {
+    external: new Map([...external].map(([pkg, files]) => [pkg, [...files].sort()])),
+    files: [...seen].map((f) => path.relative(ROOT, f).split(path.sep).join('/')).sort(),
+  };
+}
+
+function traceExternalPackages() {
+  return traceApiGraph().external;
 }
 
 function apiDependencies() {
@@ -154,4 +165,88 @@ test('the api import tracer actually reaches external packages', () => {
   const used = traceExternalPackages();
   assert.ok(used.size > 0, 'tracer found no external imports under api/ -- it is broken');
   assert.ok(used.has('yaml'), "tracer did not find api/coach.js's 'yaml' import");
+});
+
+// ── .vercelignore allowlist ───────────────────────────────────────────────────
+//
+// SECOND WAY THE SAME FUNCTION DIES. The test above covers EXTERNAL packages.
+// This one covers OUR OWN files. .vercelignore is an allowlist -- `/*` drops
+// every top-level entry and each needed path is re-included by name -- so adding
+// a new module under lib/ or scanner/ and importing it from api/ silently ships
+// a bundle WITHOUT that file. Every request to the function then fails at import
+// with ERR_MODULE_NOT_FOUND, exactly like the missing-package case, and nothing
+// in local dev or `node --test` notices because the file is right there on disk.
+//
+// That is precisely how lib/portalsMeta.mjs went out: api/coach.js imported it,
+// .vercelignore did not re-include it, and every coach request 500'd.
+//
+// Rather than reimplement gitignore matching (the anchored `/*` + negation
+// subset is subtle -- notably that a re-include cannot resurrect a file whose
+// parent dir is still excluded), this shells out to git itself, which is the
+// same semantics Vercel applies to .vercelignore.
+
+// Ask git which of `paths` .vercelignore excludes. A throwaway repo whose
+// .gitignore IS our .vercelignore; --no-index means the files need not exist.
+function vercelIgnoredPaths(paths) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobbud-vercelignore-'));
+  try {
+    execFileSync('git', ['init', '-q', '.'], { cwd: dir, stdio: 'pipe' });
+    fs.copyFileSync(path.join(ROOT, '.vercelignore'), path.join(dir, '.gitignore'));
+
+    // check-ignore exits 1 when NOTHING matches, which is a legitimate result.
+    let stdout = '';
+    try {
+      stdout = execFileSync('git', ['check-ignore', '--no-index', '--stdin'], {
+        cwd: dir,
+        input: paths.join('\n'),
+        encoding: 'utf8',
+      });
+    } catch (err) {
+      if (err.status !== 1) throw err;
+      stdout = err.stdout || '';
+    }
+    return new Set(stdout.split('\n').map((s) => s.trim()).filter(Boolean));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('every file an api function imports is shipped by .vercelignore', () => {
+  const { files } = traceApiGraph();
+  const ignored = vercelIgnoredPaths(files);
+  const dropped = files.filter((f) => ignored.has(f));
+
+  assert.deepEqual(
+    dropped,
+    [],
+    'These files are reachable from api/ but .vercelignore EXCLUDES them from the ' +
+      'Vercel bundle, so the function will crash at import with ERR_MODULE_NOT_FOUND ' +
+      'on every request (it works locally because the file exists on disk). ' +
+      `Add a "!/<path>" re-include line for each to .vercelignore:\n${
+        dropped.map((f) => `  ${f}`).join('\n')}`,
+  );
+});
+
+// Guards the guard: if the tracer or the git simulation silently returned
+// nothing, the assertion above would pass no matter what .vercelignore said.
+test('the .vercelignore simulation is actually working', () => {
+  const { files } = traceApiGraph();
+  assert.ok(files.length > 5, `tracer reached only ${files.length} files -- it is broken`);
+  assert.ok(files.includes('api/coach.js'), 'tracer did not reach api/coach.js');
+  assert.ok(files.includes('lib/portalsMeta.mjs'), 'tracer did not reach lib/portalsMeta.mjs');
+
+  // A path .vercelignore is known to exclude must come back as ignored -- proves
+  // the git simulation is evaluating the rules rather than matching nothing.
+  const ignored = vercelIgnoredPaths(['lib/ssrf.mjs', 'cv.md', 'api/coach.js', 'lib/github.js']);
+  assert.ok(ignored.has('lib/ssrf.mjs'), 'simulation failed to exclude scanner-only lib/ssrf.mjs');
+  assert.ok(ignored.has('cv.md'), 'simulation failed to exclude a personal file');
+  assert.ok(!ignored.has('api/coach.js'), 'simulation wrongly excluded api/coach.js');
+  assert.ok(!ignored.has('lib/github.js'), 'simulation wrongly excluded a re-included lib file');
+});
+
+// The dashboard is served from the same deployment, so it has to survive too.
+test('.vercelignore ships the dashboard and the manifests', () => {
+  const needed = ['dashboard/index.html', 'package.json', 'package-lock.json', 'vercel.json'];
+  const ignored = vercelIgnoredPaths(needed);
+  assert.deepEqual([...ignored], [], 'these must be in the Vercel bundle');
 });
