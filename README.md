@@ -194,10 +194,14 @@ the **Secrets** tab, and click **New repository secret** for each of these:
 | `ANTHROPIC_API_KEY` | the same key you gave Vercel | Scoring every job it finds |
 | `GH_TOKEN` | the same token you gave Vercel | Reading your profile files and committing results back |
 | `DASHBOARD_PASSWORD` | **must match Vercel exactly** | Signs the Apply/Reject buttons in your digest emails — see below |
-| `VERCEL_URL` | your deployment host, e.g. `your-app.vercel.app` (no `https://`) | Builds the links in your emails. Without it they point at `localhost` and go nowhere |
+| `VERCEL_URL` | your deployment URL **including the scheme**, e.g. `https://your-app.vercel.app` | Builds the links in your emails. Without it they point at `localhost` and go nowhere |
 
 You do **not** need to add `GH_REPO` here — GitHub Actions fills it in
 automatically from the repo the workflow is running in.
+
+Include the `https://` on `VERCEL_URL`. Some parts of the scanner use the value
+exactly as you give it, so a bare `your-app.vercel.app` produces links with no
+scheme — they look right in the email and go nowhere when clicked.
 
 > **`DASHBOARD_PASSWORD` must be identical in both places, and here's why.**
 > The Apply / Reject / Save buttons in your digest emails are signed links. The

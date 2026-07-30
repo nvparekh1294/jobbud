@@ -221,6 +221,25 @@ test('the README does not ask for GH_REPO as an Actions secret', () => {
   assert.match(readme, /do \*\*not\*\* need to add `GH_REPO` here/);
 });
 
+// scanner/remind.mjs and scanner/weeklyDigest.mjs interpolate VERCEL_URL raw,
+// with none of the https:// normalization notify.mjs / telegram.mjs / action.js
+// do. A documented bare host therefore ships scheme-less dead links in the
+// reminder and weekly-digest emails, so every example must carry the scheme.
+test('every documented VERCEL_URL example includes the scheme', () => {
+  for (const f of ['README.md', 'SETUP.md', '.env.example']) {
+    const text = readFileSync(join(__dirname, '..', f), 'utf8');
+    for (const line of text.split('\n')) {
+      if (!line.includes('your-app.vercel.app')) continue;
+      // A line that calls the bare form out as the WRONG one is the point, not a
+      // violation — it is what warns the user off it.
+      if (/\bbare\b/.test(line)) continue;
+      assert.match(line, /https:\/\/your-app\.vercel\.app/,
+        `${f} recommends a bare-host VERCEL_URL: ${line.trim()}`);
+    }
+    assert.doesNotMatch(text, /no https:\/\//, `${f} still tells users to omit the scheme`);
+  }
+});
+
 test('the signing-key requirement is explained, not just listed', () => {
   const readme = readFileSync(join(__dirname, '..', 'README.md'), 'utf8');
   assert.match(readme, /scanner \(GitHub Actions\) \*\*signs\*\* them; the dashboard \(Vercel\) \*\*verifies\*\*/);
