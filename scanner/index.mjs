@@ -27,6 +27,7 @@ import { persistJobs } from './persistJobs.mjs';
 import { checkQuota, recordUsage } from './quota.mjs';
 import { loadConfig } from './config.mjs';
 import { actionKeySource, actionKeyFingerprint } from '../lib/auth.mjs';
+import { isStarterPortalsList, STARTER_LIST_NOTICE } from '../lib/portalsMeta.mjs';
 
 const SCAN_MODE = process.env.SCAN_MODE || 'standard';
 const IS_DRY_RUN = process.argv.includes('--dry-run') || process.env.DRY_RUN === 'true';
@@ -124,8 +125,27 @@ async function run() {
   }
 
   // ── Portal scanner — runs first, no quota needed ─────────────────────────
+  //
+  // Before scanning, answer the question a confused user can't: are these even
+  // my companies? Skipping onboarding's companies step leaves the maintainer's
+  // example scanner/portals.yml in place, and every digest after that is full of
+  // roles at companies the user never chose, with nothing saying why. When the
+  // file still has no sign of being personalized we say so in the log and add one
+  // line to the digest. Detection lives in lib/portalsMeta.mjs.
   let portalJobs = [];
   if (runPortals) {
+    try {
+      const portalsRaw = await fs.readFile(new URL('./portals.yml', import.meta.url), 'utf8');
+      if (isStarterPortalsList(portalsRaw)) {
+        config.usingStarterPortals = true;
+        console.warn(`[index] ${STARTER_LIST_NOTICE}`);
+      }
+    } catch (err) {
+      // A missing/unreadable portals.yml is the portal scanner's problem to
+      // report; never turn a read failure into a scary line in someone's digest.
+      console.warn(`[index] Could not check the watch list: ${err.message}`);
+    }
+
     try {
       portalJobs = await fetchPortals();
       console.log(`[index] Portal scanner: ${portalJobs.length} jobs fetched`);

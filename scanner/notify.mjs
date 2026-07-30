@@ -2,6 +2,7 @@ import { esc, safeUrl } from './html.mjs';
 import { readGithubFile } from '../lib/github.js';
 import { signActionToken } from '../lib/auth.mjs';
 import { fingerprint } from './dedup.mjs';
+import { STARTER_LIST_NOTICE } from '../lib/portalsMeta.mjs';
 
 // Build the set of dedup fingerprints the owner has ENGAGED with in
 // data/job-status.json, so the digest never re-emails a job already in flight —
@@ -174,6 +175,12 @@ export function buildEmail(jobs, config = {}) {
 
   jobs = dedupByTitle(jobs);
 
+  // One line at the top of the digest when the scan ran on the example company
+  // list that ships with the repo. Someone who skipped onboarding's companies
+  // step otherwise has no way to tell why the matches are at companies they
+  // never picked. Set by scanner/index.mjs; absent on every other path.
+  const starterNotice = config.usingStarterPortals ? STARTER_LIST_NOTICE : '';
+
   // Cap the emailed list at config.maxJobsPerDigest (highest scores first).
   // Everything above the cap still lives in the dashboard; the email notes how
   // many were held back so the digest stays skimmable instead of a 700-row wall.
@@ -265,12 +272,14 @@ export function buildEmail(jobs, config = {}) {
   .btn-reject { background: #fef2f2; color: #dc2626; }
   .btn-disabled { background: #f3f4f6; color: #9ca3af; cursor: default; }
   .footer { padding: 20px 32px; font-size: 12px; color: #9ca3af; }
+  .starter-notice { padding: 12px 32px; background: #fffbeb; color: #92400e; font-size: 13px; border-bottom: 1px solid #fde68a; }
 </style></head>
 <body>
   <div class="header">
     <h1>JobBud Digest</h1>
     <p>${dateStr} · ${jobs.length} new match${jobs.length !== 1 ? 'es' : ''}</p>
   </div>
+  ${starterNotice ? `<div class="starter-notice">${esc(starterNotice)}</div>` : ''}
   ${topJobs.length ? `<div class="section"><p class="label">🟢 Apply Now (${topJobs.length})</p>${topJobs.map(j => card(j, 'top')).join('')}</div>` : ''}
   ${reviewJobs.length ? `<div class="section"><p class="label">🟡 Worth a Look (${reviewJobs.length})</p>${reviewJobs.map(j => card(j, 'review')).join('')}</div>` : ''}
   ${radarJobs.length ? `<div class="section"><p class="label">🔵 On the Radar (${radarJobs.length})</p>${radarJobs.map(j => card(j, 'radar')).join('')}</div>` : ''}
@@ -279,7 +288,7 @@ export function buildEmail(jobs, config = {}) {
   <div class="footer">JobBud · Automated job digest</div>
 </body></html>`;
 
-  return { subject, html, text: buildTextDigest(jobs, moreNote) };
+  return { subject, html, text: buildTextDigest(jobs, moreNote, starterNotice) };
 }
 
 function fundingLine(snapshot) {
@@ -322,8 +331,9 @@ function card(job, type) {
   </div>`;
 }
 
-function buildTextDigest(jobs, moreNote = '') {
+function buildTextDigest(jobs, moreNote = '', starterNotice = '') {
   const lines = [`JOBBUD DIGEST — ${new Date().toLocaleString()}\n`, `${jobs.length} new matches\n`, '='.repeat(60)];
+  if (starterNotice) lines.push(starterNotice, '');
   if (moreNote) lines.push(moreNote, '');
   for (const job of jobs) {
     const jobId = job._fingerprint || '';

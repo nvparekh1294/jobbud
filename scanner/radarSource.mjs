@@ -39,6 +39,50 @@ const RADAR_PATH = path.join(__dirname, '../data/radar.json');
 const SUPPORTED_ATS = ['greenhouse', 'ashby', 'lever'];
 
 /**
+ * Pure selection core, exported for tests: split the radar companies into the
+ * ones this run will scan and a tally of why the rest were left out. Each
+ * company falls into exactly one bucket, so total === scanned + the three skips.
+ *
+ * @param {Array<object>} companies — raw data/radar.json company records
+ * @param {string} cadenceNorm — 'all' | 'daily' | 'weekly' (already lowercased)
+ * @returns {{ configs: Array<object>, counts: { total, toggleOff, otherCadence, noMapping } }}
+ */
+export function selectRadarCompanies(companies, cadenceNorm = 'all') {
+  const configs = [];
+  const counts = { total: companies.length, toggleOff: 0, otherCadence: 0, noMapping: 0 };
+
+  for (const c of companies) {
+    if (!c.scannerEnabled) { counts.toggleOff++; continue; }
+
+    // Cadence gate — 'all' lets everything through; otherwise match scanFrequency.
+    if (cadenceNorm !== 'all' && (c.scanFrequency || 'daily') !== cadenceNorm) {
+      counts.otherCadence++;
+      continue;
+    }
+
+    const atsBoard = (c.atsBoard || '').toLowerCase();
+    const atsSlug = (c.atsSlug || '').trim();
+
+    if (!SUPPORTED_ATS.includes(atsBoard) || !atsSlug) {
+      counts.noMapping++;
+      console.log(`[radar] ${c.company}: scanner on but no ATS board mapping (atsBoard/atsSlug) — skipping. Set it on the dashboard to enable scanning.`);
+      continue;
+    }
+
+    configs.push({
+      name: c.company,
+      ats: atsBoard,
+      ats_id: atsSlug,
+      keywords: [],            // radar companies are user-curated — no keyword narrowing
+      category: 'radar',
+      stealth: false,
+    });
+  }
+
+  return { configs, counts };
+}
+
+/**
  * Read enabled, ATS-mapped radar companies that match the cadence and scan them.
  * Returns normalized jobs (source:'portal') ready for the existing pipeline.
  *
@@ -62,31 +106,18 @@ export async function fetchRadar({ cadence = 'all' } = {}) {
   if (all.length === 0) return [];
 
   const cadenceNorm = String(cadence).toLowerCase();
-  const configs = [];
+  const { configs, counts } = selectRadarCompanies(all, cadenceNorm);
 
-  for (const c of all) {
-    if (!c.scannerEnabled) continue;
-
-    // Cadence gate — 'all' lets everything through; otherwise match scanFrequency.
-    if (cadenceNorm !== 'all' && (c.scanFrequency || 'daily') !== cadenceNorm) continue;
-
-    const atsBoard = (c.atsBoard || '').toLowerCase();
-    const atsSlug = (c.atsSlug || '').trim();
-
-    if (!SUPPORTED_ATS.includes(atsBoard) || !atsSlug) {
-      console.log(`[radar] ${c.company}: scanner on but no ATS board mapping (atsBoard/atsSlug) — skipping. Set it on the dashboard to enable scanning.`);
-      continue;
-    }
-
-    configs.push({
-      name: c.company,
-      ats: atsBoard,
-      ats_id: atsSlug,
-      keywords: [],            // radar companies are user-curated — no keyword narrowing
-      category: 'radar',
-      stealth: false,
-    });
-  }
+  // One summary line per run. Every gate below used to drop companies silently,
+  // so a user who had mapped a company correctly but left the scan toggle off had
+  // no way to tell from the log why it never showed up. Counts only — the
+  // per-company detail for the fixable case (no board mapping) is logged above.
+  console.log(
+    `[radar] ${counts.total} companies on radar — ${configs.length} enabled for scanning, ` +
+    `${counts.toggleOff} skipped (scan toggle off), ` +
+    `${counts.noMapping} skipped (no job-board mapping), ` +
+    `${counts.otherCadence} skipped (different scan frequency)`,
+  );
 
   if (configs.length === 0) {
     console.log(`[radar] No mapped radar companies match cadence '${cadenceNorm}' — nothing to scan`);
