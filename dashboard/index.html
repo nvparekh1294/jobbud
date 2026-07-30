@@ -545,11 +545,22 @@
     .btn-scanner { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
     .btn-scanner.on { background: #effdfb; color: #0d9488; border-color: #99f6e4; }
 
-    /* Radar generic modal (Add Company, Company Detail, Radar Research) */
-    #radar-add-overlay, #radar-detail-overlay, #radar-research-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 200; align-items: center; justify-content: center; }
-    #radar-add-overlay.open, #radar-detail-overlay.open, #radar-research-overlay.open { display: flex; }
-    #radar-add-modal, #radar-detail-modal, #radar-research-modal { background: var(--surface); border-radius: 12px; padding: 28px 32px; width: 600px; max-width: calc(100vw - 32px); max-height: calc(100vh - 40px); overflow-y: auto; box-shadow: 0 8px 40px rgba(0,0,0,0.18); }
-    #radar-add-modal h3, #radar-detail-modal h3, #radar-research-modal h3 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin-bottom: 16px; }
+    /* Radar generic modal (Add Company, Company Detail, Radar Research, Watch List) */
+    #radar-add-overlay, #radar-detail-overlay, #radar-research-overlay, #watchlist-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 200; align-items: center; justify-content: center; }
+    #radar-add-overlay.open, #radar-detail-overlay.open, #radar-research-overlay.open, #watchlist-overlay.open { display: flex; }
+    #radar-add-modal, #radar-detail-modal, #radar-research-modal, #watchlist-modal { background: var(--surface); border-radius: 12px; padding: 28px 32px; width: 600px; max-width: calc(100vw - 32px); max-height: calc(100vh - 40px); overflow-y: auto; box-shadow: 0 8px 40px rgba(0,0,0,0.18); }
+    #radar-add-modal h3, #radar-detail-modal h3, #radar-research-modal h3, #watchlist-modal h3 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin-bottom: 16px; }
+
+    /* Watch List editor */
+    #radar-watchlist-btn { padding: 8px 16px; background: none; color: var(--muted); border: 1px solid var(--border); border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+    #radar-watchlist-btn:hover { color: var(--text); border-color: var(--muted); }
+    .wl-intro { font-size: 13px; color: var(--muted); line-height: 1.6; margin-bottom: 16px; }
+    .wl-banner { font-size: 13px; color: var(--amber); background: var(--amber-bg); border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; line-height: 1.5; }
+    .wl-section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin: 22px 0 10px; }
+    .wl-suggestion { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; background: var(--bg); }
+    .wl-suggestion .wl-sug-name { font-size: 13px; font-weight: 600; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    .wl-suggestion .wl-sug-note { font-size: 12px; color: var(--muted); }
+    .wl-error { display: none; color: #b3261e; font-size: 13px; margin-top: 10px; line-height: 1.5; }
     .radar-priority-row { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 2px; }
     .radar-priority-row label { display: flex; align-items: center; gap: 7px; font-size: 13px; cursor: pointer; }
     .radar-priority-row input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
@@ -1062,6 +1073,39 @@
   </div>
 </div>
 
+<!-- Radar: Watch List editor modal -->
+<div id="watchlist-overlay">
+  <div id="watchlist-modal">
+    <h3>Watch List</h3>
+    <div class="wl-intro">
+      These are the companies JobBud checks for new roles on every scan. Paste each company's careers page — the link to their jobs list. Saving replaces your whole watch list with what's below.
+    </div>
+    <div class="wl-banner" id="wl-starter-banner" style="display:none">
+      You're still on the built-in example list, so your scans are finding roles at companies you didn't pick. Add your own below and save.
+    </div>
+
+    <div class="loading" id="wl-loading">Loading your watch list...</div>
+
+    <div id="wl-body" style="display:none">
+      <div id="wl-rows"></div>
+      <button type="button" class="coach-back-link" style="background:none;border:none;color:var(--accent);cursor:pointer;font-size:13px;padding:4px 0" onclick="watchListAddRow()">+ Add another company</button>
+
+      <!-- Radar bridge: companies already on the Radar that aren't being scanned -->
+      <div id="wl-suggestions-wrap" style="display:none">
+        <div class="wl-section-label">On your radar — add to watch list?</div>
+        <div id="wl-suggestions"></div>
+      </div>
+
+      <div class="wl-error" id="wl-error"></div>
+
+      <div class="modal-actions" style="display:flex;gap:10px;justify-content:flex-end;margin-top:22px">
+        <button class="aj-btn-secondary" onclick="closeWatchList()">Cancel</button>
+        <button class="aj-btn-primary" id="wl-save-btn" onclick="saveWatchList()">Save Watch List</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Password Gate -->
 <div id="gate" style="display:none">
   <div class="box">
@@ -1241,6 +1285,7 @@
       </div>
       <div class="radar-toolbar">
         <button id="radar-add-btn" onclick="openAddCompanyModal()">+ Add Company</button>
+        <button id="radar-watchlist-btn" onclick="openWatchList()">⚙ Edit Watch List</button>
       </div>
       <div class="loading" id="radar-loading">Loading companies...</div>
       <div class="card-grid" id="radar-grid"></div>
@@ -5806,8 +5851,11 @@
     switchOnboardingStep('companies');
   }
 
-  function onboardingAddCompanyRow(name = '', careersUrl = '') {
-    const container = document.getElementById('onboarding-companies-rows');
+  // Shared row machinery. Onboarding's companies step and the Radar tab's Watch
+  // List editor are the same UI over the same generate-portals endpoint, so they
+  // share these two helpers and differ only in which container they render into.
+  function companyRowsAdd(containerId, name = '', careersUrl = '') {
+    const container = document.getElementById(containerId);
     if (!container) return;
     const row = document.createElement('div');
     row.className = 'onboarding-company-row';
@@ -5823,13 +5871,22 @@
     row.querySelector('.onboarding-company-url').value = careersUrl;
   }
 
-  // Read the current rows into [{ name, careers_url }], dropping fully-empty rows.
-  function onboardingCollectCompanies() {
-    const rows = Array.from(document.querySelectorAll('#onboarding-companies-rows .onboarding-company-row'));
+  // Read the rows in one container into [{ name, careers_url }], dropping
+  // fully-empty rows.
+  function companyRowsCollect(containerId) {
+    const rows = Array.from(document.querySelectorAll('#' + containerId + ' .onboarding-company-row'));
     return rows.map(r => ({
       name: r.querySelector('.onboarding-company-name').value.trim(),
       careers_url: r.querySelector('.onboarding-company-url').value.trim(),
     })).filter(c => c.name || c.careers_url);
+  }
+
+  // Onboarding's bindings, unchanged for its own callers (inline onclick etc).
+  function onboardingAddCompanyRow(name = '', careersUrl = '') {
+    companyRowsAdd('onboarding-companies-rows', name, careersUrl);
+  }
+  function onboardingCollectCompanies() {
+    return companyRowsCollect('onboarding-companies-rows');
   }
 
   function onboardingShowCompaniesError(msg) {
@@ -5966,6 +6023,193 @@
       }
     }
     return line;
+  }
+
+  // ── Watch List editor (Radar → Edit Watch List) ────────────────────────────
+  //
+  // The same company rows as onboarding's companies step, but reachable at any
+  // time and seeded from the file the scanner is actually using. It exists
+  // because skipping onboarding's companies step used to be a dead end: the
+  // scanner quietly kept running on the maintainer's example list with no way
+  // back except hand-editing YAML in GitHub.
+  //
+  // It also bridges the Radar. People reasonably assume the companies they put
+  // on their Radar are the ones being scanned; they are two separate lists. So
+  // when this opens we offer every Radar company that isn't already on the watch
+  // list as a one-click add.
+
+  function watchListAddRow(name = '', careersUrl = '') {
+    companyRowsAdd('wl-rows', name, careersUrl);
+  }
+
+  function watchListShowError(msg) {
+    const el = document.getElementById('wl-error');
+    if (el) { el.textContent = msg; el.style.display = 'block'; }
+  }
+  function watchListClearError() {
+    const el = document.getElementById('wl-error');
+    if (el) { el.textContent = ''; el.style.display = 'none'; }
+  }
+
+  function closeWatchList() {
+    document.getElementById('watchlist-overlay').classList.remove('open');
+  }
+
+  // Open + load. Two reads in parallel: the live portals.yml (the truth about
+  // what's being scanned) and the Radar (for the import suggestions).
+  async function openWatchList() {
+    const overlay = document.getElementById('watchlist-overlay');
+    if (overlay) overlay.classList.add('open');
+    watchListClearError();
+    document.getElementById('wl-loading').style.display = 'block';
+    document.getElementById('wl-body').style.display = 'none';
+    document.getElementById('wl-rows').innerHTML = '';
+    document.getElementById('wl-starter-banner').style.display = 'none';
+
+    const pw = sessionStorage.getItem('co_pw') || '';
+    const headers = { 'X-Dashboard-Password': pw };
+    try {
+      // The Radar half is allowed to fail on its own — a Radar hiccup should
+      // never stop someone editing their watch list.
+      const [portalsRes, radarCompanies] = await Promise.all([
+        fetch('/api/coach?action=get-portals&t=' + Date.now(), { headers }),
+        watchListLoadRadarCompanies(headers),
+      ]);
+      const data = await portalsRes.json().catch(() => ({}));
+      if (!portalsRes.ok || data.error) throw new Error(data.error || ('HTTP ' + portalsRes.status));
+
+      const existing = onboardingParsePortals(data.portalsYml || '');
+      if (existing.length) existing.forEach(c => watchListAddRow(c.name, c.careers_url));
+      else watchListAddRow();
+
+      if (data.isStarterList) document.getElementById('wl-starter-banner').style.display = 'block';
+
+      watchListRenderSuggestions(radarCompanies);
+      document.getElementById('wl-loading').style.display = 'none';
+      document.getElementById('wl-body').style.display = 'block';
+    } catch (e) {
+      document.getElementById('wl-loading').textContent =
+        'Could not load your watch list. Close this and try again.';
+    }
+  }
+
+  // Prefer the Radar we already have in memory; fetch only if the Radar tab
+  // hasn't been opened yet this session.
+  async function watchListLoadRadarCompanies(headers) {
+    try {
+      const inMemory = Object.values((radar && radar.companies) || {});
+      if (inMemory.length) return inMemory;
+      const res = await fetch('/api/radar?t=' + Date.now(), { headers });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Object.values((data && data.companies) || {});
+    } catch (e) {
+      return [];
+    }
+  }
+
+  // Names already in the rows, lowercased, so a company can't be suggested twice.
+  function watchListRowNames() {
+    return new Set(companyRowsCollect('wl-rows').map(c => c.name.toLowerCase()).filter(Boolean));
+  }
+
+  function watchListRenderSuggestions(companies) {
+    const wrap = document.getElementById('wl-suggestions-wrap');
+    const list = document.getElementById('wl-suggestions');
+    if (!wrap || !list) return;
+    list.innerHTML = '';
+
+    const onList = watchListRowNames();
+    const candidates = (companies || []).filter(c => {
+      const name = (c && c.company || '').trim();
+      return name && !onList.has(name.toLowerCase()) && c.status !== 'archived';
+    });
+
+    if (!candidates.length) { wrap.style.display = 'none'; return; }
+    wrap.style.display = 'block';
+
+    candidates.forEach(c => {
+      const name = (c.company || '').trim();
+      const url  = (c.url || '').trim();
+      const row = document.createElement('div');
+      row.className = 'wl-suggestion';
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'wl-sug-name';
+      nameEl.textContent = name; // textContent — never trust a saved name as HTML
+      row.appendChild(nameEl);
+
+      if (/^https?:\/\//i.test(url)) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'coach-back-link';
+        btn.style.cssText = 'background:none;border:1px solid var(--border);border-radius:8px;color:var(--accent);cursor:pointer;font-size:12px;font-weight:600;padding:5px 12px';
+        btn.textContent = '+ Add';
+        btn.onclick = () => {
+          watchListAddRow(name, url);
+          row.remove();
+          if (!list.children.length) wrap.style.display = 'none';
+        };
+        row.appendChild(btn);
+      } else {
+        // No usable link on the Radar entry. Adding a row with an empty or
+        // non-http URL would just fail validation on save, so say what's needed.
+        const note = document.createElement('div');
+        note.className = 'wl-sug-note';
+        note.textContent = 'Add their careers page link on the Radar card first';
+        row.appendChild(note);
+      }
+      list.appendChild(row);
+    });
+  }
+
+  // Save: same two steps the onboarding path uses — generate-portals turns the
+  // rows into YAML (and detects each company's job board), then save-onboarding
+  // commits it. That write refuses a public repo and REPLACES portals.yml, which
+  // is exactly the "this is my list now" semantics we want here.
+  async function saveWatchList() {
+    const companies = companyRowsCollect('wl-rows');
+    if (!companies.length) {
+      watchListShowError('Add at least one company. An empty watch list would mean nothing gets scanned.');
+      return;
+    }
+    const missing = companies.find(c => !c.name || !c.careers_url);
+    if (missing) {
+      watchListShowError('Each company needs both a name and a careers URL.');
+      return;
+    }
+    watchListClearError();
+
+    const btn = document.getElementById('wl-save-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+    const pw = sessionStorage.getItem('co_pw') || '';
+    const headers = { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw };
+    try {
+      const genRes = await fetch('/api/coach?action=generate-portals', {
+        method: 'POST', headers, body: JSON.stringify({ companies }),
+      });
+      const gen = await genRes.json().catch(() => ({}));
+      if (!genRes.ok || gen.error || !gen.portalsYml) {
+        watchListShowError(gen.error || 'Could not read those URLs. Check them and try again.');
+        return;
+      }
+
+      const saveRes = await fetch('/api/coach?action=save-onboarding', {
+        method: 'POST', headers, body: JSON.stringify({ portalsYml: gen.portalsYml }),
+      });
+      const saved = await saveRes.json().catch(() => ({}));
+      if (!saveRes.ok || !saved.success) {
+        watchListShowError(saved.error || 'Could not save your watch list. Please try again.');
+        return;
+      }
+
+      closeWatchList();
+      showToast(`✓ Watch list saved — ${companies.length} compan${companies.length === 1 ? 'y' : 'ies'} on your next scan`);
+    } catch (e) {
+      watchListShowError('Could not reach the server. Please try again.');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Save Watch List'; }
+    }
   }
 
   // ── File upload ──
