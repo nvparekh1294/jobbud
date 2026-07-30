@@ -156,9 +156,14 @@ test('opening the editor resets the loading text, not just its visibility', () =
 test('the editor bridges the Radar with one-click import', () => {
   assert.match(html, /On your radar — add to watch list\?/);
   const render = html.slice(html.indexOf('function watchListRenderSuggestions'));
-  // Only http(s) links become an add button; anything else gets a prompt.
+  // Only http(s) links are accepted, whether they came from the Radar entry or
+  // were typed into the row's inline input.
   assert.match(render, /\^https\?:\\\/\\\//);
-  assert.match(render, /Add their careers page link/);
+  // This used to assert the "Add their careers page link on the Radar card
+  // first" note. That note was a dead end and pointed at the wrong field — the
+  // Radar card's url is a homepage — so the row now takes the careers link
+  // inline. See test/radarUiFixes.test.mjs for the full contract.
+  assert.match(render, /input\.className = 'wl-sug-url'/);
 });
 
 test('onboarding and the editor share one row implementation', () => {

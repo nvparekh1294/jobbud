@@ -564,6 +564,12 @@
     /* Radar generic modal (Add Company, Company Detail, Radar Research, Watch List) */
     #radar-add-overlay, #radar-detail-overlay, #radar-research-overlay, #watchlist-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 200; align-items: center; justify-content: center; }
     #radar-add-overlay.open, #radar-detail-overlay.open, #radar-research-overlay.open, #watchlist-overlay.open { display: flex; }
+    /* The Add/Edit form is the only one of these that can be opened FROM another
+       (Company Detail → Edit). At a shared z-index the winner is DOM order, and
+       #radar-add-overlay comes first — so the edit form opened behind the detail
+       view and looked like a dead button. editCompanyFromDetail() now closes the
+       detail overlay first; this is the belt-and-braces half of that fix. */
+    #radar-add-overlay { z-index: 210; }
     #radar-add-modal, #radar-detail-modal, #radar-research-modal, #watchlist-modal { background: var(--surface); border-radius: 12px; padding: 28px 32px; width: 600px; max-width: calc(100vw - 32px); max-height: calc(100vh - 40px); overflow-y: auto; box-shadow: 0 8px 40px rgba(0,0,0,0.18); }
     #radar-add-modal h3, #radar-detail-modal h3, #radar-research-modal h3, #watchlist-modal h3 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin-bottom: 16px; }
 
@@ -575,7 +581,9 @@
     .wl-section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin: 22px 0 10px; }
     .wl-suggestion { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; background: var(--bg); }
     .wl-suggestion .wl-sug-name { font-size: 13px; font-weight: 600; flex: 1; min-width: 0; overflow-wrap: anywhere; }
-    .wl-suggestion .wl-sug-note { font-size: 12px; color: var(--muted); }
+    .wl-suggestion .wl-sug-url { flex: 1.4; min-width: 0; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; outline: none; font-family: inherit; }
+    .wl-suggestion .wl-sug-url:focus { border-color: var(--accent); }
+    .wl-suggestion button[disabled] { opacity: .45; cursor: not-allowed; }
     .wl-error { display: none; color: #b3261e; font-size: 13px; margin-top: 10px; line-height: 1.5; }
     .radar-priority-row { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 2px; }
     .radar-priority-row label { display: flex; align-items: center; gap: 7px; font-size: 13px; cursor: pointer; }
@@ -4548,6 +4556,11 @@
     const status = document.getElementById('rc-fetch-status'); status.textContent = ''; status.className = 'aj-status';
     document.querySelector('#radar-add-modal h3').textContent = 'Edit Company';
     document.getElementById('rc-save-btn').textContent = 'Save Company';
+    // Close the detail view before opening the edit form. Two stacked modals is
+    // not what "Edit" means to anyone, and it is what made this button look
+    // broken: both overlays shared z-index 200, so the detail view — later in
+    // the DOM — painted over the edit form that had just opened.
+    closeCompanyDetail();
     document.getElementById('radar-add-overlay').classList.add('open');
   }
 
@@ -6412,26 +6425,47 @@
       nameEl.textContent = name; // textContent — never trust a saved name as HTML
       row.appendChild(nameEl);
 
+      const accept = (careersUrl) => {
+        watchListAddRow(name, careersUrl);
+        row.remove();
+        if (!list.children.length) wrap.style.display = 'none';
+      };
+
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'coach-back-link';
+      btn.style.cssText = 'background:none;border:1px solid var(--border);border-radius:8px;color:var(--accent);cursor:pointer;font-size:12px;font-weight:600;padding:5px 12px';
+      btn.textContent = '+ Add';
+
       if (/^https?:\/\//i.test(url)) {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = 'coach-back-link';
-        btn.style.cssText = 'background:none;border:1px solid var(--border);border-radius:8px;color:var(--accent);cursor:pointer;font-size:12px;font-weight:600;padding:5px 12px';
-        btn.textContent = '+ Add';
-        btn.onclick = () => {
-          watchListAddRow(name, url);
-          row.remove();
-          if (!list.children.length) wrap.style.display = 'none';
-        };
-        row.appendChild(btn);
+        btn.onclick = () => accept(url);
       } else {
-        // No usable link on the Radar entry. Adding a row with an empty or
-        // non-http URL would just fail validation on save, so say what's needed.
-        const note = document.createElement('div');
-        note.className = 'wl-sug-note';
-        note.textContent = 'Add their careers page link on the Radar card first';
-        row.appendChild(note);
+        // This company has no usable link. It used to say "Add their careers
+        // page link on the Radar card first" — a dead end AND wrong: the Radar
+        // card's url field is the company HOMEPAGE (its placeholder is
+        // https://anthropic.com), not a careers page, so following that
+        // instruction would put the wrong URL on the watch list.
+        //
+        // Take the careers link here instead. It feeds watchListAddRow exactly
+        // like a manually typed row, so Save runs it through the same
+        // generate-portals job-board detection.
+        const input = document.createElement('input');
+        input.type = 'url';
+        input.className = 'wl-sug-url';
+        input.placeholder = 'Careers page link — https://…';
+        input.setAttribute('aria-label', `Careers page link for ${name}`);
+
+        const valid = () => /^https?:\/\//i.test(input.value.trim());
+        const sync = () => { btn.disabled = !valid(); };
+        input.addEventListener('input', sync);
+        input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); btn.click(); } });
+        sync();
+
+        btn.onclick = () => { if (valid()) accept(input.value.trim()); };
+        row.appendChild(input);
       }
+
+      row.appendChild(btn);
       list.appendChild(row);
     });
   }
