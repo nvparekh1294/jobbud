@@ -23,13 +23,38 @@ const CONTACT_STATUSES = ['not_contacted', 'contacted', 'replied', 'meeting_sche
 const ATS_BOARDS = ['', 'greenhouse', 'ashby', 'lever'];
 
 // ── Read radar.json (handles the >1MB download_url case via the shared helper) ──
-async function readRadar(githubToken, owner, repo) {
+//
+// SHAPE NORMALIZATION (fixes the "added company vanishes on refresh" bug).
+// The committed seed at data/radar.json is `[]` — an ARRAY — but the radar model
+// is an OBJECT: { companies: { <id>: {...} } }. The old code did
+// `parsed.companies = {}` on whatever JSON.parse returned. Setting a named
+// property on an array "works" in memory, but JSON.stringify serializes arrays by
+// INDEX and silently drops every non-index property — so the write re-serialized
+// to the literal `[]` it started from. A byte-identical blob makes the Git Data
+// API produce an EMPTY commit, the endpoint reports success, the UI shows the new
+// company, and the next read returns `[]` again. Radar has never persisted for any
+// fresh install.
+//
+// The fix: anything that is not a plain object is DISCARDED, and we return a fresh
+// plain object. Never patch the parsed value in place. Existing user files that
+// still contain `[]` heal on their next successful write, which now serializes a
+// real object. Per CONTRIBUTING.md the committed seed itself must never be edited —
+// shape migrations belong here, at read time.
+export function normalizeRadar(parsed) {
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { companies: {} };
+  }
+  if (!parsed.companies || typeof parsed.companies !== 'object' || Array.isArray(parsed.companies)) {
+    parsed.companies = {};
+  }
+  return parsed;
+}
+
+export async function readRadar(githubToken, owner, repo) {
   const { exists, content } = await readGithubFile(githubToken, owner, repo, RADAR_PATH);
   // First run before radar.json is committed — start from an empty model.
   if (!exists) return { companies: {} };
-  const parsed = JSON.parse(content);
-  if (!parsed.companies || typeof parsed.companies !== 'object') parsed.companies = {};
-  return parsed;
+  return normalizeRadar(JSON.parse(content));
 }
 
 // ── Write radar.json via the shared Git Data API helper (blob → tree → commit → ref, with retry) ──
