@@ -7,7 +7,7 @@
 // everywhere else in this codebase (see api/action.js putJobStatus).
 
 import crypto from 'crypto';
-import { readGithubFile, writeGithubFile } from '../lib/github.js';
+import { readGithubFile, writeGithubFile, normalizeJsonDoc } from '../lib/github.js';
 import { safeEqual } from '../lib/auth.mjs';
 
 const GITHUB_API = 'https://api.github.com';
@@ -35,19 +35,17 @@ const ATS_BOARDS = ['', 'greenhouse', 'ashby', 'lever'];
 // company, and the next read returns `[]` again. Radar has never persisted for any
 // fresh install.
 //
-// The fix: anything that is not a plain object is DISCARDED, and we return a fresh
-// plain object. Never patch the parsed value in place. Existing user files that
-// still contain `[]` heal on their next successful write, which now serializes a
-// real object. Per CONTRIBUTING.md the committed seed itself must never be edited —
+// The fix: anything that is not a plain object is DISCARDED and replaced with a
+// fresh one. Never patch the parsed value in place. Existing user files that still
+// contain `[]` heal on their next successful write, which now serializes a real
+// object. Per CONTRIBUTING.md the committed seed itself must never be edited —
 // shape migrations belong here, at read time.
+//
+// The rule is shared with the other array-seeded files (job-status.json,
+// mock-sessions.json) via lib/github.js normalizeJsonDoc — one invariant, one
+// implementation. This wrapper just names the radar's document model.
 export function normalizeRadar(parsed) {
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return { companies: {} };
-  }
-  if (!parsed.companies || typeof parsed.companies !== 'object' || Array.isArray(parsed.companies)) {
-    parsed.companies = {};
-  }
-  return parsed;
+  return normalizeJsonDoc(parsed, { companies: {} });
 }
 
 export async function readRadar(githubToken, owner, repo) {
@@ -63,7 +61,12 @@ async function writeRadar(githubToken, owner, repo, content, message) {
     githubToken, owner, repo, RADAR_PATH,
     JSON.stringify(content, null, 2) + '\n',
     message,
-    { logTag: 'radar' },
+    // Unchanged saves are routine here: the edit modal re-submits every field, and
+    // re-picking the status a company already has changes nothing. lastActivity is
+    // date-only, so a same-day no-change save is byte-identical. None of that is
+    // data loss — the array-seed bug it would otherwise catch is already prevented
+    // upstream, at the READ site, by normalizeRadar.
+    { logTag: 'radar', allowNoop: true },
   );
 }
 

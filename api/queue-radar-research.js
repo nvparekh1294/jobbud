@@ -8,7 +8,7 @@
 // The file is committed to the repo so a clone (e.g. ~/linkedin-research) gets it
 // on `git pull`, and the LinkedIn research agent reads it from there.
 
-import { readGithubFile, writeGithubFile } from '../lib/github.js';
+import { readGithubFile, writeGithubFile, normalizeJsonDoc } from '../lib/github.js';
 
 const RADAR_PATH = 'data/radar.json';
 
@@ -26,9 +26,10 @@ function slugify(str) {
 async function readRadar(githubToken, owner, repo) {
   const { exists, content } = await readGithubFile(githubToken, owner, repo, RADAR_PATH);
   if (!exists) return { companies: {} };
-  const parsed = JSON.parse(content);
-  if (!parsed.companies || typeof parsed.companies !== 'object') parsed.companies = {};
-  return parsed;
+  // The committed seed is the array `[]`. Patching .companies onto it would be
+  // dropped by JSON.stringify, so normalize to a real { companies: {} } document —
+  // same invariant api/radar.js readRadar applies.
+  return normalizeJsonDoc(JSON.parse(content), { companies: {} });
 }
 
 // ── Handler ──────────────────────────────────────────────────────────────────

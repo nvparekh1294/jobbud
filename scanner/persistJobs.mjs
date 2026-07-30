@@ -97,10 +97,11 @@ export async function persistJobs(evaluatedJobs) {
         return JSON.stringify(jobStatus, null, 2);
       },
       'chore: persist scanned jobs [skip ci]',
-      // The builder skips jobs that already exist, so if a concurrent writer added
-      // every candidate between the pre-check and this attempt the builder legitimately
-      // adds nothing (added === 0). Expected under concurrency, not lost data.
-      { logTag: 'persist', allowNoop: true },
+      // Predicate, not a blanket allow: this is the highest-value write in the
+      // system, so the guard must stay armed here. added === 0 means a concurrent
+      // writer added every candidate between the pre-check and this attempt —
+      // expected. added > 0 with nothing landing is the silent-loss bug itself.
+      { logTag: 'persist', allowNoop: () => added === 0 },
     );
   } catch (err) {
     // Re-throw so the caller (scanner/index.mjs) can gate markScored on success.

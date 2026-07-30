@@ -42,8 +42,8 @@ const SEEDS = [
   {
     file: 'radar.json',
     seed: 'array',
-    // Readers: api/radar.js, api/coach.js, scanner/radarSource.mjs —
-    // all read doc.companies[<id>].
+    // Readers: api/radar.js, api/queue-radar-research.js, api/coach.js,
+    // scanner/radarSource.mjs — all read doc.companies[<id>].
     model: { companies: {} },
   },
   {

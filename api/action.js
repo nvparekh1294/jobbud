@@ -96,7 +96,7 @@ async function getJobStatus(githubToken, owner, repo) {
 // re-applies applyChange on top of the current data — so a concurrent status
 // change to a DIFFERENT job (from the scanner or another dashboard action) is
 // preserved rather than erased by a stale whole-file overwrite.
-async function updateJobStatus(githubToken, owner, repo, jobId, applyChange) {
+async function updateJobStatus(githubToken, owner, repo, jobId, applyChange, { allowNoop = false } = {}) {
   await writeGithubFile(
     githubToken, owner, repo, 'data/job-status.json',
     (current) => {
@@ -108,7 +108,7 @@ async function updateJobStatus(githubToken, owner, repo, jobId, applyChange) {
       return JSON.stringify(doc, null, 2);
     },
     'chore: update job status [skip ci]',
-    { logTag: 'action' },
+    { logTag: 'action', allowNoop },
   );
 }
 
@@ -327,7 +327,9 @@ export default async function handler(req, res) {
               await updateJobStatus(githubToken, owner, repo, jobId, (j) => {
                 j.docUrl = docUrl;
                 if (jobDescription) j.description = jobDescription;
-              });
+              // Regenerating a package that produced the same doc URL writes
+              // nothing. Benign — unlike the status writes, this adds no timestamp.
+              }, { allowNoop: true });
               console.log(`[action] docUrl persisted for ${jobId}`);
             } catch (writeErr) {
               // Non-fatal — doc was created, URL just won't show on the dashboard

@@ -14,7 +14,8 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readRadar, normalizeRadar } from '../api/radar.js';
+import crypto from 'node:crypto';
+import handler, { readRadar, normalizeRadar } from '../api/radar.js';
 
 // Mock the GitHub Contents API to return `content` as the body of data/radar.json.
 async function readRadarWithContent(content) {
@@ -92,4 +93,153 @@ test('normalizeRadar replaces a companies value that is an array', () => {
   assert.deepEqual(out.companies, {});
   out.companies.y = { id: 'y' };
   assert.equal(JSON.parse(JSON.stringify(out)).companies.y.id, 'y');
+});
+
+// ── The write path must not 500 on a benign unchanged save ───────────────────
+//
+// writeGithubFile refuses no-op writes by default, because an empty commit is how
+// the array-seed bug hid. But radar has genuinely idempotent saves: the edit modal
+// re-submits every field, re-picking the status a company already has changes
+// nothing, and lastActivity is date-only so a same-day no-change save is
+// byte-identical. Those must return 200. Radar's real bug is prevented upstream,
+// at the read site, by normalizeRadar — not by this guard.
+//
+// The GitHub fake below is CONTENT-ADDRESSED like the real Git Data API: the tree
+// sha derives from the blob sha, which derives from a hash of the content. So an
+// unchanged write really does produce newTreeSha === treeSha and really does
+// exercise the no-op path — nothing about the no-op is stubbed out.
+function makeContentAddressedGitHub(initialFile) {
+  const state = { file: initialFile, headSha: 'commit-0', commits: { 'commit-0': null }, blobs: new Map() };
+  const sha = (s) => crypto.createHash('sha1').update(s).digest('hex').slice(0, 12);
+  const res = (obj, status = 200) => ({
+    ok: status >= 200 && status < 300, status,
+    json: async () => obj, text: async () => (typeof obj === 'string' ? obj : JSON.stringify(obj)),
+  });
+
+  // The tree of a commit is the tree of the single file it contains.
+  state.commits['commit-0'] = `tree-${sha(initialFile)}`;
+
+  async function fetchMock(url, opts = {}) {
+    const method = opts.method || 'GET';
+    const body = opts.body ? JSON.parse(opts.body) : null;
+
+    if (url.includes('/contents/')) {
+      return res({ content: Buffer.from(state.file).toString('base64'), encoding: 'base64' });
+    }
+    if (url.endsWith('/git/blobs') && method === 'POST') {
+      const content = Buffer.from(body.content, 'base64').toString('utf8');
+      const blobSha = `blob-${sha(content)}`;
+      state.blobs.set(blobSha, content);
+      return res({ sha: blobSha });
+    }
+    if (url.includes('/git/ref/heads/') && method === 'GET') return res({ object: { sha: state.headSha } });
+    if (url.includes('/git/commits/') && method === 'GET') {
+      return res({ tree: { sha: state.commits[url.split('/').pop()] } });
+    }
+    if (url.endsWith('/git/trees') && method === 'POST') {
+      // One file in the tree, so the tree sha is a pure function of its blob —
+      // identical content in means the identical tree sha out.
+      return res({ sha: `tree-${state.blobs.get(body.tree[0].sha) !== undefined ? sha(state.blobs.get(body.tree[0].sha)) : body.tree[0].sha}` });
+    }
+    if (url.endsWith('/git/commits') && method === 'POST') {
+      const commitSha = `commit-${sha(body.tree + body.message)}`;
+      state.commits[commitSha] = body.tree;
+      return res({ sha: commitSha });
+    }
+    if (url.includes('/git/refs/heads/') && method === 'PATCH') {
+      state.headSha = body.sha;
+      // Resolve the committed tree back to the blob content it names.
+      for (const content of state.blobs.values()) {
+        if (`tree-${sha(content)}` === state.commits[body.sha]) { state.file = content; break; }
+      }
+      return res({ ref: 'refs/heads/main' });
+    }
+    throw new Error(`unexpected fetch: ${method} ${url}`);
+  }
+  return { state, fetchMock };
+}
+
+function makeRes() {
+  const out = { statusCode: null, body: null, headers: {} };
+  return {
+    out,
+    setHeader(k, v) { out.headers[k] = v; },
+    status(code) { out.statusCode = code; return this; },
+    json(payload) { out.body = payload; return this; },
+    send(payload) { out.body = payload; return this; },
+  };
+}
+
+async function callRadar({ action, body }, fetchMock) {
+  const saved = {
+    pw: process.env.DASHBOARD_PASSWORD, tok: process.env.GH_TOKEN,
+    repo: process.env.GH_REPO, ref: process.env.GITHUB_REF_NAME,
+  };
+  process.env.DASHBOARD_PASSWORD = 'pw';
+  process.env.GH_TOKEN = 'tok';
+  process.env.GH_REPO = 'owner/repo';
+  delete process.env.GITHUB_REF_NAME;
+  const realFetch = global.fetch;
+  global.fetch = fetchMock;
+  const res = makeRes();
+  try {
+    await handler(
+      { method: 'POST', headers: { 'x-dashboard-password': 'pw' }, query: { action }, body },
+      res,
+    );
+  } finally {
+    global.fetch = realFetch;
+    for (const [k, v] of [['DASHBOARD_PASSWORD', saved.pw], ['GH_TOKEN', saved.tok], ['GH_REPO', saved.repo], ['GITHUB_REF_NAME', saved.ref]]) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  }
+  return res.out;
+}
+
+test('radar add on the `[]` seed persists through the real write path', async () => {
+  const { state, fetchMock } = makeContentAddressedGitHub('[]');
+  const added = await callRadar({ action: 'add', body: { company: 'Acme', url: 'https://acme.example' } }, fetchMock);
+
+  assert.equal(added.statusCode, 200, `add should succeed; got ${JSON.stringify(added.body)}`);
+  // The committed file is a real document now, not the array seed it started as.
+  const committed = JSON.parse(state.file);
+  assert.equal(Array.isArray(committed), false);
+  assert.equal(Object.values(committed.companies)[0].company, 'Acme', 'the company actually landed in the repo');
+});
+
+test('radar update with unchanged fields on the same day returns 200, not 500', async () => {
+  const { state, fetchMock } = makeContentAddressedGitHub('[]');
+  const added = await callRadar({ action: 'add', body: { company: 'Acme', status: 'researching' } }, fetchMock);
+  assert.equal(added.statusCode, 200);
+  const id = added.body.company.id;
+  const fileAfterAdd = state.file;
+
+  // Exactly what the edit modal posts when nothing was edited: every field
+  // re-submitted with its current value. lastActivity is date-only, so on the same
+  // day this serializes byte-for-byte identically -> a genuine no-op write.
+  const unchanged = await callRadar({
+    action: 'update',
+    body: { companyId: id, company: 'Acme', status: 'researching' },
+  }, fetchMock);
+
+  assert.equal(
+    unchanged.statusCode, 200,
+    `an unchanged same-day save must not error; got ${unchanged.statusCode} ${JSON.stringify(unchanged.body)}`,
+  );
+  assert.equal(unchanged.body.success, true);
+  assert.equal(state.file, fileAfterAdd, 'nothing changed in the repo, and nothing was corrupted');
+
+  // Re-picking the status the company already has is the same benign no-op.
+  const restatus = await callRadar({ action: 'update', body: { companyId: id, status: 'researching' } }, fetchMock);
+  assert.equal(restatus.statusCode, 200, 're-selecting the current status must not error');
+});
+
+test('radar update with a real change still commits', async () => {
+  const { state, fetchMock } = makeContentAddressedGitHub('[]');
+  const added = await callRadar({ action: 'add', body: { company: 'Acme' } }, fetchMock);
+  const id = added.body.company.id;
+
+  const changed = await callRadar({ action: 'update', body: { companyId: id, status: 'contacted' } }, fetchMock);
+  assert.equal(changed.statusCode, 200);
+  assert.equal(JSON.parse(state.file).companies[id].status, 'contacted', 'the real change landed');
 });

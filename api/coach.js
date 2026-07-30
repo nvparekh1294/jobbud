@@ -496,7 +496,9 @@ async function handleGeneratePrep(req, res, githubToken, owner, repo) {
             return JSON.stringify(status, null, 2);
           },
           'chore: update job status [skip ci]',
-          { logTag: 'coach' },
+          // Re-generating prep for a job that already has this prepDocUrl (or whose
+          // record is gone) writes nothing. Benign — not the silent-loss case.
+          { logTag: 'coach', allowNoop: true },
         );
         console.log(`[coach] generate-prep persisted prepDocUrl for jobId=${jobId}`);
       } catch (persistErr) {
