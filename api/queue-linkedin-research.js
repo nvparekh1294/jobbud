@@ -97,7 +97,9 @@ export default async function handler(req, res) {
       'linkedin-research/current_job.json',
       JSON.stringify(payload, null, 2) + '\n',
       `chore: queue LinkedIn research for ${payload.company} [skip ci]`,
-      { logTag: 'queue-linkedin-research' },
+      // Re-queueing research for the same job writes a byte-identical payload.
+      // That is a legitimate idempotent action, not lost data — accept the no-op.
+      { logTag: 'queue-linkedin-research', allowNoop: true },
     );
 
     console.log(`[queue-linkedin-research] wrote current_job.json for ${payload.company} (${commitSha})`);

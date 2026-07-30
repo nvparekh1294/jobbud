@@ -58,7 +58,10 @@ async function main() {
       const commitSha = await writeGithubFile(
         githubToken, owner, repo, path, local,
         `chore: persist scanner state (${path.split('/').pop()}) [skip ci]`,
-        { logTag: 'commit-state' },
+        // The unchanged-check above is best-effort (it is skipped when the read
+        // fails, and the repo copy can change under us), so an identical write is
+        // an expected outcome here, not lost data.
+        { logTag: 'commit-state', allowNoop: true },
       );
       console.log(`[commit-state] committed ${path} (${commitSha})`);
     } catch (err) {

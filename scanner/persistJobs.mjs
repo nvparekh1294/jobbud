@@ -95,7 +95,10 @@ export async function persistJobs(evaluatedJobs) {
         return JSON.stringify(jobStatus, null, 2);
       },
       'chore: persist scanned jobs [skip ci]',
-      { logTag: 'persist' },
+      // The builder skips jobs that already exist, so if a concurrent writer added
+      // every candidate between the pre-check and this attempt the builder legitimately
+      // adds nothing (added === 0). Expected under concurrency, not lost data.
+      { logTag: 'persist', allowNoop: true },
     );
   } catch (err) {
     // Re-throw so the caller (scanner/index.mjs) can gate markScored on success.

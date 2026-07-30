@@ -358,7 +358,9 @@ async function writeStoryBankContent(githubToken, owner, repo, updatedContent, c
   await assertRepoPrivate(githubToken, owner, repo);
   await writeGithubFile(
     githubToken, owner, repo, 'story-bank.md', updatedContent, commitMessage,
-    { logTag: 'coach' },
+    // Re-saving a story without editing it is a normal user action, so an
+    // identical write here is a legitimate no-op rather than lost data.
+    { logTag: 'coach', allowNoop: true },
   );
 }
 
@@ -1428,7 +1430,9 @@ async function handleSaveOnboarding(req, res, githubToken, owner, repo) {
     for (const f of toWrite) {
       await writeGithubFile(
         githubToken, owner, repo, f.path, files[f.key],
-        `chore: save ${f.path} from onboarding [skip ci]`, { logTag: 'coach' },
+        // Saving onboarding twice without regenerating writes identical files —
+        // a legitimate idempotent save, not a dropped write.
+        `chore: save ${f.path} from onboarding [skip ci]`, { logTag: 'coach', allowNoop: true },
       );
       saved.push(f.path);
     }

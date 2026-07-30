@@ -423,3 +423,90 @@ test('readGithubFile does NOT retry a 404 (immediate not-found)', async () => {
   }
   assert.equal(calls, 1, '404 must not be retried');
 });
+
+// ── Empty-commit (no-op write) guard ──────────────────────────────────────────
+//
+// Git trees are content-addressed, so when the new tree sha comes back identical
+// to the base tree sha the write changes nothing and committing it produces an
+// empty "0 files changed" commit. Every empty-commit write seen in production was
+// silent data loss (the radar.json array-seed bug: a mutation applied to a parsed
+// array was dropped by JSON.stringify, the endpoint reported success, and the
+// company vanished on the next read). writeGithubFile must refuse by default, and
+// accept the no-op only for callers that opt in with allowNoop.
+//
+// This mock returns the SAME tree sha from POST /git/trees that GET /git/commits
+// reported for the base tree, which is exactly what GitHub does for an unchanged
+// write. It records whether a commit was created and whether the ref was advanced.
+function makeNoopMockGitHub() {
+  const state = { baseTreeSha: 'tree-base', commitsCreated: 0, patchAttempts: 0, seq: 0 };
+  const res = (obj, status = 200) => ({
+    ok: status >= 200 && status < 300, status,
+    json: async () => obj, text: async () => (typeof obj === 'string' ? obj : JSON.stringify(obj)),
+  });
+  async function fetchMock(url, opts = {}) {
+    const method = opts.method || 'GET';
+    if (url.includes('/contents/')) {
+      return res({ content: Buffer.from('{}').toString('base64'), encoding: 'base64' });
+    }
+    if (url.endsWith('/git/blobs') && method === 'POST') return res({ sha: `blob-${++state.seq}` });
+    if (url.includes('/git/ref/heads/') && method === 'GET') return res({ object: { sha: 'commit-head' } });
+    if (url.includes('/git/commits/') && method === 'GET') return res({ tree: { sha: state.baseTreeSha } });
+    // Unchanged content -> GitHub hands back the base tree's own sha.
+    if (url.endsWith('/git/trees') && method === 'POST') return res({ sha: state.baseTreeSha });
+    if (url.endsWith('/git/commits') && method === 'POST') {
+      state.commitsCreated += 1;
+      return res({ sha: `commit-${++state.seq}` });
+    }
+    if (url.includes('/git/refs/heads/') && method === 'PATCH') {
+      state.patchAttempts += 1;
+      return res({ ref: 'refs/heads/main' });
+    }
+    throw new Error(`unexpected fetch: ${method} ${url}`);
+  }
+  return { state, fetchMock };
+}
+
+test('writeGithubFile refuses a no-op write instead of creating an empty commit', async () => {
+  const { state, fetchMock } = makeNoopMockGitHub();
+  const realFetch = global.fetch;
+  global.fetch = fetchMock;
+  let thrown = null;
+  try {
+    await writeGithubFile(
+      'tok', 'owner', 'repo', 'data/radar.json',
+      '[]\n', // the exact byte-identical blob the radar bug produced
+      'chore: radar add Acme [skip ci]',
+    );
+  } catch (err) {
+    thrown = err;
+  } finally {
+    global.fetch = realFetch;
+  }
+
+  assert.ok(thrown, 'a write that changes nothing must throw, not silently succeed');
+  assert.match(thrown.message, /write produced no change to data\/radar\.json/);
+  assert.match(thrown.message, /refusing to create an empty commit/);
+  assert.equal(state.commitsCreated, 0, 'no commit object may be created');
+  assert.equal(state.patchAttempts, 0, 'the ref must not be advanced');
+});
+
+test('writeGithubFile accepts a no-op write when the caller passes allowNoop', async () => {
+  const { state, fetchMock } = makeNoopMockGitHub();
+  const realFetch = global.fetch;
+  global.fetch = fetchMock;
+  let result;
+  try {
+    result = await writeGithubFile(
+      'tok', 'owner', 'repo', 'data/seen-jobs.json',
+      '[]\n',
+      'chore: persist scanner state (seen-jobs.json) [skip ci]',
+      { logTag: 'commit-state', allowNoop: true },
+    );
+  } finally {
+    global.fetch = realFetch;
+  }
+
+  assert.equal(result, 'commit-head', 'returns the current head sha — nothing new was committed');
+  assert.equal(state.commitsCreated, 0, 'still no empty commit');
+  assert.equal(state.patchAttempts, 0, 'still no ref advance');
+});
