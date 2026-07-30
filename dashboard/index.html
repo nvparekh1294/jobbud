@@ -29,7 +29,23 @@
     #gate input { width: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; margin-bottom: 12px; outline: none; }
     #gate input:focus { border-color: var(--accent); }
     #gate button { width: 100%; padding: 10px; background: var(--accent); color: white; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; }
-    #gate .error { font-size: 12px; color: var(--red); margin-top: 8px; display: none; }
+    #gate .error { font-size: 12px; color: var(--red); margin-top: 8px; display: none; line-height: 1.5; }
+    #gate .pending { font-size: 12px; color: var(--muted); margin-top: 8px; display: none; }
+
+    /* Setup self-check: banner, panel, and the inline error slots that quote it */
+    #setup-banner { display: none; align-items: center; gap: 12px; background: var(--amber-bg); color: var(--amber); font-size: 13px; padding: 10px 20px; border-bottom: 1px solid var(--border); line-height: 1.5; }
+    #setup-banner.open { display: flex; }
+    #setup-banner .setup-banner-text { flex: 1; }
+    #setup-banner button { background: none; border: 1px solid currentColor; border-radius: 8px; color: inherit; cursor: pointer; font-size: 12px; font-weight: 600; padding: 4px 10px; }
+    #setup-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 300; align-items: center; justify-content: center; }
+    #setup-overlay.open { display: flex; }
+    #setup-modal { background: var(--surface); border-radius: 12px; padding: 28px 32px; width: 620px; max-width: calc(100vw - 32px); max-height: calc(100vh - 40px); overflow-y: auto; box-shadow: 0 8px 40px rgba(0,0,0,0.18); }
+    #setup-modal h3 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin-bottom: 16px; }
+    .setup-check { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; font-size: 13px; line-height: 1.6; }
+    .setup-check.bad { border-color: var(--red); }
+    .setup-check .setup-fix { color: var(--muted); margin-top: 6px; }
+    #setup-note { font-size: 12px; color: var(--muted); line-height: 1.6; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+    #jobs-error { display: none; background: var(--amber-bg); color: var(--amber); font-size: 13px; line-height: 1.6; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; }
 
     /* Layout */
     #app { display: none; }
@@ -1113,7 +1129,24 @@
     <p>Enter your dashboard password to continue.</p>
     <input type="password" id="pw-input" placeholder="Password" autocomplete="current-password">
     <button id="pw-btn">Unlock</button>
+    <div class="pending" id="pw-pending">Checking…</div>
+    <div class="error" id="pw-error"></div>
     <p style="font-size:11px;color:var(--muted);margin-top:16px;margin-bottom:0;line-height:1.5">Forgot your password? Check your <code style="font-size:11px">DASHBOARD_PASSWORD</code> environment variable in Vercel.</p>
+  </div>
+</div>
+
+<!-- Setup check panel. Opened from the "Setup needs attention" banner or the ⚙
+     button in the header; lists every check /api/health reported as failing,
+     each with the plain-English reason and the exact fix. -->
+<div id="setup-overlay">
+  <div id="setup-modal">
+    <h3>Setup Check</h3>
+    <div id="setup-results"></div>
+    <div id="setup-note"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:22px">
+      <button class="aj-btn-secondary" onclick="closeSetupPanel()">Close</button>
+      <button class="aj-btn-primary" id="setup-rerun-btn" onclick="rerunSetupCheck()">Run setup check</button>
+    </div>
   </div>
 </div>
 
@@ -1137,12 +1170,24 @@
       </nav>
     </div>
     <div class="header-right">
+      <button id="setup-btn" title="Run a setup check" onclick="openSetupPanel()">⚙</button>
       <button id="refresh-btn">↻ Refresh</button>
       <button id="add-job-btn" onclick="openAddJobModal()"><span class="add-job-label">+ Add Job</span><span class="add-job-short" style="display:none">+</span></button>
     </div>
   </header>
 
+  <!-- Raised when the last setup check found failing checks. Dismissible; the ⚙
+       button in the header re-opens the panel either way. -->
+  <div id="setup-banner">
+    <span class="setup-banner-text" id="setup-banner-text"></span>
+    <button type="button" onclick="openSetupPanel()">See what's wrong</button>
+    <button type="button" id="setup-banner-dismiss" onclick="dismissSetupBanner()">Dismiss</button>
+  </div>
+
   <main>
+    <!-- Job-data load failures land here, quoting the setup check rather than
+         failing silently in the console the way they used to. -->
+    <div id="jobs-error"></div>
     <!-- Action Required -->
     <div class="view" id="view-action">
       <div class="loading" id="action-loading">Loading jobs...</div>
@@ -2005,17 +2050,214 @@
     }
   })();
 
+  // ── Setup self-check ─────────────────────────────────────────────────────
+  //
+  // /api/health is the single place that knows why something is broken. The
+  // dashboard's job is to never invent its own guess: every failure message the
+  // user sees below is a sentence the health endpoint produced.
+  //
+  // The endpoint answers 200 even for a wrong password, with a failed `auth`
+  // check — that is what lets the gate VERIFY a password and say what went wrong
+  // instead of silently storing a stale one and 401-ing forever afterwards.
+
+  let _health = null;          // last /api/health payload, or null if never run
+  let _setupBannerDismissed = false;
+
+  async function fetchHealth(pw) {
+    const res = await fetch('/api/health?t=' + Date.now(), {
+      headers: { 'X-Dashboard-Password': pw },
+    });
+    const data = await res.json();
+    if (!data || !Array.isArray(data.checks)) throw new Error('unreadable setup-check response');
+    return data;
+  }
+
+  function healthCheck(name) {
+    if (!_health) return null;
+    return _health.checks.find(c => c.check === name) || null;
+  }
+
+  function healthFailures() {
+    if (!_health) return [];
+    // `informational` entries are facts, not problems — they must never count
+    // toward the banner or appear as something to fix.
+    return _health.checks.filter(c => !c.ok && !c.informational);
+  }
+
+  // The one sentence most likely to explain why a given area came back broken or
+  // empty. Ordered most-specific-first: a radar read that failed says so; failing
+  // that, the repo it could not reach; failing that, the token; then the env var.
+  const HEALTH_PRIORITY = {
+    radar:     ['data:data/radar.json', 'github:repo', 'github:token', 'env:GH_TOKEN', 'env:GH_REPO', 'auth'],
+    jobs:      ['data:data/job-status.json', 'github:repo', 'github:token', 'env:GH_TOKEN', 'env:GH_REPO', 'auth'],
+    watchlist: ['github:repo', 'github:token', 'env:GH_TOKEN', 'env:GH_REPO', 'auth'],
+  };
+
+  // Returns the health sentence for `area`, or '' when the check ran clean (or
+  // could not be run at all) and the caller should fall back to generic text.
+  // Triggers a health run if we have not done one yet, so an error path always
+  // has something real to say.
+  async function healthSentence(area) {
+    if (!_health) {
+      try { _health = await fetchHealth(sessionStorage.getItem('co_pw') || ''); }
+      catch (_) { return ''; }
+      renderSetupState();
+    }
+    for (const name of (HEALTH_PRIORITY[area] || [])) {
+      const c = healthCheck(name);
+      if (c && !c.ok) return c.fix ? `${c.message} ${c.fix}` : c.message;
+    }
+    const first = healthFailures()[0];
+    if (first) return first.fix ? `${first.message} ${first.fix}` : first.message;
+    return '';
+  }
+
+  function renderSetupState() {
+    const banner = document.getElementById('setup-banner');
+    const failures = healthFailures();
+    if (banner) {
+      if (failures.length && !_setupBannerDismissed) {
+        document.getElementById('setup-banner-text').textContent =
+          `Setup needs attention (${failures.length})`;
+        banner.classList.add('open');
+      } else {
+        banner.classList.remove('open');
+      }
+    }
+    renderSetupPanel();
+  }
+
+  function renderSetupPanel() {
+    const wrap = document.getElementById('setup-results');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+
+    if (!_health) {
+      const p = document.createElement('div');
+      p.className = 'setup-check';
+      p.textContent = 'No setup check has run yet. Press "Run setup check" below.';
+      wrap.appendChild(p);
+    } else {
+      const failures = healthFailures();
+      if (!failures.length) {
+        const p = document.createElement('div');
+        p.className = 'setup-check';
+        p.textContent = 'Everything checks out — nothing here needs your attention.';
+        wrap.appendChild(p);
+      }
+      // Failures first and in full; then the informational notes, which are
+      // things worth knowing rather than things to fix.
+      for (const c of failures.concat(_health.checks.filter(c => c.informational))) {
+        const row = document.createElement('div');
+        row.className = c.ok ? 'setup-check' : 'setup-check bad';
+        const msg = document.createElement('div');
+        msg.textContent = c.message;   // textContent — the message is data, never markup
+        row.appendChild(msg);
+        if (c.fix) {
+          const fix = document.createElement('div');
+          fix.className = 'setup-fix';
+          fix.textContent = c.fix;
+          row.appendChild(fix);
+        }
+        wrap.appendChild(row);
+      }
+    }
+
+    const noteEl = document.getElementById('setup-note');
+    if (noteEl) noteEl.textContent = (_health && _health.note) || '';
+  }
+
+  function openSetupPanel() {
+    renderSetupPanel();
+    document.getElementById('setup-overlay').classList.add('open');
+    if (!_health) rerunSetupCheck();
+  }
+  function closeSetupPanel() { document.getElementById('setup-overlay').classList.remove('open'); }
+  function dismissSetupBanner() {
+    _setupBannerDismissed = true;
+    document.getElementById('setup-banner').classList.remove('open');
+  }
+
+  async function rerunSetupCheck() {
+    const btn = document.getElementById('setup-rerun-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+    try {
+      _health = await fetchHealth(sessionStorage.getItem('co_pw') || '');
+      _setupBannerDismissed = false;
+    } catch (err) {
+      _health = {
+        ok: false,
+        checks: [{
+          check: 'self', ok: false, informational: false,
+          message: 'Could not reach the setup check itself, so nothing could be verified.',
+          fix: 'Check your internet connection and try again. If the dashboard is loading but this keeps failing, the deployment may be mid-redeploy.',
+        }],
+        note: '',
+      };
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Run setup check'; }
+      renderSetupState();
+    }
+  }
+
   // ── Password gate ────────────────────────────────────────────────────────
   function unlock(pw) {
     sessionStorage.setItem('co_pw', pw);
     document.getElementById('gate').style.display = 'none';
     document.getElementById('app').style.display = 'block';
+    renderSetupState();
     loadData();
     loadRadar();
   }
 
-  // Ask the API whether a password is required before showing the gate.
-  // If DASHBOARD_PASSWORD is unset, skip straight to the dashboard.
+  function showGate(message) {
+    document.getElementById('gate').style.display = 'flex';
+    const err = document.getElementById('pw-error');
+    if (message) { err.textContent = message; err.style.display = 'block'; }
+    else { err.textContent = ''; err.style.display = 'none'; }
+  }
+
+  function gatePending(on) {
+    const el = document.getElementById('pw-pending');
+    if (el) el.style.display = on ? 'block' : 'none';
+    const btn = document.getElementById('pw-btn');
+    if (btn) btn.disabled = !!on;
+  }
+
+  // Verify a password against /api/health before unlocking anything.
+  //
+  // This is the fix for the stale-password failure: the old gate stored whatever
+  // was typed and unlocked immediately, so a wrong or since-changed password
+  // produced a fully-rendered dashboard where every request 401'd with no
+  // message anywhere. Now a password that does not match never gets stored, and
+  // the reason is on screen.
+  async function verifyAndUnlock(pw, staleMessage) {
+    gatePending(true);
+    let health;
+    try {
+      health = await fetchHealth(pw);
+    } catch (err) {
+      gatePending(false);
+      sessionStorage.removeItem('co_pw');
+      showGate('Could not reach the server to check your password. Check your connection and try again.');
+      return false;
+    }
+    gatePending(false);
+
+    const auth = health.checks.find(c => c.check === 'auth');
+    if (auth && !auth.ok) {
+      // A stored password that no longer matches is a different situation from a
+      // fresh typo, and saying so saves the user from retyping the same thing.
+      sessionStorage.removeItem('co_pw');
+      showGate(staleMessage || (auth.fix ? `${auth.message} ${auth.fix}` : auth.message));
+      return false;
+    }
+
+    _health = health;
+    unlock(pw);
+    return true;
+  }
+
   let driveConfigured = false;
 
   (async () => {
@@ -2023,20 +2265,26 @@
       const res = await fetch('/api/jobs?config=true');
       const cfg = await res.json();
       driveConfigured = !!cfg.driveConfigured;
-      if (!cfg.passwordRequired) { unlock(''); return; }
-    } catch (_) { /* network error — fall through to gate */ }
+    } catch (_) { /* network error — the health check below reports it properly */ }
 
-    // Password is required (or config fetch failed) — check sessionStorage first.
+    // Note: an unset DASHBOARD_PASSWORD no longer skips straight in. It used to,
+    // and the result was a dashboard that rendered fully and then 401'd every
+    // single request, because api/jobs.js fails closed. /api/health names that
+    // exact misconfiguration, so we let it, and show the sentence at the gate.
     const storedPw = sessionStorage.getItem('co_pw');
-    if (storedPw) { unlock(storedPw); return; }
-
-    // Show the gate.
-    document.getElementById('gate').style.display = 'flex';
+    if (storedPw !== null) {
+      await verifyAndUnlock(
+        storedPw,
+        'Your saved password no longer matches — enter the current one.',
+      );
+      return;
+    }
+    showGate('');
   })();
 
   document.getElementById('pw-btn').addEventListener('click', () => {
     const pw = document.getElementById('pw-input').value;
-    if (pw) unlock(pw);
+    if (pw) verifyAndUnlock(pw);
   });
   document.getElementById('pw-input').addEventListener('keydown', e => {
     if (e.key === 'Enter') document.getElementById('pw-btn').click();
@@ -2044,6 +2292,7 @@
 
   // ── Data loading ─────────────────────────────────────────────────────────
   async function loadData() {
+    const errEl = document.getElementById('jobs-error');
     try {
       const pw = sessionStorage.getItem('co_pw') || '';
       const res = await fetch(JOBS_API + '?t=' + Date.now(), {
@@ -2052,9 +2301,17 @@
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       jobs = data.jobs || {};
+      if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
       render();
     } catch (err) {
       console.error('Failed to load job-status.json:', err);
+      // Say WHY, using the setup check's own words, instead of leaving an empty
+      // pipeline and a console message no non-technical user will ever open.
+      const sentence = await healthSentence('jobs');
+      const text = sentence || 'Your jobs could not be loaded. Open the ⚙ setup check in the header to find out why.';
+      if (errEl) { errEl.textContent = text; errEl.style.display = 'block'; }
+      const loadingEl = document.getElementById('action-loading');
+      if (loadingEl) { loadingEl.style.display = 'block'; loadingEl.textContent = text; }
     }
   }
 
@@ -4008,8 +4265,16 @@
       renderRadar();
     } catch (err) {
       console.error('Failed to load radar.json:', err);
+      // The old one-liner here told the user nothing they could act on — and the
+      // wrong-repo case never even reached it, since GitHub's 404 made the read
+      // succeed empty. Quote the setup check; the generic line is a last resort.
+      const sentence = await healthSentence('radar');
       const loadingEl = document.getElementById('radar-loading');
-      if (loadingEl) { loadingEl.style.display = 'block'; loadingEl.textContent = 'Failed to load companies.'; }
+      if (loadingEl) {
+        loadingEl.style.display = 'block';
+        loadingEl.textContent = sentence
+          || 'Your companies could not be loaded. Open the ⚙ setup check in the header to find out why.';
+      }
     }
   }
 
@@ -4441,7 +4706,7 @@
   }
 
   // Close radar overlays on backdrop click (elements already exist by now).
-  ['radar-add-overlay', 'radar-detail-overlay', 'radar-research-overlay', 'watchlist-overlay'].forEach(oid => {
+  ['radar-add-overlay', 'radar-detail-overlay', 'radar-research-overlay', 'watchlist-overlay', 'setup-overlay'].forEach(oid => {
     const ov = document.getElementById(oid);
     if (ov) ov.addEventListener('click', e => { if (e.target === ov) ov.classList.remove('open'); });
   });
@@ -6092,8 +6357,12 @@
       document.getElementById('wl-loading').style.display = 'none';
       document.getElementById('wl-body').style.display = 'block';
     } catch (e) {
-      document.getElementById('wl-loading').textContent =
-        'Could not load your watch list. Close this and try again.';
+      // Same rule as Radar and the pipeline: the setup check knows why, so say
+      // what it says. "Close this and try again" was advice that never worked
+      // for any of the real causes (dead token, unreachable repo, stale password).
+      const sentence = await healthSentence('watchlist');
+      document.getElementById('wl-loading').textContent = sentence
+        || 'Could not load your watch list. Open the ⚙ setup check in the header to find out why.';
     }
   }
 
