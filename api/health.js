@@ -174,15 +174,64 @@ function envChecks(env) {
 
 // ── GitHub checks ─────────────────────────────────────────────────────────────
 
+// A token pasted out of a password manager or a masked field can carry
+// characters that look like nothing on screen — a bullet, a non-breaking space,
+// a smart quote, a stray newline. fetch() refuses to put those in a header and
+// throws a TypeError ("Cannot convert argument to a ByteString because the
+// character at index 15 has a value of 8226...") BEFORE any request is sent. The
+// catch-all around fetch used to report that as "Could not reach GitHub ... this
+// is usually temporary", which is the opposite of true: it never resolves on its
+// own, and the user waits forever for a network blip that is not there.
+//
+// So we look at the token ourselves first. HTTP header values may only carry
+// visible ASCII here, 0x21 to 0x7E — anything else is the paste bug, and we can
+// name it exactly, including where in the string it sits.
+export function findInvalidTokenChar(token) {
+  const s = String(token ?? '');
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code < 0x21 || code > 0x7e) return { index: i, code };
+  }
+  return null;
+}
+
+function invalidTokenCharCheck(name, token) {
+  const bad = findInvalidTokenChar(token);
+  if (!bad) return null;
+  return check(
+    name,
+    false,
+    `Your GH_TOKEN contains an invisible or invalid character (position ${bad.index + 1}), so the request to GitHub cannot even be sent. This almost always comes from copy-pasting the token out of a password manager or a masked field, which can bring along a hidden bullet, space or line break.`,
+    'In Vercel → Settings → Environment Variables, delete GH_TOKEN, then re-paste it carefully — reveal the value before copying, select exactly the token with no leading or trailing space, and paste it as plain text. Then Redeploy.',
+  );
+}
+
+// Defensive backstop for the same failure: if a token slips past the check above
+// on some other runtime, fetch still throws, and we would rather name the paste
+// bug than blame the network.
+function isByteStringError(err) {
+  const msg = String(err?.message || '');
+  return /ByteString|invalid header|is not a legal HTTP header value/i.test(msg);
+}
+
 // GET /user — is the token itself alive? This is the check that would have named
 // the "dashboard opens, everything 401s" failure on day one.
 export async function checkGithubToken(token) {
+  const badChar = invalidTokenCharCheck('github:token', token);
+  if (badChar) return badChar;
+
   let res;
   try {
     res = await fetch(`${GITHUB_API}/user`, {
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
     });
   } catch (err) {
+    if (isByteStringError(err)) return invalidTokenCharCheck('github:token', token) || check(
+      'github:token',
+      false,
+      'Your GH_TOKEN contains an invisible or invalid character, so the request to GitHub cannot even be sent. This almost always comes from copy-pasting the token out of a password manager or a masked field.',
+      'In Vercel → Settings → Environment Variables, delete GH_TOKEN, re-paste it carefully as plain text, then Redeploy.',
+    );
     return check(
       'github:token',
       false,

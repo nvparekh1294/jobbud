@@ -18,6 +18,7 @@ import handler, {
   checkGithubToken,
   checkGithubRepo,
   checkDataFile,
+  findInvalidTokenChar,
   optionalSourcesCheck,
   OPTIONAL_SOURCES,
   HEALTH_NOTE,
@@ -306,6 +307,51 @@ test('a VERCEL_URL problem does not block the GitHub checks — they are indepen
 });
 
 // ── GitHub token ──────────────────────────────────────────────────────────────
+
+// A token copied out of a password manager can carry an invisible character.
+// fetch() throws before any request goes out, and the generic catch-all used to
+// call that "usually temporary" — a wait that never ends.
+test('findInvalidTokenChar spots a non-Latin1 character and where it sits', () => {
+  const bad = findInvalidTokenChar('ghp_abcdefghij•klmno');
+  assert.equal(bad.index, 14);
+  assert.equal(bad.code, 0x2022);
+  // Whitespace, smart quotes and line breaks are caught too.
+  assert.ok(findInvalidTokenChar('ghp_abc def'));
+  assert.ok(findInvalidTokenChar('ghp_abc\n'));
+  assert.ok(findInvalidTokenChar('ghp_abc def'));
+  assert.equal(findInvalidTokenChar('ghp_ABCdef0123-_'), null);
+});
+
+test('a token with an invisible character names the paste bug, not the network', async () => {
+  // No fetch mock at all: a token this broken must never reach the network.
+  const c = await checkGithubToken('ghp_abcdefghij•klmno');
+  assert.equal(c.ok, false);
+  assert.match(c.message, /invisible or invalid character/);
+  assert.match(c.message, /password manager/);
+  assert.match(c.message, /position 15/);
+  assert.doesNotMatch(c.fix, /usually temporary/);
+  assert.match(c.fix, /delete GH_TOKEN/);
+  assert.match(c.fix, /re-paste/);
+  assert.match(c.fix, /Redeploy/);
+});
+
+test('the runtime ByteString TypeError is reported as the paste bug too', async () => {
+  const throwing = async () => {
+    throw new TypeError('Cannot convert argument to a ByteString because the character at index 15 has a value of 8226 which is greater than 255.');
+  };
+  const c = await withFetch(throwing, () => checkGithubToken('ghp_looksclean'));
+  assert.equal(c.ok, false);
+  assert.match(c.message, /invisible or invalid character/);
+  assert.doesNotMatch(c.fix, /usually temporary/);
+});
+
+test('a genuine network error still gets the temporary-network message', async () => {
+  const throwing = async () => { throw new Error('fetch failed'); };
+  const c = await withFetch(throwing, () => checkGithubToken('ghp_clean'));
+  assert.equal(c.ok, false);
+  assert.match(c.message, /Could not reach GitHub/);
+  assert.match(c.fix, /usually temporary/);
+});
 
 test('a dead token (GitHub 401) is named as invalid or expired', async () => {
   const c = await withFetch(routeFetch([['/user', jsonRes(401, { message: 'Bad credentials' })]]),
