@@ -2274,6 +2274,18 @@
   let driveConfigured = false;
 
   (async () => {
+    // Put the gate on screen BEFORE any network call. #gate and #app both start
+    // hidden, so every await between here and unlock() is a blank white page —
+    // and the stored-password path awaits the config probe plus /api/health,
+    // which itself makes up to four sequential GitHub round-trips. That was
+    // seconds of nothing on every single load. The gate is where "Checking…"
+    // belongs, so show it first and let the pending state account for the wait.
+    const storedPw = sessionStorage.getItem('co_pw');
+    showGate('');
+    // No stored password means nothing to verify: the gate is the final answer
+    // and must stay instant and interactive, so no pending state on that path.
+    if (storedPw !== null) gatePending(true);
+
     try {
       const res = await fetch('/api/jobs?config=true');
       const cfg = await res.json();
@@ -2284,7 +2296,6 @@
     // and the result was a dashboard that rendered fully and then 401'd every
     // single request, because api/jobs.js fails closed. /api/health names that
     // exact misconfiguration, so we let it, and show the sentence at the gate.
-    const storedPw = sessionStorage.getItem('co_pw');
     if (storedPw !== null) {
       await verifyAndUnlock(
         storedPw,
@@ -2292,7 +2303,7 @@
       );
       return;
     }
-    showGate('');
+    gatePending(false);
   })();
 
   document.getElementById('pw-btn').addEventListener('click', () => {

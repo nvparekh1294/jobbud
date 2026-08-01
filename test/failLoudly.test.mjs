@@ -48,8 +48,24 @@ test('the click handler goes through verification, never straight to unlock', ()
 });
 
 test('a stored password is verified on load, with its own stale wording', () => {
-  assert.match(html, /const storedPw = sessionStorage\.getItem\('co_pw'\);[\s\S]{0,220}verifyAndUnlock\(\s*\n?\s*storedPw,/);
+  assert.match(html, /const storedPw = sessionStorage\.getItem\('co_pw'\);/);
+  assert.match(html, /verifyAndUnlock\(\s*\n?\s*storedPw,/);
   assert.match(html, /Your saved password no longer matches — enter the current one\./);
+});
+
+test('the boot path shows the gate before it awaits anything', () => {
+  // #gate and #app both start hidden, so an await before showGate() is a blank
+  // white page. Verifying a stored password costs a config probe plus the health
+  // check's GitHub round-trips — seconds of white on every load.
+  const boot = html.slice(html.indexOf('  (async () => {'));
+  const body = boot.slice(0, boot.indexOf("getElementById('pw-btn').addEventListener"));
+  assert.ok(body.indexOf("showGate('')") < body.indexOf('await fetch('),
+    'the boot path awaits before it puts the gate on screen');
+  // ...and the wait is accounted for, rather than looking like a hung gate.
+  assert.match(body, /if \(storedPw !== null\) gatePending\(true\)/);
+  assert.ok(body.indexOf('gatePending(true)') < body.indexOf('await fetch('),
+    'the pending state is set after the await it is meant to cover');
+  assert.match(html, /id="pw-pending"/);
 });
 
 test('an unset DASHBOARD_PASSWORD no longer skips the gate into a dead dashboard', () => {
