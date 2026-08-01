@@ -121,6 +121,13 @@ jobs:
           #     wins, ordered by version (v0.10.0 > v0.9.0 — a plain lexical sort gets
           #     that backwards).
           #
+          #     Prereleases are skipped. `-v:refname` ranks v2.0.0-rc1 ABOVE v2.0.0,
+          #     so once a release candidate is tagged upstream every downstream copy
+          #     would pin itself to the RC and never move again — the merge-base check
+          #     below would report "up to date" forever. A tag containing `-` is a
+          #     prerelease by semver's own rule, so drop those and keep the rest in
+          #     version order.
+          #
           #     Before the first release exists there is nothing to track, so we fall
           #     back to main exactly as before. Everything downstream of this point
           #     merges $TARGET_REF and never names a branch directly.
@@ -128,13 +135,19 @@ jobs:
           #     awk (not `head -1`) so the producer is drained: closing the pipe early
           #     kills git with SIGPIPE and `set -o pipefail` aborts the step.
           LATEST_TAG="$(git for-each-ref --sort=-v:refname --format='%(refname:strip=2)' 'refs/upstream-tags/v*' \
-                        | awk 'NR == 1 { print }')"
+                        | awk '!/-/ && !found { print; found = 1 }')"
           if [ -n "$LATEST_TAG" ]; then
             TARGET_REF="refs/upstream-tags/$LATEST_TAG"
             TARGET_DESC="release $LATEST_TAG"
-            HUMAN_FETCH="git fetch upstream --tags"
-            HUMAN_REF="$LATEST_TAG"
-            echo "Tracking $TARGET_DESC ($(git rev-parse --short "$TARGET_REF"))."
+            # Mirror the workflow's own fetch. `git fetch upstream --tags` writes into
+            # the user's LOCAL tag namespace and will not overwrite a tag they already
+            # have, so their own v1.2.0 would silently win over upstream's. Fetching
+            # into refs/upstream-tags/* keeps the two apart, exactly as above.
+            # (main comes along too — step 4 of the recipe needs upstream/main to
+            # find the snapshot the copy was made from.)
+            HUMAN_FETCH="git fetch --no-tags upstream main '+refs/tags/*:refs/upstream-tags/*'"
+            HUMAN_REF="refs/upstream-tags/$LATEST_TAG"
+            echo "Tracking $TARGET_DESC ($(git rev-parse --short "$TARGET_REF^{commit}"))."
           else
             echo "no release tags found — tracking main until the first release"
             TARGET_REF="upstream/main"

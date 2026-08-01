@@ -6,11 +6,10 @@
 // a watch list that said "Close this and try again" for a problem no amount of
 // trying again would fix.
 //
-// DOM behaviour is asserted against the source the same way memoryDashboard and
-// watchList do — the repo test suite stays dependency-free. The full interactive
-// walk (wrong password stays at the gate, stale password drops to the gate,
-// healthy shows no banner, dead-token and wrong-repo sims surface the specific
-// sentence) was run separately under jsdom against this same file.
+// These assert against dashboard/index.html as source text, the same way
+// memoryDashboard and watchList do — the repo test suite stays dependency-free.
+// So they pin the wiring (the gate verifies before unlocking, each failure path
+// asks healthSentence for its area) rather than exercising the DOM.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

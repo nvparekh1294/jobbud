@@ -5,10 +5,10 @@
 // half-finished work into a running job search. The workflow therefore merges
 // the newest v* tag, and only falls back to main while no release exists yet.
 //
-// The behavioural run (tagged upstream merges the tag and excludes tip work,
-// semver ordering, idempotency, no-tag fallback, and a local v* tag not being
-// mistaken for an upstream release) was executed against real local git remotes
-// with the workflow's own shell body extracted from this file.
+// These are static assertions over update-check.yml: they pin the ref-selection
+// shell — which namespace tags are fetched into, the version sort, the prerelease
+// filter, the no-tag fallback, and that everything downstream goes through
+// $TARGET_REF. They do not execute the workflow.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -29,8 +29,17 @@ test('the target is the newest v* tag by VERSION order, not lexical order', () =
   assert.match(wf, /git for-each-ref --sort=-v:refname[\s\S]{0,120}'refs\/upstream-tags\/v\*'/);
   // `head -1` on a git pipe under `set -o pipefail` is the SIGPIPE trap this
   // workflow already documents elsewhere; awk drains the producer instead.
-  assert.match(wf, /awk 'NR == 1 \{ print \}'/);
+  assert.match(wf, /awk '!\/-\/ && !found \{ print; found = 1 \}'/);
   assert.doesNotMatch(wf, /refs\/upstream-tags[\s\S]{0,120}head -n? ?1/);
+});
+
+test('prereleases are filtered out before the newest tag is picked', () => {
+  // `-v:refname` ranks v2.0.0-rc1 above v2.0.0. Without the filter, the first RC
+  // upstream ever tags becomes every downstream copy's permanent target.
+  const pick = wf.slice(wf.indexOf('LATEST_TAG='), wf.indexOf('if [ -n "$LATEST_TAG" ]'));
+  assert.match(pick, /awk '!\/-\/[^']*'/);
+  // and the reason is written down where the next person will read it
+  assert.match(wf, /prerelease/i);
 });
 
 test('with no release tags it falls back to main and says so', () => {
@@ -69,8 +78,12 @@ test('the manual-merge recipes tell the user to merge the same ref the workflow 
   // Three issue paths, each with its own recipe; all three take the fetch command
   // and the ref from the same two variables the workflow itself used.
   assert.equal((wf.match(/"\$HUMAN_FETCH" "\$HUMAN_REF"/g) || []).length, 3);
-  assert.match(wf, /HUMAN_FETCH="git fetch upstream --tags"/);
-  assert.match(wf, /HUMAN_REF="\$LATEST_TAG"/);
+  // The hand recipe must fetch into the same private namespace the workflow uses.
+  // `git fetch upstream --tags` writes to the user's own refs/tags/* and refuses to
+  // overwrite a tag they already hold, so their v1.2.0 would quietly beat upstream's.
+  assert.match(wf, /HUMAN_FETCH="git fetch --no-tags upstream main '\+refs\/tags\/\*:refs\/upstream-tags\/\*'"/);
+  assert.match(wf, /HUMAN_REF="refs\/upstream-tags\/\$LATEST_TAG"/);
+  assert.doesNotMatch(wf, /HUMAN_FETCH="git fetch upstream --tags"/);
 });
 
 test('the README says updates deliver releases', () => {
