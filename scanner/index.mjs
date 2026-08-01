@@ -13,9 +13,9 @@ try {
   }
 } catch { /* .env not present — fine in CI */ }
 
-import { fetchJSearch } from './sources/jsearch.mjs';
-import { fetchAdzuna } from './sources/adzuna.mjs';
-import { fetchSerpApi, checkSerpApiBalance } from './sources/serpapi.mjs';
+import { fetchJSearch, jsearchStats } from './sources/jsearch.mjs';
+import { fetchAdzuna, adzunaStats } from './sources/adzuna.mjs';
+import { fetchSerpApi, checkSerpApiBalance, serpApiStats } from './sources/serpapi.mjs';
 import { fetchPortals } from './portalScanner.mjs';
 import { fetchRadar } from './radarSource.mjs';
 import { dedup, markScored } from './dedup.mjs';
@@ -171,14 +171,19 @@ async function run() {
   }
 
   // ── API source fetches ────────────────────────────────────────────────────
+  //
+  // Each source carries its per-run stats object. Quota is recorded from
+  // stats.attempts — the requests actually sent, which count against the
+  // provider's quota whether they succeeded or 404'd — never from the estimate
+  // above. The estimates exist only for the pre-flight checkQuota projection.
   const sources = [];
-  if (jsearchOk) sources.push({ name: 'jsearch', fn: () => fetchJSearch(config), estimate: jsearchEstimate });
+  if (jsearchOk) sources.push({ name: 'jsearch', fn: () => fetchJSearch(config), stats: jsearchStats });
   else console.warn('[index] JSearch skipped (quota check failed)');
 
-  if (adzunaOk) sources.push({ name: 'adzuna', fn: () => fetchAdzuna(config), estimate: adzunaEstimate });
+  if (adzunaOk) sources.push({ name: 'adzuna', fn: () => fetchAdzuna(config), stats: adzunaStats });
   else console.warn('[index] Adzuna skipped (quota check failed)');
 
-  if (serpApiOk) sources.push({ name: 'serpapi', fn: () => fetchSerpApi(config), estimate: serpApiEstimate });
+  if (serpApiOk) sources.push({ name: 'serpapi', fn: () => fetchSerpApi(config), stats: serpApiStats });
 
   if (sources.length === 0 && portalJobs.length === 0) {
     console.warn('[index] All sources skipped and no portal jobs — nothing to process. Exiting.');
@@ -189,12 +194,19 @@ async function run() {
   if (sources.length > 0) {
     const fetchResults = await Promise.allSettled(sources.map(s => s.fn()));
 
-    // Record usage for sources that completed successfully
+    // Record what each source actually spent, and say so when a source came
+    // back with nothing because every one of its queries failed. The old code
+    // recorded the estimate on any fulfilled promise, and the sources swallow
+    // per-query errors — so a scan where all 22 calls 404'd logged "recorded 22
+    // calls", returned 0 jobs, and the Action went green.
     for (let i = 0; i < sources.length; i++) {
-      if (fetchResults[i].status === 'fulfilled') {
-        await recordUsage(sources[i].name, sources[i].estimate);
-      } else {
-        console.error(`[index] ${sources[i].name} fetch failed:`, fetchResults[i].reason?.message);
+      const { name, stats } = sources[i];
+      await recordUsage(name, stats.attempts);
+
+      if (fetchResults[i].status === 'rejected') {
+        console.error(`[index] ${name} fetch failed:`, fetchResults[i].reason?.message);
+      } else if (stats.queries > 0 && stats.failures === stats.queries) {
+        console.error(`[index] ${name}: ALL ${stats.queries} quer${stats.queries === 1 ? 'y' : 'ies'} failed — 0 jobs from this source this scan. Last error: ${stats.lastError}`);
       }
     }
 

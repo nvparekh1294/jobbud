@@ -6,7 +6,22 @@ const BASE_URLS = {
   sg: 'https://api.adzuna.com/v1/api/jobs/sg/search',
 };
 
+// Per-run counters, read by index.mjs so quota is recorded from what actually
+// went over the wire rather than a pre-computed estimate. attempts = HTTP
+// requests made (they count against the quota even when they fail);
+// queries/failures = searches tried and how many came back empty-handed.
+export const adzunaStats = { attempts: 0, queries: 0, failures: 0, lastError: null };
+
+function resetAdzunaRun() {
+  adzunaStats.attempts = 0;
+  adzunaStats.queries = 0;
+  adzunaStats.failures = 0;
+  adzunaStats.lastError = null;
+}
+
 export async function fetchAdzuna(config) {
+  resetAdzunaRun();
+
   if (!config.adzunaAppId || !config.adzunaApiKey) {
     console.warn('Adzuna credentials not set -- skipping');
     return [];
@@ -18,11 +33,14 @@ export async function fetchAdzuna(config) {
   const results = [];
 
   for (const query of queries) {
+    adzunaStats.queries++;
     try {
       const jobs = await searchAdzuna(query, config);
       results.push(...jobs);
       await sleep(500);
     } catch (err) {
+      adzunaStats.failures++;
+      adzunaStats.lastError = err.message;
       console.error(`Adzuna query failed for "${query.what}" in ${query.country}:`, err.message);
     }
   }
@@ -85,6 +103,7 @@ async function searchAdzuna({ what, where, country, distanceKm }, config) {
     full_time: '1',
   });
 
+  adzunaStats.attempts++;
   const response = await fetch(`${baseUrl}/1?${params}`);
 
   if (!response.ok) {
