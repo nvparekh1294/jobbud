@@ -1458,7 +1458,10 @@ Do NOT treat absence of information as a signal to clear or placeholder-ize exis
     const profileYml = data.content?.[0]?.text ?? '';
     if (!profileYml.trim() || !/target_roles/.test(profileYml)) {
       console.warn('[coach] apply-memory-to-profile: generation returned no usable YAML — leaving profile.yml untouched');
-      return res.status(200).json({ error: "Couldn't rebuild your search profile just now. Please try again." });
+      // 502, not 200: nothing was written, so this is a failure. A 200 with an
+      // error body makes every non-browser caller (and any future retry logic)
+      // read the request as having succeeded.
+      return res.status(502).json({ error: "Couldn't rebuild your search profile just now. Please try again." });
     }
 
     const before = summarizeSearchFields(existingProfile);
