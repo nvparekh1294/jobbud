@@ -51,16 +51,21 @@ function check(name, ok, message, fix, informational = false) {
 
 // ── Optional API job sources ──────────────────────────────────────────────────
 //
-// JSearch / Adzuna / SerpApi widen the scan beyond the watch list. Their keys are
+// JSearch / Adzuna widen the scan beyond the watch list. Their keys are
 // read by the SCANNER, from GitHub Actions secrets — this function runs on
 // Vercel and cannot see that vault. So this check never fails and never claims a
 // key is missing: it names the capability, reports only what is visible from
 // here, and says outright that Actions is the authority. Anything stronger would
 // be a confident lie about a vault we cannot read.
+//
+// SerpApi is deliberately absent. The scanner still knows how to call it, but the
+// weekly workflow does not pass SERP_API_KEY through, and the workflow files are
+// frozen at the version the fleet's updater can accept — so telling anyone to add
+// that secret today would be telling them to do something that silently does
+// nothing. It comes back with the updater migration, not before.
 export const OPTIONAL_SOURCES = [
   { label: 'JSearch', vars: ['JSEARCH_API_KEY'] },
   { label: 'Adzuna', vars: ['ADZUNA_APP_ID', 'ADZUNA_API_KEY'] },
-  { label: 'SerpApi', vars: ['SERP_API_KEY'] },
 ];
 
 export function optionalSourcesCheck(env) {
@@ -68,10 +73,11 @@ export function optionalSourcesCheck(env) {
   const notSeenHere = OPTIONAL_SOURCES.filter(s => !s.vars.every(v => env[v])).map(s => s.label);
 
   const preamble =
-    'Optional: JobBud can also pull jobs from across the web (JSearch, Adzuna, SerpApi) ' +
+    'Optional: JobBud can also pull jobs from across the web (JSearch, Adzuna) ' +
     'instead of only the companies on your watch list. Their keys are read by the ' +
     'scanner from your GitHub Actions secrets, which this page cannot see, so treat ' +
-    'the following as a hint and not an answer.';
+    'the following as a hint and not an answer. (SerpApi is not currently wired to ' +
+    'scheduled scans, so there is no secret to add for it yet.)';
 
   const detail = seenHere.length
     ? ` Visible to the dashboard: ${seenHere.join(', ')}. Not visible here: ${notSeenHere.join(', ') || 'none'}.`
@@ -81,7 +87,7 @@ export function optionalSourcesCheck(env) {
     'sources:optional',
     true,
     preamble + detail,
-    'To add one, see the "API job sources" step in SETUP.md. The secret names are JSEARCH_API_KEY, ADZUNA_APP_ID, ADZUNA_API_KEY and SERP_API_KEY, and they go in your repo under Settings → Secrets and variables → Actions.',
+    'To add one, see the "API job sources" step in SETUP.md. The secret names are JSEARCH_API_KEY, ADZUNA_APP_ID and ADZUNA_API_KEY, and they go in your repo under Settings → Secrets and variables → Actions.',
     true,
   );
 }

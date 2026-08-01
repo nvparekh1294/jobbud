@@ -268,7 +268,9 @@ Every variable below is one you add by hand in Vercel → **Settings → Environ
 
 Without them: JobBud only sees jobs on the companies in your watch list (`scanner/portals.yml`). With them: the weekly API scan also pulls listings from across the web — roles at companies you have never heard of, matched against the same profile and scored by the same pipeline. Each source is independent; set only the ones you have.
 
-The four secret names are `JSEARCH_API_KEY`, `ADZUNA_APP_ID`, `ADZUNA_API_KEY`, and `SERP_API_KEY`, and they belong in your repo's **Settings → Secrets and variables → Actions** — *not* in Vercel, because only the GitHub Actions scanner reads them. Each service has its own signup and pricing, usually with a small free tier. The step-by-step walkthrough — which service is which, where to sign up, and how to tell a missing key from a misplaced one — is in **[SETUP.md](SETUP.md#optional-api-job-sources-jsearch-adzuna-serpapi)**.
+The three secret names are `JSEARCH_API_KEY`, `ADZUNA_APP_ID`, and `ADZUNA_API_KEY`, and they belong in your repo's **Settings → Secrets and variables → Actions** — *not* in Vercel, because only the GitHub Actions scanner reads them. Each service has its own signup and pricing, usually with a small free tier. The step-by-step walkthrough — which service is which, where to sign up, and how to tell a missing key from a misplaced one — is in **[SETUP.md](SETUP.md#optional-api-job-sources-jsearch-adzuna)**.
+
+(A third source, SerpApi, is not currently wired to scheduled scans, so there is no secret to add for it yet.)
 
 ### Google Drive — automatic prep doc saving
 

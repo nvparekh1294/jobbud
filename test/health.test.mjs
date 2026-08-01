@@ -555,14 +555,18 @@ test('the optional-sources check never fails, so it can never raise the banner',
 test('the optional-sources check names the capability and points at Actions secrets', () => {
   const c = optionalSourcesCheck({});
   assert.match(c.message, /jobs from across the web/);
-  assert.match(c.message, /JSearch, Adzuna, SerpApi/);
+  assert.match(c.message, /JSearch, Adzuna/);
+  // SerpApi's key is not passed through by any workflow, so the hint must say so
+  // rather than list it as something to set up.
+  assert.match(c.message, /SerpApi is not currently wired to scheduled scans/);
   // It must not claim a key is missing — it cannot see the vault that holds them.
   assert.match(c.message, /GitHub Actions secrets, which this page cannot see/);
   assert.match(c.message, /expected/);
   assert.match(c.fix, /Settings → Secrets and variables → Actions/);
-  for (const name of ['JSEARCH_API_KEY', 'ADZUNA_APP_ID', 'ADZUNA_API_KEY', 'SERP_API_KEY']) {
+  for (const name of ['JSEARCH_API_KEY', 'ADZUNA_APP_ID', 'ADZUNA_API_KEY']) {
     assert.ok(c.fix.includes(name), `fix text omits ${name}`);
   }
+  assert.ok(!c.fix.includes('SERP_API_KEY'), 'the fix text tells users to add a secret no workflow reads');
 });
 
 test('Adzuna needs BOTH of its values before it counts as visible', () => {
@@ -573,7 +577,7 @@ test('Adzuna needs BOTH of its values before it counts as visible', () => {
 test('the optional-sources check reports presence only, never a value', () => {
   const c = optionalSourcesCheck({ SERP_API_KEY: 'SUPERSECRET', JSEARCH_API_KEY: 'SUPERSECRET' });
   assert.ok(!JSON.stringify(c).includes('SUPERSECRET'));
-  assert.match(c.message, /Visible to the dashboard: JSearch, SerpApi/);
+  assert.match(c.message, /Visible to the dashboard: JSearch\./);
   assert.match(c.message, /Not visible here: Adzuna/);
 });
 
@@ -613,8 +617,29 @@ test('SETUP.md sends the API-source keys to Actions secrets, not to .env or Verc
   // .env.example may only be mentioned as a local-development aside.
   assert.match(body, /`\.env\.example`[^\n]*local development/);
   assert.match(body, /Adding them to Vercel does nothing/);
-  for (const name of ['JSEARCH_API_KEY', 'ADZUNA_APP_ID', 'ADZUNA_API_KEY', 'SERP_API_KEY']) {
+  for (const name of ['JSEARCH_API_KEY', 'ADZUNA_APP_ID', 'ADZUNA_API_KEY']) {
     assert.ok(body.includes(name), `SETUP.md omits ${name}`);
+  }
+});
+
+// The companion to the OPTIONAL_SOURCES check above, guarding the docs directly:
+// the "Where the keys go" table is the list of secrets SETUP.md tells the reader
+// to create, so every name in it must actually reach the scanner. SerpApi's
+// SERP_API_KEY was removed from that table because the workflow files are frozen
+// at the fleet's version for updater deliverability and no longer pass it through.
+test('every secret SETUP.md tells users to create is passed through by a workflow', () => {
+  const setup = repoFile('SETUP.md');
+  const table = setup.slice(setup.indexOf('### Where the keys go'));
+  const body = table.slice(0, table.indexOf('\n### ') === -1 ? undefined : table.indexOf('\n### '));
+  const names = [...new Set([...body.matchAll(/`([A-Z][A-Z0-9_]{3,})`/g)].map(m => m[1]))];
+  assert.ok(names.length >= 3, 'no secret names found in the "Where the keys go" table — did it move?');
+  const wfDir = join(__dirname, '..', '.github', 'workflows');
+  const workflows = readdirSync(wfDir).map(f => readFileSync(join(wfDir, f), 'utf8')).join('\n');
+  for (const name of names) {
+    assert.ok(
+      workflows.includes(`secrets.${name}`),
+      `SETUP.md tells users to add "${name}" as an Actions secret, but no workflow passes secrets.${name} to the scanner — it would silently do nothing`,
+    );
   }
 });
 

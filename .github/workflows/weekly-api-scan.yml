@@ -54,11 +54,6 @@ jobs:
           JSEARCH_API_KEY: ${{ secrets.JSEARCH_API_KEY }}
           ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
           ADZUNA_API_KEY: ${{ secrets.ADZUNA_API_KEY }}
-          # scanner/index.mjs wires SerpApi as a third API source, but this step
-          # never passed the key through — so a user who followed the docs and
-          # added SERP_API_KEY as an Actions secret got "SerpAPI key not set --
-          # skipping" forever, with nothing anywhere naming the reason.
-          SERP_API_KEY: ${{ secrets.SERP_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
           VERCEL_URL: ${{ secrets.VERCEL_URL }}

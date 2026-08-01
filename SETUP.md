@@ -134,13 +134,13 @@ last path segment of the URL (`.../folders/THIS_PART`).
 
 ---
 
-## Optional: API job sources (JSearch, Adzuna, SerpApi)
+## Optional: API job sources (JSearch, Adzuna)
 
-By default JobBud only looks at the companies on your watch list. These three
+By default JobBud only looks at the companies on your watch list. These two
 services widen that to jobs from across the web — roles at companies you have
 never heard of, scored against your profile by exactly the same pipeline.
 
-Each source is independent. Set up one, two, or all three; skip them entirely and
+Each source is independent. Set up one or both; skip them entirely and
 JobBud still scans everything on your company watch list — the file
 `scanner/portals.yml`, which you edit from the dashboard's **Radar tab → ⚙ Edit
 Watch List**.
@@ -151,7 +151,11 @@ Watch List**.
 |---------|--------------|
 | **JSearch** | A broad aggregated job feed, searched by your target roles and locations. |
 | **Adzuna** | Job-board listings for the US, UK, and Singapore. In `config/profile.yml` write the country as `us`, `gb` or `sg` — `usa` and `uk` are understood too; anything else is skipped, and the scan log says which location it skipped and why. |
-| **SerpApi** | Google Jobs results — which sweeps up LinkedIn, Greenhouse, Lever, Ashby and Workday postings Google has indexed. |
+
+> **SerpApi (Google Jobs) is not currently wired to scheduled scans.** The scanner
+> still knows how to call it, but the weekly workflow does not pass a
+> `SERP_API_KEY` through to it, so adding that secret today would do nothing.
+> There is nothing for you to set up — it will come back with a future update.
 
 ### Where to sign up
 
@@ -161,9 +165,6 @@ Watch List**.
 - **Adzuna** is at [adzuna.com](https://www.adzuna.com). Register for its
   developer API and it issues you a **pair** of values, an app ID and an app key.
   You need both.
-- **SerpApi** is at [serpapi.com](https://serpapi.com) — create an account and
-  copy your API key. Its free plan is 100 searches a month
-  ([Google Jobs API docs](https://serpapi.com/google-jobs-api)).
 
 Each service sets its own pricing, usually with a small free tier. Check the
 current plan on the site before you rely on it — the scan makes real API calls.
@@ -178,7 +179,6 @@ secret.** Add each one you have, using these exact names:
 | `JSEARCH_API_KEY` | JSearch (via RapidAPI) |
 | `ADZUNA_APP_ID` | Adzuna — the app ID |
 | `ADZUNA_API_KEY` | Adzuna — the app key |
-| `SERP_API_KEY` | SerpApi |
 
 These are **the one exception** to the two-vaults rule at the top of this file.
 The scanner runs on GitHub Actions and it is the only thing that reads them, so
@@ -204,7 +204,10 @@ Adzuna credentials not set -- skipping
 SerpAPI key not set -- skipping
 ```
 
-Seeing one of those lines when you *did* add the key means it landed in the wrong
+The **SerpAPI** line is expected on every run and there is nothing to fix — as
+above, that source is not currently wired to scheduled scans.
+
+Seeing one of the other two lines when you *did* add the key means it landed in the wrong
 place — most often in Vercel's environment variables instead of the repo's Actions
 secrets, or under a slightly different name. Re-check the spelling against the
 table above and re-run the workflow.
