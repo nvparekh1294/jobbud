@@ -25,6 +25,7 @@
 !/lib
 /lib/*
 !/lib/atsDetect.js
+!/lib/bulletBank.mjs
 !/lib/auth.mjs
 !/lib/github.js
 !/lib/memory.mjs

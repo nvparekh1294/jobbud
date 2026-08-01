@@ -12,31 +12,42 @@ tailored resume or outreach message.
 bullet-bank.md is gitignored and will never be committed.
 
 FORMAT:
+- The BODY of this file is YOUR RESUME, reorganized. Every bullet
+  above the "Suggested Additions" heading is copied VERBATIM from
+  your resume — same words, same order, same numbers. The AI
+  groups and tags them; it never rewrites them.
 - Bullets are organized by company, then grouped by theme within
   each company
-- Each bullet is tagged with role-type tags (defined by you or
-  generated based on your target roles) plus a priority:
-  [primary] (strongest, most broadly applicable), [alt] (use if
-  primary doesn't fit the job description), [optional] (only if
-  the job description specifically calls for it)
-- Bullets are written in their final, polished form — the AI
-  uses them verbatim, it does not rewrite or paraphrase them
-- The same achievement can have multiple bullet variants tagged
-  for different role types if it should be framed differently
-  depending on the job
+- Each bullet is tagged with role-type tags (yours, chosen from
+  the roles you're targeting) plus a priority: [primary]
+  (strongest, most broadly applicable), [alt] (use if primary
+  doesn't fit the job description), [optional] (only if the job
+  description specifically calls for it)
+- The LAST section, "Suggested Additions", is the one place the AI
+  writes. It holds achievements you mentioned in conversation but
+  never put on your resume. Every one is tagged [ai-suggested] and
+  followed by a "Why:" line. These NEVER appear on a generated
+  resume — they are only offered as suggestions alongside your
+  application package, until you decide to add one to your real
+  resume yourself.
+- The "Tags:" line below is read by the app to build your role-type
+  picker in the Generate Package window. Keep its format: one line,
+  entries separated by semicolons, each written as `slug = Label`.
 -->
 
 ## How to Use This File
 
-**Role type tags (example — define your own based on your target roles):**
-- `[ops]` = Business Operations, Chief of Staff, Head of Operations
-- `[strategy]` = Strategy, Corporate Development, Business Strategy
-- `[finance]` = Finance, FP&A, Strategic Finance
+**Role type tags (example — yours are generated from your own target roles):**
+
+Tags: ops = Business Operations / Chief of Staff; strategy = Strategy & Corporate Development; finance = Strategic Finance / FP&A
 
 **Priority tags:**
 - `[primary]` = use this version first
 - `[alt]` = use only if primary doesn't fit the job description
 - `[optional]` = include only if the job description specifically calls for it
+
+**Where the words come from:** everything above "Suggested Additions" is your
+own resume text, verbatim. Everything under it is AI-written and clearly marked.
 
 ---
 
@@ -47,13 +58,9 @@ San Francisco, CA | January 2022 – Present
 
 - Redesigned the quarterly planning process across 6 business units, reducing cycle time by 40% and improving cross-functional alignment between product, sales, and finance `[ops][strategy][primary]`
 
-- Led a cross-functional initiative spanning engineering, sales, and finance to redesign quarterly planning, cutting cycle time by 40% `[ops][alt]`
-
 ### Theme: Financial Planning
 
 - Built a zero-to-one financial model for a new product line that informed a $12M investment decision and became the standard planning template for two subsequent launches `[finance][strategy][primary]`
-
-- Partnered with finance leadership to build the company's first rolling 12-month forecast model, replacing static annual budgeting `[finance][alt]`
 
 ---
 
@@ -70,4 +77,17 @@ New York, NY | June 2019 – December 2021
 
 - Hired and onboarded a team of 5 analysts across 2 functions in 4 months during a period of rapid company growth `[ops][primary]`
 
-- Coached 2 direct reports to promotion within 18 months through structured weekly 1:1s and stretch project assignments `[ops][optional]`
+---
+
+## Suggested Additions (AI-written — not from your resume)
+
+These bullets were written by AI from things you described in conversation that
+are not on your resume. They are never used on a generated resume. When one is
+relevant to a role you're applying for, it will be offered as a suggestion in
+your application package — add it to your real resume yourself if you want it.
+
+- Led the vendor consolidation that cut recurring software spend by [ADD: specific number] across the operations stack `[ops][ai-suggested]`
+  Why: You mentioned this in conversation but it is missing from your resume — it is direct cost-ownership evidence, which most operations job descriptions ask for explicitly.
+
+- Chaired the cross-company integration committee through a [ADD: specific number]-person acquisition, sequencing systems and org changes over two quarters `[strategy][ai-suggested]`
+  Why: Post-merger integration experience is the single strongest signal for the corporate development roles you're targeting, and nothing on your resume shows it today.

@@ -1034,24 +1034,57 @@ Be specific and grounded only in what the user told you. Use placeholders for mi
 // path the frontend happened to call. This company→theme, role-type-tagged,
 // priority-ranked format is the one the downstream application-package bullet selection
 // expects.
-const BULLET_BANK_SYSTEM = (updatePrefix = '') => `${updatePrefix}You are generating a bullet-bank.md file for a job search automation system. This file is a curated library of strong, metric-backed achievement bullets the AI selects from verbatim when generating tailored resumes and outreach messages.
+//
+// THE VERBATIM RULE: this prompt used to instruct the model to "write 2-3 variant
+// bullets" per theme — i.e. to REWRITE the user's resume in their own bank, so the
+// bullets a generated resume used verbatim were the AI's sentences, not the user's.
+// That design is rejected. The bank's body is now the user's own resume language,
+// character for character. AI-written content is still valuable — an achievement the
+// user described in conversation but never put on their resume is worth surfacing —
+// so it goes in a clearly-flagged "Suggested Additions" section at the BOTTOM, each
+// bullet tagged [ai-suggested] with a one-line rationale. The action-verb / one-metric
+// / write-for-strength requirements apply ONLY to that section; they are never license
+// to touch a resume bullet. scanner/applicationPackage.mjs enforces the split at
+// generation time: suggestions can never reach the resume body.
+//
+// The `Tags:` legend line is a machine-readable contract, not decoration —
+// lib/bulletBank.mjs parses it so the Generate Package modal can show the user their
+// OWN role types instead of a hardcoded list. Keep the format stable.
+const BULLET_BANK_SYSTEM = (updatePrefix = '') => `${updatePrefix}You are generating a bullet-bank.md file for a job search automation system. This file is the library of resume bullets the AI selects from verbatim when generating tailored resumes and outreach messages.
+
+THE MOST IMPORTANT RULE: every bullet in the main body of this file must be taken VERBATIM from the user's resume — the user's exact wording, character for character. You are ORGANIZING and TAGGING the user's resume, not rewriting it. Do not paraphrase, tighten, strengthen, re-order words, swap a verb, add a metric, merge two bullets, or split one bullet into two. If a resume bullet is weak, wordy, or missing a number, it still goes in the body exactly as written. Copying is the entire job.
 
 FORMAT — organize by company, then by theme within each company:
 
-1. Define role-type tags based on the user's stated target roles (e.g. [ops], [strategy], [finance], [product], [sales] — choose tags that match what THIS user is targeting, not a fixed list)
-2. Group bullets under each company by theme (e.g. 'Theme: Cross-Functional Leadership', 'Theme: Financial Planning')
-3. Tag each bullet with the role types it applies to, plus a priority: [primary] (strongest, most broadly applicable phrasing for this theme), [alt] (use if primary doesn't fit the JD), [optional] (only if the JD specifically calls for it)
-4. Where the same achievement could be framed multiple ways for different role types, write 2-3 variant bullets for that theme rather than one generic version
-5. At the top of the file, include a short 'How to Use This File' section defining the role-type tags you chose and explaining the priority system, so the user understands the format
+1. Define role-type tags based on the user's stated target roles (e.g. ops, strategy, finance, product, sales — choose tags that match what THIS user is targeting, not a fixed list)
+2. Group the user's existing resume bullets under each company by theme (e.g. 'Theme: Cross-Functional Leadership', 'Theme: Financial Planning'). Grouping and ordering are yours to choose; the bullet TEXT is not.
+3. Tag each bullet with the role types it applies to, plus a priority: [primary] (strongest, most broadly applicable for this theme), [alt] (use if primary doesn't fit the JD), [optional] (only if the JD specifically calls for it)
+4. Every resume bullet the user has should appear exactly ONCE in the body. Do not create variants — a variant is a rewrite. If one bullet suits several role types, give it several role-type tags.
+5. At the top of the file, include a 'How to Use This File' section that explains the priority system and defines the role-type tags you chose. That section MUST contain one line in exactly this machine-readable format, on a single line:
 
-REQUIREMENTS for each bullet:
-- Start with a strong action verb
-- Include a specific metric or outcome where possible
-- Written in past tense
-- 1-2 lines maximum
-- Never fabricate metrics — use a placeholder like [ADD: specific number] if the user mentioned an achievement but not the number
+Tags: slug = Human readable label; slug = Human readable label
 
-If the input is thin (short resume, brief conversation), still use this format, but produce fewer bullets and fewer variants per theme rather than padding with weak or repetitive content. A sparse file in the correct format is better than a rich file with fabricated content.
+   Use lowercase slugs with no spaces (hyphens are fine), separate entries with semicolons, and list every role-type tag you used. This line is parsed by the app to build the user's role-type picker, so its format is fixed. Example:
+
+Tags: ops = Business Operations / Chief of Staff; finance = Strategic Finance & FP&A
+
+SUGGESTED ADDITIONS SECTION — the one place you may write:
+At the BOTTOM of the file, after all companies, add a final section with this exact heading:
+
+## Suggested Additions (AI-written — not from your resume)
+
+Put in it any achievement the user described in the conversation that does NOT appear on their resume. These are the only bullets you author. Each one must:
+- Carry the literal tag [ai-suggested] alongside its role-type tags, e.g. \`[ops][ai-suggested]\`
+- Be followed by an indented line starting with "Why:" giving ONE sentence on why adding this to the resume would help (what it proves, what gap it fills, which target roles it strengthens)
+- Follow these writing requirements — WHICH APPLY ONLY TO THIS SECTION, never to a resume bullet: start with a strong action verb, include exactly one specific metric or concrete outcome, past tense, 1-2 lines maximum, written for maximum strength
+- Never fabricate a metric. If the user mentioned an achievement but not the number, write [ADD: specific number] and leave it for them to fill in. The same rule holds everywhere in this file: no invented numbers, companies, titles, dates, or credentials.
+
+Open the section with one line telling the user these bullets are AI-written, are not used on generated resumes, and will only be suggested alongside a package until the user adds one to their own resume.
+If the conversation surfaced nothing that is missing from the resume, still emit the heading with a single line saying nothing was found.
+
+If no resume was provided at all and you must work from the conversation only, say so in one line under 'How to Use This File' and put EVERY bullet in the Suggested Additions section — none of it is the user's resume language, so none of it belongs in the body.
+
+If the input is thin, produce fewer bullets rather than padding with weak or repetitive content. A sparse file in the correct format is better than a rich file with invented content.
 
 Output clean markdown starting with # Bullet Bank. No preamble.`;
 

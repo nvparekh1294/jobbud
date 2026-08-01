@@ -2,12 +2,17 @@
 // When porting changes from a private instance, re-sanitize any
 // hardcoded name, bio, or background references before committing.
 import { MEMORY_KEYS, MEMORY_PATHS, assembleMemoryBlock } from '../lib/memory.mjs';
+import { splitBulletBank, AI_SUGGESTED_TAG } from '../lib/bulletBank.mjs';
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const GITHUB_API = 'https://api.github.com';
 const GOOGLE_DOCS_API = 'https://docs.googleapis.com/v1/documents';
 const GOOGLE_DRIVE_API = 'https://www.googleapis.com/drive/v3/files';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
+
+// Shown in tailoringNotes when cv.md is absent, so the user is never left assuming
+// the resume is in their own words when there is nothing on file to check against.
+export const NO_RESUME_NOTE = "Heads up: no resume is on file, so some of this resume's wording is AI-drafted rather than your own — upload your resume in onboarding to lock it to your real language.";
 
 async function readFileFromRepo(githubToken, owner, repo, filePath) {
   const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/contents/${filePath}`, {
@@ -21,11 +26,58 @@ async function readFileFromRepo(githubToken, owner, repo, filePath) {
   return Buffer.from(data.content, 'base64').toString('utf8');
 }
 
-async function callClaude(anthropicApiKey, articleDigest, bulletBank, job, roleTypes, additionalGuidance, memoryBlock = '') {
-  const roleTypeStr = roleTypes && roleTypes.length ? roleTypes.join(', ') : 'ops';
+// Build the CANDIDATE SOURCE blocks the model may draw resume bullets from, plus
+// the advisory blocks it may only suggest from.
+//
+// Two mechanisms protect the user's own resume language here, and they are
+// deliberately structural rather than a plea in the prompt:
+//
+//  1. SPLIT — lib/bulletBank.mjs cuts the bank's "Suggested Additions" section
+//     off the body before the body is handed over as the verbatim source. An
+//     [ai-suggested] bullet is therefore never sitting inside the text the model
+//     is told to copy from; it arrives in a separate, explicitly advisory block.
+//
+//  2. PROVENANCE — banks generated before the verbatim redesign are full of
+//     AI-rewritten bullets with no [ai-suggested] flag, and those users must get
+//     the new behaviour without re-onboarding. cv.md is the enabler: it is
+//     generated at onboarding under "preserve all bullet points verbatim, format
+//     only", so it holds the user's real resume language. When cv.md exists we
+//     ship it alongside the bank and require every resume-body bullet to be
+//     traceable to cv.md's own wording. A bank bullet that is not traceable is
+//     treated exactly like an [ai-suggested] one: advisory only.
+//
+// When cv.md is absent there is nothing to check provenance against, so we fall
+// back to the old behaviour and make the package say so out loud in the
+// tailoring notes rather than quietly presenting AI phrasing as the user's.
+export function buildBulletSourceBlocks(bulletBank, cvMd) {
+  const { body, suggestions, hasSuggestions } = splitBulletBank(bulletBank || '');
+  const hasCv = !!(cvMd && cvMd.trim().length >= 50);
 
-  const bulletBankIntro = `\nBULLET BANK: The following file contains every possible resume bullet tagged with role types and priorities. You MUST use bullets from this file verbatim -- do not rewrite, paraphrase, or combine any bullet.\n\n`;
-  const bulletSelectionRules = `\n\nBULLET SELECTION RULES:\n1. Only select bullets tagged for the role types specified in the Role Type field in the job context\n2. For each theme, use only the [primary] tagged bullet. Use [alt] only if the JD specifically emphasizes that angle. Use [optional] only if the JD explicitly calls for that skill\n3. Never include two bullets on the same theme -- pick one per theme and discard the rest. Exception: for themes marked [allow-2], you may include up to 2 bullets if both are tagged for the selected role types AND they convey genuinely different information. Never include 2 bullets that overlap in meaning.\n4. Use every selected bullet verbatim -- do not change a single word\n5. Select 4-6 bullets per role section, prioritizing themes whose keywords appear in the job description\n6. Include Select Investment Experience section only if investing or corpdev is selected\n7. Use the Personal section version tagged for the primary role type -- investing version for investing roles, standard version for all others`;
+  // Advisory block: AI-written suggestions, physically separated from the bank body.
+  const suggestionsBlock = hasSuggestions
+    ? `\n\nAI-SUGGESTED ADDITIONS (ADVISORY ONLY -- NEVER PUT THESE IN THE RESUME):\nThe block below was written by AI, not by the user. It covers achievements the user described but has not put on their resume. These bullets are BANNED from the "resume" field of your response, without exception, no matter how well they fit the job description. Their only permitted use is the SUGGESTED ADDITIONS section of atsText.\n\n${suggestions}\n`
+    : '';
+
+  // Provenance block: the user's real resume language, used as the traceability check.
+  const provenanceBlock = hasCv
+    ? `\n\nRESUME OF RECORD (cv.md) -- THE PROVENANCE CHECK:\nThis is the user's actual resume, preserved verbatim at onboarding. It is the authority on what the user's own language is.\n\n${cvMd.slice(0, 12000)}\n`
+    : '';
+
+  const provenanceRules = hasCv
+    ? `\n\nPROVENANCE RULE (applies to every bullet in the "resume" field):\nA bullet may appear in the resume ONLY if its wording is traceable to the RESUME OF RECORD above -- verbatim, or near-verbatim where only dates, punctuation, or formatting differ. The meaning AND the phrasing must be the user's own. Some bullet banks were generated by an older version of this system that rewrote the user's bullets; those rewrites read well but are not the user's words. Before you place any bullet, find its source sentence in the RESUME OF RECORD. If you cannot, treat that bullet exactly as if it were tagged [${AI_SUGGESTED_TAG}]: leave it out of the resume, and if it is relevant to this job description, surface it in the SUGGESTED ADDITIONS section of atsText with a one-line rationale. Never silently upgrade a bank bullet into the resume because it sounds better than the original.`
+    : `\n\nPROVENANCE NOTE: no cv.md is on file for this user, so bullet wording cannot be checked against their real resume. Proceed using the Bullet Bank as-is, and include this exact sentence as the final sentence of tailoringNotes: "${NO_RESUME_NOTE}"`;
+
+  const bulletSelectionRules = `\n\nBULLET SELECTION RULES:\n1. Prefer bullets tagged for the role types listed in the Role Type field of the job context. The user defines their own role-type tags, so a selected role type may not appear in the bank at all -- if few or no bullets carry the selected tags, fall back to the bullets that best match the job description rather than returning a thin resume.\n2. For each theme, use only the [primary] tagged bullet. Use [alt] only if the JD specifically emphasizes that angle. Use [optional] only if the JD explicitly calls for that skill\n3. Never include two bullets on the same theme -- pick one per theme and discard the rest. Exception: for themes marked [allow-2], you may include up to 2 bullets if both are tagged for the selected role types AND they convey genuinely different information. Never include 2 bullets that overlap in meaning.\n4. Use every selected bullet verbatim -- do not change a single word\n5. Select 4-6 bullets per role section, prioritizing themes whose keywords appear in the job description\n6. HARD RULE: any bullet tagged [${AI_SUGGESTED_TAG}], and anything from the AI-SUGGESTED ADDITIONS block, is BANNED from the resume field. It may only appear under SUGGESTED ADDITIONS in atsText.\n7. Include a "Select Investment Experience" section only if the bullet bank actually contains investment/deal bullets AND the job description calls for that experience. It is not tied to any particular role-type tag.\n8. Where the bank offers several versions of a section (for example a Personal section written for different role types), pick the version tagged for the first selected role type, and the untagged or most general version otherwise.${provenanceRules}`;
+
+  return { bankBody: body, suggestionsBlock, provenanceBlock, bulletSelectionRules, hasSuggestions, hasCv };
+}
+
+async function callClaude(anthropicApiKey, articleDigest, bulletBank, job, roleTypes, additionalGuidance, memoryBlock = '', cvMd = '') {
+  const roleTypeStr = roleTypes && roleTypes.length ? roleTypes.join(', ') : 'not specified';
+  const { bankBody, suggestionsBlock, provenanceBlock, bulletSelectionRules } =
+    buildBulletSourceBlocks(bulletBank, cvMd);
+
+  const bulletBankIntro = `\nBULLET BANK: The following file contains the user's resume bullets, tagged with role types and priorities. You MUST use bullets from this file verbatim -- do not rewrite, paraphrase, or combine any bullet.\n\n`;
 
   const guidanceSection = additionalGuidance && additionalGuidance.trim()
     ? `\nADDITIONAL GUIDANCE FROM USER: ${additionalGuidance.trim()}\nApply this guidance to further refine bullet selection and framing beyond the role type tags above.`
@@ -64,13 +116,15 @@ Respond with valid JSON only — no markdown fences.`;
 ${bulletBankIntro}`,
     },
     {
+      // Only the BODY is cached as the verbatim source — the suggestions section
+      // has been split off above so it can never be mistaken for bank content.
       type: 'text',
-      text: bulletBank,
+      text: bankBody,
       cache_control: { type: 'ephemeral' },
     },
     {
       type: 'text',
-      text: `${bulletSelectionRules}${guidanceSection}${resumeFormatAndClosing}`,
+      text: `${suggestionsBlock}${provenanceBlock}${bulletSelectionRules}${guidanceSection}${resumeFormatAndClosing}`,
     },
   ] : (memoryPrefixBlock.length ? [
     ...memoryPrefixBlock,
@@ -118,12 +172,13 @@ Respond with exactly this JSON:
     "<checklist item>"
   ],
   "tailoringNotes": "<2-3 sentences on what was emphasized, what was cut, which JD keywords were matched, and which role type bullets were prioritized>",
-  "atsText": "<ATS & KEYWORD OPTIMIZATION section as plain text — use exactly the structure below>\n\nATS & KEYWORD OPTIMIZATION\n\nMISSING KEYWORDS\n[keyword or phrase]: [which role section to add it to, and in what context]\n\nSUGGESTED BULLET EDITS\nOriginal: [exact existing bullet text starting with •]\nSuggested: [replacement bullet — same facts, slightly different wording to incorporate a missing keyword]\nWhy: [one sentence explaining the keyword or phrasing benefit]\n\nATS SCORE ESTIMATE\nScore: [X/10]\n[2-3 sentences: why this score, the resume's top ATS strengths, and the most important remaining gaps]\n\nBULLET OPTIMIZATION CHECK\nBullet check: [bullet # or opening words] — [exactly ONE of: interview-proof | differentiating | one-metric | rules-clean] — suggested alternative: [a complete rewritten bullet]\n[one line per selected bullet that strains a gate; omit bullets that pass all four gates cleanly. The 'suggested alternative:' field is MANDATORY and must be a full rewritten sentence, never blank and never a note about the problem. Suggestions only — the resume above still uses Bullet Bank text verbatim]"
+  "atsText": "<ATS & KEYWORD OPTIMIZATION section as plain text — use exactly the structure below>\n\nATS & KEYWORD OPTIMIZATION\n\nMISSING KEYWORDS\n[keyword or phrase]: [which role section to add it to, and in what context]\n\nSUGGESTED ADDITIONS\n[Each AI-suggested or non-traceable bullet that is relevant to THIS job description, one per entry, in this shape:]\nSuggested: [the bullet text]\nWhy: [the rationale from the bullet bank, or one sentence on what it proves for this role]\n[If none are relevant, write the single line: None relevant to this role.]\n\nSUGGESTED BULLET EDITS\nOriginal: [exact existing bullet text starting with •]\nSuggested: [replacement bullet — same facts, slightly different wording to incorporate a missing keyword]\nWhy: [one sentence explaining the keyword or phrasing benefit]\n\nATS SCORE ESTIMATE\nScore: [X/10]\n[2-3 sentences: why this score, the resume's top ATS strengths, and the most important remaining gaps]\n\nBULLET OPTIMIZATION CHECK\nBullet check: [bullet # or opening words] — [exactly ONE of: interview-proof | differentiating | one-metric | rules-clean] — suggested alternative: [a complete rewritten bullet]\n[one line per selected bullet that strains a gate; omit bullets that pass all four gates cleanly. The 'suggested alternative:' field is MANDATORY and must be a full rewritten sentence, never blank and never a note about the problem. Suggestions only — the resume above still uses Bullet Bank text verbatim]"
 }
 
 For applicationQuestions: scan the job description for explicit application questions (e.g., "Why do you want to work here?", "Describe a time when...", etc.). If none found, return an empty array.
 For checklist: include 5-8 items specific to THIS role — things to verify, customize, or prepare before submitting.
 For atsText: list 5-8 missing JD keywords not present in the resume, suggest 2-3 bullet edits maximum where a keyword fits naturally, and provide an ATS score 1-10. Never invent facts, change metrics, or alter company names. Keep bullet meaning identical — only rephrase to absorb a missing keyword.
+For the SUGGESTED ADDITIONS block of atsText: this is where every bullet that is BANNED from the resume gets its say — bullets tagged [${AI_SUGGESTED_TAG}], anything from the AI-SUGGESTED ADDITIONS block, and any bank bullet that failed the provenance check. Include only the ones genuinely relevant to this job description, each with its rationale. Do not write new bullets here that are not already in those sources, and do not repeat a bullet that is already in the resume. These are things the user could choose to add to their real resume — never anything this package added on their behalf.
 For the BULLET OPTIMIZATION CHECK: review each resume bullet you selected from the Bullet Bank against four gates — (1) interview-proof: every claim survives "walk me through that"; (2) differentiating: a generic peer could not truthfully write the same sentence; (3) one-metric: exactly one metric per bullet, and never two different quantities (for example a cost-savings figure and a growth figure) in the same bullet; (4) rules-clean: passes the RESUME FORMAT RULES above. Check each selected bullet against the bullet anatomy — [strong verb] + [specific thing done] + [scope/scale] + [outcome with exactly ONE real number] — and confirm the variant (action-led / outcome-led / scale-led) matches the JD's emphasis; a variant mismatch (e.g. a scale-led bullet on an execution-focused JD) is itself a strain on the 'differentiating' gate and must be flagged. For EVERY bullet that strains any gate, output exactly one line in this format: "Bullet check: [bullet # or opening words] — [gate it strains] — suggested alternative: [text]". Two non-negotiable requirements for each line: (a) the gate token is EXACTLY one of interview-proof / differentiating / one-metric / rules-clean — no other wording; (b) 'suggested alternative:' is a CONCRETE, COMPLETE rewritten bullet — never blank, never a description of the problem — and the rewrite must itself obey every RESUME FORMAT RULE above and any resume rules stated in the user's own profile files: start with a strong action verb (never "responsible for"), contain exactly ONE metric, use no banned or hype vocabulary, no double dashes, and stay interview-provable from the user's real experience. A flagged bullet with a gate name but no rewrite is an incomplete answer. HARD RULE: these are SUGGESTIONS ONLY. The resume body above MUST still use the Bullet Bank text VERBATIM — never apply a suggested alternative to the resume itself. Nothing is rewritten unless the user adds it to the bank themselves.`,
       }],
     }),
@@ -873,25 +928,37 @@ export async function generateAndSendPackage(job, jobId, options = {}) {
 
   // Read source files from the repo in parallel, including the three memory files
   // (each soft-read: absent → '' so a new user degrades to pre-memory behavior).
-  const [articleDigest, bulletBankRaw, memProfile, memVoice, memStories] = await Promise.all([
+  // cv.md is read UNCONDITIONALLY, not just as a missing-bank fallback: it is the
+  // user's resume preserved verbatim at onboarding, and it is what the provenance
+  // rule in callClaude checks bullet wording against. Without it, a bank generated
+  // by the old rewriting prompt would keep feeding AI phrasing into resumes.
+  const [articleDigest, bulletBankRaw, cvMdRaw, memProfile, memVoice, memStories] = await Promise.all([
     readFileFromRepo(githubToken, owner, repo, 'article-digest.md').catch(() => ''),
     readFileFromRepo(githubToken, owner, repo, 'bullet-bank.md').catch(() => null),
+    readFileFromRepo(githubToken, owner, repo, 'cv.md').catch(() => ''),
     ...MEMORY_KEYS.map(k => readFileFromRepo(githubToken, owner, repo, MEMORY_PATHS[k]).catch(() => '')),
   ]);
   const memoryBlock = assembleMemoryBlock({ profile: memProfile, voice: memVoice, stories: memStories });
   if (memoryBlock) console.log(`[appPkg] memory loaded (${memoryBlock.length} chars)`);
 
+  const cvMd = cvMdRaw || '';
+  if (cvMd) {
+    console.log(`[appPkg] cv.md loaded for provenance check (${cvMd.length} chars)`);
+  } else {
+    console.warn('[appPkg] cv.md absent — provenance check disabled; package will disclose AI-drafted wording');
+  }
+
   let bulletBank = bulletBankRaw;
   if (!bulletBank || bulletBank.length < 50) {
     console.log('[appPkg] bullet-bank.md not found or empty — falling back to cv.md');
-    bulletBank = await readFileFromRepo(githubToken, owner, repo, 'cv.md').catch(() => null);
+    bulletBank = cvMd || null;
     if (bulletBank) console.log(`[appPkg] cv.md fallback loaded (${bulletBank.length} chars)`);
   } else {
     console.log(`[appPkg] bullet-bank.md loaded (${bulletBank.length} chars)`);
   }
 
   // Generate package + ATS analysis in a single Claude call
-  const pkg = await callClaude(anthropicApiKey, articleDigest, bulletBank, job, roleTypes, additionalGuidance, memoryBlock);
+  const pkg = await callClaude(anthropicApiKey, articleDigest, bulletBank, job, roleTypes, additionalGuidance, memoryBlock, cvMd);
 
   // Extract ATS text from the same response (no second API call needed)
   const atsText = pkg.atsText || '';
