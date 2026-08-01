@@ -1,4 +1,4 @@
-import { resolveTargetRoles } from './queryHelpers.mjs';
+import { resolveTargetRoles, normalizeCountry } from './queryHelpers.mjs';
 
 const BASE_URLS = {
   us: 'https://api.adzuna.com/v1/api/jobs/us/search',
@@ -40,10 +40,17 @@ function buildQueries(config) {
   }
 
   const queries = [];
+  const supported = Object.keys(BASE_URLS).join('/');
 
   for (const location of config.locations) {
-    const country = location.country;
-    if (!BASE_URLS[country]) continue;
+    // "US", "USA" and " us " all mean the same market; only the ISO code is a
+    // key in BASE_URLS. An unsupported country is a real answer to "why did I
+    // get nothing?", so it is said out loud rather than skipped in silence.
+    const country = normalizeCountry(location.country);
+    if (!BASE_URLS[country]) {
+      console.warn(`[adzuna] Skipping ${location.city}: country "${location.country}" is not one Adzuna is wired up for here (supported: ${supported}). Fix target_locations in config/profile.yml.`);
+      continue;
+    }
 
     for (const term of searchTerms) {
       queries.push({
@@ -53,6 +60,12 @@ function buildQueries(config) {
         distanceKm: Math.round((location.radiusMiles || 20) * 1.6),
       });
     }
+  }
+
+  // Credentials are set, roles are set, and still nothing to ask for: that is a
+  // scan that will report zero Adzuna jobs for a fixable reason.
+  if (queries.length === 0) {
+    console.warn(`[adzuna] No searches could be built from your target_locations, so Adzuna will not run this scan. None of your locations are in a country Adzuna is set up for here (${supported}).`);
   }
 
   return queries;
