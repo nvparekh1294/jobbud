@@ -396,6 +396,32 @@ test('a well-formed data file passes', async () => {
   assert.match(c.message, /expected shape/);
 });
 
+test('the shape check defers to normalizeJsonDoc rather than restating its rules', async () => {
+  // The reader and the writer must share one definition of "the right shape".
+  // A second, hand-written copy of the rules here would drift the moment
+  // normalizeJsonDoc changed, and this endpoint would start calling healthy
+  // files corrupt.
+  const src = repoFile('api', 'health.js');
+  const fn = src.slice(src.indexOf('function shapeMatches'));
+  const body = fn.slice(0, fn.indexOf('\n}\n'));
+  assert.match(body, /normalizeJsonDoc\(/);
+  assert.doesNotMatch(body, /Array\.isArray\(empty\)/);
+
+  // and it still answers the same way at the boundaries normalizeJsonDoc cares
+  // about: a key present but the wrong container type is a shape failure.
+  const wrongType = await withFetch(
+    routeFetch([['contents/data/radar.json', contentsRes('{"companies":[]}')]]),
+    () => checkDataFile('t', 'a', 'b', 'data/radar.json', { companies: {} }, 'Your Radar'));
+  assert.equal(wrongType.ok, false);
+  assert.match(wrongType.message, /not in the shape JobBud writes/);
+
+  // ...while extra keys alongside a correct one are none of our business.
+  const extraKeys = await withFetch(
+    routeFetch([['contents/data/radar.json', contentsRes('{"companies":{"x":{}},"notes":"hi"}')]]),
+    () => checkDataFile('t', 'a', 'b', 'data/radar.json', { companies: {} }, 'Your Radar'));
+  assert.equal(extraKeys.ok, true);
+});
+
 test('unparseable JSON in a data file is named as corruption with a recovery route', async () => {
   const c = await withFetch(routeFetch([['contents/data/radar.json', contentsRes('{not json')]]),
     () => checkDataFile('t', 'a', 'b', 'data/radar.json', { companies: {} }, 'Your Radar'));

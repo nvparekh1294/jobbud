@@ -282,18 +282,19 @@ export async function checkGithubRepo(token, repoFullName) {
 // whose contents are not the document JobBud writes: that is the shape bug that
 // used to make saved companies vanish on refresh, and it deserves a sentence.
 
-// True when `parsed` already has every key of `emptyDoc` in the right container
-// type — i.e. normalizeJsonDoc would leave it alone.
+// True when `parsed` is already the shape JobBud writes — i.e. normalizeJsonDoc
+// would leave it alone.
+//
+// Asked of normalizeJsonDoc itself rather than restated here. This used to be a
+// hand-written copy of that function's rules, which meant the reader and the
+// writer each held their own private definition of "the right shape" and nothing
+// stopped them drifting: relax the writer and this check would start calling
+// healthy files corrupt, in a diagnostic whose whole job is telling the user the
+// truth about their data. Normalize a throwaway copy; if normalizing changed
+// nothing, there was nothing to fix.
 function shapeMatches(parsed, emptyDoc) {
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
-  for (const [key, empty] of Object.entries(emptyDoc)) {
-    const current = parsed[key];
-    const ok = Array.isArray(empty)
-      ? Array.isArray(current)
-      : (current !== null && typeof current === 'object' && !Array.isArray(current));
-    if (!ok) return false;
-  }
-  return true;
+  const normalized = normalizeJsonDoc(structuredClone(parsed), emptyDoc);
+  return JSON.stringify(normalized) === JSON.stringify(parsed);
 }
 
 // The committed seed for these files is the empty array `[]`, and an empty object
