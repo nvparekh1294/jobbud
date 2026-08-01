@@ -2,13 +2,14 @@
 // api/interview.js, api/interview-save.js, and api/interview-prep.js.
 // Route by GET/POST + ?action query param.
 
-import { stringify as stringifyYaml } from 'yaml';
+import { stringify as stringifyYaml, parse as parseYaml } from 'yaml';
 import { generateInterviewPrepDoc } from '../scanner/interviewPackage.mjs';
 import { readGithubText, writeGithubFile, assertRepoPrivate, RepoPublicError, normalizeJsonDoc } from '../lib/github.js';
 import { detectAts } from '../lib/atsDetect.js';
 import { safeEqual } from '../lib/auth.mjs';
 import { isStarterPortalsList } from '../lib/portalsMeta.mjs';
 import { isExtractedTextEmpty, EMPTY_RESUME_ERROR } from '../lib/resumeParse.mjs';
+import { MEMORY_PATHS } from '../lib/memory.mjs';
 
 const SONNET_MODEL    = 'claude-sonnet-4-6';
 
@@ -1249,22 +1250,12 @@ Be specific and grounded only in what the user told you. Use placeholders for mi
 // plus narrative sections the AI scoring/coaching read. Populated only from what
 // the user provided; anything missing is a [placeholder], never fabricated.
 
-async function handleGenerateProfile(req, res) {
-  const { anthropicKey, resumeText, transcriptText, existingFiles, updatePrefix } = buildOnboardingShared(req);
-  if (!anthropicKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
-  console.log('[coach] action=generate-profile');
-  try {
-    const existingBlock = existingFiles?.profileYml
-      ? `EXISTING config/profile.yml:\n${existingFiles.profileYml}\n\n`
-      : null;
-    const baseContent = resumeText
-      ? `RESUME:\n${resumeText}\n\nCONVERSATION:\n${transcriptText || '(No conversation yet.)'}`
-      : `CONVERSATION:\n${transcriptText || '(No conversation yet.)'}`;
-    const userContent = existingBlock ? `${existingBlock}${baseContent}` : baseContent;
-    const data = await anthropicFetch(anthropicKey, {
-      model: SONNET_MODEL,
-      max_tokens: 3000,
-      system: `${updatePrefix}You are generating a structured config/profile.yml file for a job search automation system. This file is read by the scanner at runtime to configure search keywords, locations, salary filters, and deal-breakers. It must be valid YAML.
+// Single source of truth for the profile.yml generation prompt. Used by the
+// onboarding path (handleGenerateProfile) AND by apply-memory-to-profile, which
+// re-runs the same generation with the user's memory as the conversation input.
+// Sharing it matters: the two paths write the same file, and a drift between them
+// would silently reshape the config the scanner reads at runtime.
+const PROFILE_SYSTEM = (updatePrefix = '') => `${updatePrefix}You are generating a structured config/profile.yml file for a job search automation system. This file is read by the scanner at runtime to configure search keywords, locations, salary filters, and deal-breakers. It must be valid YAML.
 
 Generate the file with exactly this structure — populate each field from the resume and conversation. Use placeholders like [ADD: value] for anything not provided. Never fabricate values.
 
@@ -1326,13 +1317,172 @@ deal_breakers: |
 nice_to_haves: |
   [nice-to-haves stated by the user, or 'None stated']
 
-Output valid YAML only. No preamble, no explanation, no markdown code fences. Start directly with # JobBud Profile.`,
+Output valid YAML only. No preamble, no explanation, no markdown code fences. Start directly with # JobBud Profile.`;
+
+async function handleGenerateProfile(req, res) {
+  const { anthropicKey, resumeText, transcriptText, existingFiles, updatePrefix } = buildOnboardingShared(req);
+  if (!anthropicKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  console.log('[coach] action=generate-profile');
+  try {
+    const existingBlock = existingFiles?.profileYml
+      ? `EXISTING config/profile.yml:\n${existingFiles.profileYml}\n\n`
+      : null;
+    const baseContent = resumeText
+      ? `RESUME:\n${resumeText}\n\nCONVERSATION:\n${transcriptText || '(No conversation yet.)'}`
+      : `CONVERSATION:\n${transcriptText || '(No conversation yet.)'}`;
+    const userContent = existingBlock ? `${existingBlock}${baseContent}` : baseContent;
+    const data = await anthropicFetch(anthropicKey, {
+      model: SONNET_MODEL,
+      max_tokens: 3000,
+      system: PROFILE_SYSTEM(updatePrefix),
       messages: [{ role: 'user', content: userContent }],
     });
     return res.status(200).json({ profileYml: data.content?.[0]?.text ?? '' });
   } catch (err) {
     console.error('[coach] generate-profile error:', err);
     return res.status(200).json({ error: 'Something went wrong. Please try again.' });
+  }
+}
+
+// ── Route: POST ?action=apply-memory-to-profile ──────────────────────────────
+//
+// THE GAP THIS CLOSES: the Memory page is titled "What JobBud knows about you",
+// so a user who wants different jobs surfaced edits their target roles there. It
+// changes nothing about what gets searched. The scanner reads config/profile.yml
+// — its target_roles drive both job scoring AND the JSearch/Adzuna search queries
+// (scanner/config.mjs resolveTargetRoles) — and nothing ever propagated memory
+// into it. The edit felt like it worked and quietly did not.
+//
+// This runs the SAME generation the onboarding refresh uses, with the saved
+// memory as the conversation input and the existing profile.yml as ground truth,
+// then reports back in plain English what actually changed about the search.
+//
+// It is deliberately EXPLICIT (a button on the Memory page) rather than fired
+// automatically on every memory save. profile.yml is user-editable config that
+// drives real API spend; regenerating it silently on each Save — including the
+// fire-and-forget saves the chat distillation makes — would be exactly the kind
+// of unannounced overwrite the update-mode prompt exists to prevent. One click,
+// and the user is told what moved.
+
+// Pull the search-relevant fields out of a profile.yml for before/after
+// comparison. Never throws: malformed YAML degrades to an empty summary rather
+// than failing the write the user asked for.
+export function summarizeSearchFields(yamlText) {
+  try {
+    const doc = parseYaml(yamlText || '') || {};
+    const list = v => (Array.isArray(v) ? v.filter(x => typeof x === 'string') : []);
+    return {
+      targetRoles: list(doc.target_roles),
+      locations: (Array.isArray(doc.target_locations) ? doc.target_locations : [])
+        .map(l => (l && typeof l === 'object' ? [l.city, l.region].filter(Boolean).join(', ') : String(l || '')))
+        .filter(Boolean),
+      includeRemote: doc.include_remote === true,
+      minSalary: Number.isFinite(doc.min_salary) ? doc.min_salary : null,
+    };
+  } catch {
+    return { targetRoles: [], locations: [], includeRemote: false, minSalary: null };
+  }
+}
+
+// Plain-English "here is what your search does now" lines. The first line always
+// states the search titles, because that is the thing users believe the Memory
+// page controls.
+export function describeProfileChange(before, after) {
+  const lines = [];
+  const same = (a, b) => a.join('|') === b.join('|');
+  lines.push(after.targetRoles.length
+    ? `Search titles are now: ${after.targetRoles.join(', ')}`
+    : 'No search titles are set — JobBud has nothing to search for yet.');
+  if (!same(before.targetRoles, after.targetRoles)) {
+    lines.push(before.targetRoles.length
+      ? `(they were: ${before.targetRoles.join(', ')})`
+      : '(there were none before)');
+  }
+  if (!same(before.locations, after.locations)) {
+    lines.push(`Locations searched: ${after.locations.join('; ') || 'none set'}`);
+  }
+  if (before.includeRemote !== after.includeRemote) {
+    lines.push(after.includeRemote ? 'Remote roles are now included.' : 'Remote roles are no longer included.');
+  }
+  if (before.minSalary !== after.minSalary) {
+    lines.push(after.minSalary ? `Minimum salary: ${after.minSalary.toLocaleString()}` : 'No minimum salary filter.');
+  }
+  const changed = !same(before.targetRoles, after.targetRoles)
+    || !same(before.locations, after.locations)
+    || before.includeRemote !== after.includeRemote
+    || before.minSalary !== after.minSalary;
+  if (!changed) lines.push('Nothing about your search changed — it already matched your memory.');
+  return { lines, changed };
+}
+
+async function handleApplyMemoryToProfile(req, res, githubToken, owner, repo) {
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  if (!anthropicKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  console.log('[coach] action=apply-memory-to-profile');
+
+  try {
+    const [existingProfile, memProfile] = await Promise.all([
+      readGithubText(githubToken, owner, repo, 'config/profile.yml'),
+      readGithubText(githubToken, owner, repo, MEMORY_PATHS.profile),
+    ]);
+
+    if (!memProfile.trim()) {
+      return res.status(400).json({
+        error: "There's nothing in your profile memory yet. Add what you're looking for above, save it, then apply it.",
+      });
+    }
+
+    // Update mode whenever a profile already exists: the existing file is ground
+    // truth, so hand-tuned values the memory does not mention are preserved.
+    const updatePrefix = existingProfile
+      ? `CRITICAL INSTRUCTION: You are UPDATING an existing file, not generating from scratch. The existing file content is the ground truth — treat it as fully accurate and complete. Your job is to:
+1. PRESERVE all existing content exactly as-is unless the new information explicitly contradicts or adds to it
+2. INCORPORATE any new information into the appropriate sections
+3. OUTPUT the complete updated file — not a summary, not a diff, not a description of changes. The full file, start to finish.
+If the new information says nothing relevant to a section, reproduce that section exactly from the existing file.
+Do NOT treat absence of information as a signal to clear or placeholder-ize existing content.
+
+`
+      : '';
+
+    const existingBlock = existingProfile ? `EXISTING config/profile.yml:\n${existingProfile}\n\n` : '';
+    const data = await anthropicFetch(anthropicKey, {
+      model: SONNET_MODEL,
+      max_tokens: 3000,
+      system: PROFILE_SYSTEM(updatePrefix),
+      messages: [{
+        role: 'user',
+        content: `${existingBlock}CONVERSATION:\nThe user maintains a memory file describing themselves and what they are looking for. This is its current content — treat it as things the user has told you directly:\n\n${memProfile}`,
+      }],
+    });
+    const profileYml = data.content?.[0]?.text ?? '';
+    if (!profileYml.trim() || !/target_roles/.test(profileYml)) {
+      console.warn('[coach] apply-memory-to-profile: generation returned no usable YAML — leaving profile.yml untouched');
+      return res.status(200).json({ error: "Couldn't rebuild your search profile just now. Please try again." });
+    }
+
+    const before = summarizeSearchFields(existingProfile);
+    const after = summarizeSearchFields(profileYml);
+
+    // profile.yml carries the user's real name, location, and salary floor.
+    await assertRepoPrivate(githubToken, owner, repo);
+    await writeGithubFile(
+      githubToken, owner, repo, 'config/profile.yml',
+      () => (profileYml.endsWith('\n') ? profileYml : profileYml + '\n'),
+      'chore: apply memory to search profile [skip ci]',
+      { logTag: 'coach', allowNoop: true },
+    );
+
+    const { lines, changed } = describeProfileChange(before, after);
+    console.log(`[coach] apply-memory-to-profile changed=${changed} titles=${after.targetRoles.length}`);
+    return res.status(200).json({ success: true, changed, summary: lines });
+  } catch (err) {
+    if (err instanceof RepoPublicError) {
+      console.warn(`[coach] apply-memory-to-profile refused: ${err.message}`);
+      return res.status(403).json({ error: err.message, code: 'REPO_PUBLIC' });
+    }
+    console.error('[coach] apply-memory-to-profile error:', err);
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }
 
@@ -1593,6 +1743,7 @@ export default async function handler(req, res) {
     if (req.method === 'POST' && action === 'generate-portals')         return handleGeneratePortals(req, res);
     if (req.method === 'GET'  && action === 'get-portals')              return handleGetPortals(req, res, githubToken, owner, repo);
     if (req.method === 'POST' && action === 'save-onboarding')          return handleSaveOnboarding(req, res, githubToken, owner, repo);
+    if (req.method === 'POST' && action === 'apply-memory-to-profile')  return handleApplyMemoryToProfile(req, res, githubToken, owner, repo);
     if (req.method === 'GET'  && action === 'get-mock-sessions')       return handleGetMockSessions(req, res, githubToken, owner, repo);
     if (req.method === 'POST' && action === 'save-mock-session')   return handleSaveMockSession(req, res, githubToken, owner, repo);
     return res.status(400).json({ error: `Unknown action: ${action}` });

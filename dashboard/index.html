@@ -431,6 +431,10 @@
     .memory-save-btn { white-space: nowrap; flex-shrink: 0; }
     .memory-textarea { width: 100%; min-height: 200px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; line-height: 1.6; font-family: ui-monospace, 'SF Mono', Menlo, monospace; color: var(--text); background: var(--bg); resize: vertical; outline: none; box-sizing: border-box; }
     .memory-textarea:focus { border-color: #aaa; }
+    .memory-searchnote { margin-top: 14px; padding: 14px 16px; background: #FBF9F3; border: 1px solid #E7E0D2; border-radius: 10px; font-family: 'Hanken Grotesk', sans-serif; font-size: 12.5px; color: var(--text); line-height: 1.6; }
+    .memory-searchnote code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 11.5px; background: #EFEADF; padding: 1px 5px; border-radius: 4px; }
+    .memory-searchnote-hint { font-size: 11.5px; color: var(--muted); font-style: italic; }
+    .memory-searchnote-result { margin-top: 12px; padding-top: 10px; border-top: 1px solid #E7E0D2; font-size: 12.5px; line-height: 1.7; white-space: pre-line; }
     #role-modal .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
     #modal-generate { padding: 9px 20px; background: var(--accent); color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
     #modal-generate:disabled { background: var(--border); color: var(--muted); cursor: default; }
@@ -1908,6 +1912,17 @@
             <button class="coach-new-btn memory-save-btn" data-file="profile" onclick="saveMemoryFile('profile')">Save</button>
           </div>
           <textarea class="memory-textarea" id="memory-text-profile" placeholder="No profile facts yet — JobBud fills this in after onboarding and as you chat."></textarea>
+          <!-- The search-profile bridge. Editing memory changes how JobBud WRITES
+               about you; the titles it SEARCHES for live in config/profile.yml, and
+               nothing used to carry a memory edit across to it. -->
+          <div class="memory-searchnote">
+            <div><strong>What JobBud searches for lives somewhere else.</strong> The job titles, locations, and salary floor used to find jobs are in your search profile (<code>config/profile.yml</code>). Editing your memory above changes how JobBud writes about you — it does not change what it goes looking for.</div>
+            <div style="margin-top:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              <button class="coach-new-btn" id="apply-profile-btn" onclick="applyMemoryToProfile()">Apply to search profile</button>
+              <span class="memory-searchnote-hint">Rebuilds your search profile from the profile memory above. Anything it doesn't mention is left as-is.</span>
+            </div>
+            <div id="apply-profile-result" class="memory-searchnote-result" style="display:none"></div>
+          </div>
         </div>
         <div class="memory-block">
           <div class="memory-block-head">
@@ -5129,11 +5144,53 @@
       if (!res.ok) { showToast('Save failed: ' + (data.error || res.status), 5000); return; }
       memoryFiles[file] = ta.value;
       memoryContext = assembleMemoryBlockClient(memoryFiles);
-      showToast('Memory saved. Applies to your next conversation.');
+      // Saving profile memory is the moment a user expects their search to change.
+      // It doesn't, on its own — say so here rather than letting them find out by
+      // getting the same jobs for another week.
+      if (file === 'profile') {
+        showToast('Memory saved. To change what JobBud searches for, use "Apply to search profile" below.', 7000);
+        const result = document.getElementById('apply-profile-result');
+        if (result) { result.style.display = 'none'; result.textContent = ''; }
+      } else {
+        showToast('Memory saved. Applies to your next conversation.');
+      }
     } catch (err) {
       showToast('Network error: ' + err.message, 4000);
     } finally {
       if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+    }
+  }
+
+  // Rebuild config/profile.yml — the file whose target_roles drive both job
+  // scoring and the search queries themselves — from the saved profile memory,
+  // then say in plain English what actually changed about the search.
+  async function applyMemoryToProfile() {
+    const btn = document.getElementById('apply-profile-btn');
+    const result = document.getElementById('apply-profile-result');
+    if (btn) { btn.disabled = true; btn.textContent = 'Applying…'; }
+    if (result) { result.style.display = ''; result.textContent = 'Rebuilding your search profile…'; }
+    try {
+      const pw = storedPassword() || '';
+      const res = await fetch('/api/coach?action=apply-memory-to-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) {
+        const msg = data.error || `HTTP ${res.status}`;
+        if (result) result.textContent = '⚠ ' + msg;
+        showToast('⚠ ' + msg, 7000);
+        return;
+      }
+      // Server-generated summary lines — inserted as text, never as markup.
+      if (result) result.textContent = (data.summary || []).join('\n');
+      showToast(data.changed ? '✓ Search profile updated.' : '✓ Search profile already matched your memory.', 5000);
+    } catch (err) {
+      if (result) result.textContent = '⚠ Network error: ' + err.message;
+      showToast('Network error: ' + err.message, 5000);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Apply to search profile'; }
     }
   }
 
