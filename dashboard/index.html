@@ -63,6 +63,9 @@
     /* ⚙ is a single glyph, so it gets a squarer box than the labelled Refresh. */
     #setup-btn { padding: 8px 11px; font-size: 15px; line-height: 1; }
     #refresh-btn:hover, #setup-btn:hover { background: #EFEADF; color: #1E241D; }
+    /* Log out is a quiet link, not a fourth button competing with the actions. */
+    #logout-btn { background: transparent; border: none; color: var(--muted); font-family: 'Hanken Grotesk', sans-serif; font-size: 13px; padding: 8px 4px; cursor: pointer; white-space: nowrap; }
+    #logout-btn:hover { color: #1E241D; text-decoration: underline; }
 
     main { padding: 34px 30px 80px; max-width: 1180px; margin: 0 auto; }
     /* Pipeline view breaks out of the narrow main container */
@@ -1141,8 +1144,13 @@
   <div class="box">
     <h2>JobBud</h2>
     <p>Enter your dashboard password to continue.</p>
-    <input type="password" id="pw-input" placeholder="Password" autocomplete="current-password">
-    <button id="pw-btn">Unlock</button>
+    <!-- A real form with a real submit button, because that is what Chrome and
+         Safari look for before they offer to save the password. A password-only
+         form is a shape both recognise, so there is no username field to fake. -->
+    <form id="pw-form" autocomplete="on">
+      <input type="password" id="pw-input" name="password" placeholder="Password" autocomplete="current-password">
+      <button type="submit" id="pw-btn">Unlock</button>
+    </form>
     <div class="pending" id="pw-pending">Checking…</div>
     <div class="error" id="pw-error"></div>
     <p style="font-size:11px;color:var(--muted);margin-top:16px;margin-bottom:0;line-height:1.5">Forgot your password? Check your <code style="font-size:11px">DASHBOARD_PASSWORD</code> environment variable in Vercel.</p>
@@ -1187,6 +1195,7 @@
       <button id="setup-btn" title="Run a setup check" onclick="openSetupPanel()">⚙</button>
       <button id="refresh-btn">↻ Refresh</button>
       <button id="add-job-btn" onclick="openAddJobModal()"><span class="add-job-label">+ Add Job</span><span class="add-job-short" style="display:none">+</span></button>
+      <button id="logout-btn" title="Forget the saved password on this browser" onclick="logOut()">Log out</button>
     </div>
   </header>
 
@@ -2145,7 +2154,7 @@
   // cause is worse than a generic one — the user goes and fixes the wrong thing.
   async function healthSentence(area) {
     if (!_health) {
-      try { _health = await fetchHealth(sessionStorage.getItem('co_pw') || ''); }
+      try { _health = await fetchHealth(storedPassword() || ''); }
       catch (_) { return ''; }
       renderSetupState();
     }
@@ -2243,7 +2252,7 @@
     _healthRunning = true;
     renderSetupPanel();           // say "running" where the user is looking
     try {
-      _health = await fetchHealth(sessionStorage.getItem('co_pw') || '');
+      _health = await fetchHealth(storedPassword() || '');
       _setupBannerDismissed = false;
     } catch (err) {
       _health = {
@@ -2264,13 +2273,61 @@
   }
 
   // ── Password gate ────────────────────────────────────────────────────────
+  //
+  // WHERE THE PASSWORD LIVES. It used to be sessionStorage, which meant the
+  // password was gone the moment the browser closed — every single morning
+  // started with retyping it — and, worse, a password JobBud held privately in
+  // JS was never offered to the browser's own password manager, so there was
+  // nothing to retype it FROM. It is now localStorage, and the gate is a real
+  // <form> with a password input, submitted normally, which is the shape Chrome
+  // and Safari recognise as a sign-in and respond to with "save this password?".
+  //
+  // Persisting it is only safe because of the verified-gate rule below: a stored
+  // password is re-checked against /api/health on every load and is thrown away
+  // the moment it stops matching. Nothing here relaxes that.
+  const PW_KEY = 'co_pw';
+
+  // Reads the saved password, migrating a session-era one across on first sight
+  // so an open tab does not get logged out by this change.
+  function storedPassword() {
+    const saved = localStorage.getItem(PW_KEY);
+    if (saved !== null) return saved;
+    const legacy = sessionStorage.getItem(PW_KEY);
+    if (legacy !== null) {
+      localStorage.setItem(PW_KEY, legacy);
+      sessionStorage.removeItem(PW_KEY);
+    }
+    return legacy;
+  }
+
+  function rememberPassword(pw) { localStorage.setItem(PW_KEY, pw); }
+
+  // Clears both vaults: the session-era copy may still exist on a browser that
+  // has not been through storedPassword() yet.
+  function forgetPassword() {
+    localStorage.removeItem(PW_KEY);
+    sessionStorage.removeItem(PW_KEY);
+  }
+
   function unlock(pw) {
-    sessionStorage.setItem('co_pw', pw);
+    rememberPassword(pw);
     document.getElementById('gate').style.display = 'none';
     document.getElementById('app').style.display = 'block';
     renderSetupState();
     loadData();
     loadRadar();
+  }
+
+  // The header's "Log out" link. Drops the saved password and returns to the
+  // gate — the same gate the user would see on a fresh browser, so the next
+  // unlock goes through verification exactly as it always does.
+  function logOut() {
+    forgetPassword();
+    _health = null;
+    document.getElementById('app').style.display = 'none';
+    showGate('');
+    const input = document.getElementById('pw-input');
+    if (input) { input.value = ''; input.focus(); }
   }
 
   function showGate(message) {
@@ -2301,7 +2358,7 @@
       health = await fetchHealth(pw);
     } catch (err) {
       gatePending(false);
-      sessionStorage.removeItem('co_pw');
+      forgetPassword();
       showGate('Could not reach the server to check your password. Check your connection and try again.');
       return false;
     }
@@ -2311,7 +2368,7 @@
     if (auth && !auth.ok) {
       // A stored password that no longer matches is a different situation from a
       // fresh typo, and saying so saves the user from retyping the same thing.
-      sessionStorage.removeItem('co_pw');
+      forgetPassword();
       showGate(staleMessage || (auth.fix ? `${auth.message} ${auth.fix}` : auth.message));
       return false;
     }
@@ -2330,7 +2387,7 @@
     // which itself makes up to four sequential GitHub round-trips. That was
     // seconds of nothing on every single load. The gate is where "Checking…"
     // belongs, so show it first and let the pending state account for the wait.
-    const storedPw = sessionStorage.getItem('co_pw');
+    const storedPw = storedPassword();
     showGate('');
     // No stored password means nothing to verify: the gate is the final answer
     // and must stay instant and interactive, so no pending state on that path.
@@ -2356,19 +2413,21 @@
     gatePending(false);
   })();
 
-  document.getElementById('pw-btn').addEventListener('click', () => {
+  // Submit, not click: the browser only offers to save a password when it sees a
+  // form actually submitted. preventDefault stops the navigation, and Enter in
+  // the field comes through here for free, so there is no keydown handler left
+  // to keep in step with the button.
+  document.getElementById('pw-form').addEventListener('submit', e => {
+    e.preventDefault();
     const pw = document.getElementById('pw-input').value;
     if (pw) verifyAndUnlock(pw);
-  });
-  document.getElementById('pw-input').addEventListener('keydown', e => {
-    if (e.key === 'Enter') document.getElementById('pw-btn').click();
   });
 
   // ── Data loading ─────────────────────────────────────────────────────────
   async function loadData() {
     const errEl = document.getElementById('jobs-error');
     try {
-      const pw = sessionStorage.getItem('co_pw') || '';
+      const pw = storedPassword() || '';
       const res = await fetch(JOBS_API + '?t=' + Date.now(), {
         headers: { 'X-Dashboard-Password': pw },
       });
@@ -2773,7 +2832,7 @@
     if (btn) { btn.disabled = true; btn.textContent = 'Queuing…'; }
     setResearchStatus('Writing job file to the repo…');
     try {
-      const pw  = sessionStorage.getItem('co_pw') || '';
+      const pw  = storedPassword() || '';
       const res = await fetch('/api/queue-linkedin-research', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
@@ -2921,7 +2980,7 @@
 
   // ── Inline actions (no page navigation) ──────────────────────────────────
   async function _doInlineAction(id, status) {
-    const pw  = sessionStorage.getItem('co_pw') || '';
+    const pw  = storedPassword() || '';
     const url = `${VERCEL_URL}/api/action?jobId=${encodeURIComponent(id)}&status=${status}`;
     const res = await fetch(url, {
       headers: { 'X-Dashboard-Password': pw },
@@ -2990,7 +3049,7 @@
     document.getElementById('check-all').checked = false;
     updateBulkBar();
 
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     let success = 0, fail = 0;
 
     for (const id of ids) {
@@ -3311,7 +3370,7 @@
       pkgWin.document.close();
     }
 
-    const pw  = sessionStorage.getItem('co_pw') || '';
+    const pw  = storedPassword() || '';
     const url = `${VERCEL_URL}/api/action?jobId=${encodeURIComponent(id)}&status=preparing`;
 
     try {
@@ -3984,7 +4043,7 @@
     const btn = document.getElementById('ro-save-btn');
     btn.disabled = true; btn.textContent = 'Saving…';
     try {
-      const pw = sessionStorage.getItem('co_pw') || '';
+      const pw = storedPassword() || '';
       const res = await fetch(`${VERCEL_URL}/api/action?jobId=${encodeURIComponent(_reachedOutId)}&status=reached_out_logged`, {
         method: 'POST',
         headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
@@ -4069,7 +4128,7 @@
     showToast('⏳ Drafting outreach message...', 0);
 
     try {
-      const pw  = sessionStorage.getItem('co_pw') || '';
+      const pw  = storedPassword() || '';
       const res = await fetch(`${VERCEL_URL}/api/outreach`, {
         method: 'POST',
         headers: {
@@ -4194,7 +4253,7 @@
     statusEl.className = 'aj-status';
 
     try {
-      const pw  = sessionStorage.getItem('co_pw') || '';
+      const pw  = storedPassword() || '';
       const res = await fetch('/api/add-job', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
@@ -4251,7 +4310,7 @@
     ajSetState('scoring');
 
     try {
-      const pw  = sessionStorage.getItem('co_pw') || '';
+      const pw  = storedPassword() || '';
       const res = await fetch('/api/add-job', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
@@ -4331,7 +4390,7 @@
 
   async function loadRadar() {
     try {
-      const pw = sessionStorage.getItem('co_pw') || '';
+      const pw = storedPassword() || '';
       const res = await fetch('/api/radar?t=' + Date.now(), { headers: { 'X-Dashboard-Password': pw } });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
@@ -4355,7 +4414,7 @@
   // Thin wrapper over /api/radar. On success it folds the returned company back
   // into local state so callers can re-render without a full reload.
   async function radarApi(action, body) {
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     const res = await fetch('/api/radar?action=' + action, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
@@ -4470,7 +4529,7 @@
     status.className = 'aj-status';
     status.innerHTML = '<span class="aj-spin" style="display:inline-block;animation:aj-spin 1s linear infinite">⟳</span> Fetching company details…';
     try {
-      const pw  = sessionStorage.getItem('co_pw') || '';
+      const pw  = storedPassword() || '';
       const res = await fetch('/api/radar-fetch-company', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
@@ -4754,7 +4813,7 @@
     btn.disabled = true; btn.textContent = 'Queuing…';
     statusEl.textContent = 'Writing company file to the repo…';
     try {
-      const pw  = sessionStorage.getItem('co_pw') || '';
+      const pw  = storedPassword() || '';
       const res = await fetch('/api/queue-radar-research', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
@@ -4821,7 +4880,7 @@
   // Fetch the three memory files once and cache them for the session. Failure
   // degrades gracefully (memoryContext stays '') so the coach still works.
   async function loadMemory() {
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     try {
       const res = await fetch('/api/memory?action=get-memory', { headers: { 'X-Dashboard-Password': pw } });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -4840,7 +4899,7 @@
   // server, and must never block a chat or onboarding response. Takes effect on the
   // next conversation (memoryContext above is not mutated here).
   function fireMemoryUpdate(eventType, payload) {
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     fetch('/api/memory?action=update-memory', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
@@ -4873,7 +4932,7 @@
   }
 
   async function saveMemoryFile(file) {
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     const ta = document.getElementById('memory-text-' + file);
     if (!ta) return;
     const btn = document.querySelector(`.memory-save-btn[data-file="${file}"]`);
@@ -4906,7 +4965,7 @@
   }
 
   async function loadStories() {
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     const loadEl = document.getElementById('coach-loading');
     const emptyEl = document.getElementById('coach-empty');
     const listEl  = document.getElementById('coach-stories-list');
@@ -5038,7 +5097,7 @@
     saveBtn.disabled = true;
     saveBtn.textContent = 'Saving…';
     errorEl.textContent = '';
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     try {
       const res = await fetch('/api/coach?action=update-story', {
         method: 'POST',
@@ -5081,7 +5140,7 @@
     deletingStoryId = null;
     renderStories(storyBankContent);
 
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     fetch('/api/coach?action=delete-story', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
@@ -5177,7 +5236,7 @@
     isWaitingForReply = true;
     document.getElementById('chat-send-btn').disabled = true;
     showTypingIndicator();
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     try {
       const res = await fetch('/api/coach?action=chat', {
         method: 'POST',
@@ -5239,7 +5298,7 @@
     const saveBtn = document.getElementById('draft-save-btn');
     saveBtn.disabled = true;
     saveBtn.textContent = 'Saving…';
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     try {
       const res = await fetch('/api/coach?action=save-story', {
         method: 'POST',
@@ -5405,7 +5464,7 @@
   }
 
   async function sendPrepTurn(userText) {
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     const sendBtn = document.getElementById('prep-send-btn');
     isPrepWaiting = true;
     if (sendBtn) sendBtn.disabled = true;
@@ -5471,7 +5530,7 @@
   }
 
   async function generatePrepDoc() {
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     renderPrepPhase('generating');
 
     try {
@@ -5594,7 +5653,7 @@
     switchCoachView('mock');
     showMockState('loading');
 
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     try {
       const docUrl = jobContext?.prepDocUrl || '';
       const contextForApi = jobContext ? { ...jobContext } : null;
@@ -5678,7 +5737,7 @@
     submitBtn.textContent = 'Getting feedback…';
 
     const q = mockQuestions[mockCurrentIndex];
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     try {
       const res = await fetch('/api/coach?action=mock-feedback', {
         method: 'POST',
@@ -5897,7 +5956,7 @@
   }
 
   async function saveMockSession() {
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     const id = Date.now() + '-' + Math.random().toString(36).slice(2, 8);
     const now = new Date().toISOString();
     const session = {
@@ -5944,7 +6003,7 @@
     emptyEl.style.display = 'none';
     listEl.style.display  = 'none';
     listEl.innerHTML = '';
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     try {
       const res = await fetch('/api/coach?action=get-mock-sessions', {
         headers: { 'X-Dashboard-Password': pw },
@@ -6261,7 +6320,7 @@
 
     const btn = document.getElementById('onboarding-companies-continue-btn');
     if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     try {
       const res = await fetch('/api/coach?action=generate-portals', {
         method: 'POST',
@@ -6414,7 +6473,7 @@
     document.getElementById('wl-rows').innerHTML = '';
     document.getElementById('wl-starter-banner').style.display = 'none';
 
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     const headers = { 'X-Dashboard-Password': pw };
     try {
       // The Radar half is allowed to fail on its own — a Radar hiccup should
@@ -6555,7 +6614,7 @@
 
     const btn = document.getElementById('wl-save-btn');
     if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     const headers = { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw };
     try {
       const genRes = await fetch('/api/coach?action=generate-portals', {
@@ -6623,7 +6682,7 @@
     reader.onload = async function(ev) {
       const dataUrl = ev.target.result;
       const base64 = dataUrl.split(',')[1];
-      const pw = sessionStorage.getItem('co_pw') || '';
+      const pw = storedPassword() || '';
       try {
         const res = await fetch('/api/coach?action=parse-resume', {
           method: 'POST',
@@ -6715,7 +6774,7 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
         : 'No resume — answer a few questions to build your profile.';
     }
 
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     const initMsg = { role: 'user', content: '__init__' };
     onboardingTranscript = [initMsg];
     onboardingLoading = true;
@@ -6755,7 +6814,7 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
     appendOnboardingMessage('user', text);
     onboardingTranscript.push({ role: 'user', content: text });
 
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     onboardingLoading = true;
     document.getElementById('onboarding-send-btn').disabled = true;
 
@@ -6842,7 +6901,7 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
     if (spinner) spinner.style.display = '';
     if (rows) rows.style.display = 'none';
 
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     const transcript = onboardingTranscript
       .filter(m => m.content !== '__init__')
       .map(m => ({ role: m.role, content: m.content }));
@@ -6905,7 +6964,7 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
     if (spinner) spinner.style.display = 'none';
     if (rows) rows.style.display = '';
 
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     const conversationText = onboardingTranscript
       .filter(m => m.content !== '__init__')
       .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
@@ -7034,7 +7093,7 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
       return;
     }
     const btn = document.getElementById('onboarding-save-repo-btn');
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
     try {
       const r = await fetch('/api/coach?action=save-onboarding', {

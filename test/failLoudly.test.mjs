@@ -32,23 +32,23 @@ test('the gate verifies a password against /api/health before unlocking', () => 
   assert.match(body, /const auth = health\.checks\.find\(c => c\.check === 'auth'\)/);
 });
 
-test('a password that fails the auth check is never written to sessionStorage', () => {
+test('a password that fails the auth check is never written to storage', () => {
   const fn = html.slice(html.indexOf('async function verifyAndUnlock'));
   const body = fn.slice(0, fn.indexOf('\n  let driveConfigured'));
   // Both failure branches (auth rejected, endpoint unreachable) must clear it.
-  assert.equal((body.match(/sessionStorage\.removeItem\('co_pw'\)/g) || []).length, 2);
-  assert.ok(!/sessionStorage\.setItem/.test(body), 'verifyAndUnlock must not store the password itself');
+  assert.equal((body.match(/forgetPassword\(\)/g) || []).length, 2);
+  assert.ok(!/rememberPassword|setItem/.test(body), 'verifyAndUnlock must not store the password itself');
   // unlock() is the only writer, and it only runs after the auth check passed.
-  assert.match(html, /function unlock\(pw\) \{\s*\n\s*sessionStorage\.setItem\('co_pw', pw\)/);
+  assert.match(html, /function unlock\(pw\) \{\s*\n\s*rememberPassword\(pw\);/);
 });
 
-test('the click handler goes through verification, never straight to unlock', () => {
-  assert.match(html, /getElementById\('pw-btn'\)\.addEventListener\('click', \(\) => \{[\s\S]{0,140}verifyAndUnlock\(pw\)/);
+test('the submit handler goes through verification, never straight to unlock', () => {
+  assert.match(html, /getElementById\('pw-form'\)\.addEventListener\('submit', e => \{[\s\S]{0,200}verifyAndUnlock\(pw\)/);
   assert.doesNotMatch(html, /if \(pw\) unlock\(pw\);/);
 });
 
 test('a stored password is verified on load, with its own stale wording', () => {
-  assert.match(html, /const storedPw = sessionStorage\.getItem\('co_pw'\);/);
+  assert.match(html, /const storedPw = storedPassword\(\);/);
   assert.match(html, /verifyAndUnlock\(\s*\n?\s*storedPw,/);
   assert.match(html, /Your saved password no longer matches — enter the current one\./);
 });
@@ -58,7 +58,8 @@ test('the boot path shows the gate before it awaits anything', () => {
   // white page. Verifying a stored password costs a config probe plus the health
   // check's GitHub round-trips — seconds of white on every load.
   const boot = html.slice(html.indexOf('  (async () => {'));
-  const body = boot.slice(0, boot.indexOf("getElementById('pw-btn').addEventListener"));
+  const body = boot.slice(0, boot.indexOf("getElementById('pw-form').addEventListener"));
+  assert.ok(body.length > 0, 'the boot block could not be isolated');
   assert.ok(body.indexOf("showGate('')") < body.indexOf('await fetch('),
     'the boot path awaits before it puts the gate on screen');
   // ...and the wait is accounted for, rather than looking like a hung gate.
@@ -241,4 +242,68 @@ test('a second click cannot start a second run', () => {
 test('a finished run is stamped, so an unchanged result still visibly changed', () => {
   assert.match(html, /_healthRanAt = new Date\(\)\.toLocaleTimeString/);
   assert.match(html, /Last checked at \$\{_healthRanAt\}\./);
+});
+
+// ── The saved login ───────────────────────────────────────────────────────────
+//
+// The password used to live in sessionStorage: gone the moment the browser
+// closed, and never offered to the browser's own password manager, so there was
+// nothing to retype it from either. It now persists in localStorage behind the
+// same verified gate, and the gate is the shape a browser recognises as a login.
+
+test('the gate is a real form with a password input the browser can save', () => {
+  assert.match(html, /<form id="pw-form"/);
+  assert.match(html, /<input type="password" id="pw-input"[^>]*autocomplete="current-password"/);
+  assert.match(html, /<button type="submit" id="pw-btn"/);
+  // A submitted form is what triggers the save prompt; the old click/keydown
+  // pair never submitted anything.
+  assert.doesNotMatch(html, /getElementById\('pw-btn'\)\.addEventListener\('click'/);
+  assert.doesNotMatch(html, /getElementById\('pw-input'\)\.addEventListener\('keydown'/);
+  // ...and the submit must not actually navigate away.
+  const handler = html.slice(html.indexOf("getElementById('pw-form').addEventListener"));
+  assert.match(handler.slice(0, 200), /e\.preventDefault\(\)/);
+});
+
+test('the password persists in localStorage, and a session-era one migrates', () => {
+  const fn = html.slice(html.indexOf('function storedPassword()'));
+  const body = fn.slice(0, fn.indexOf('\n  function rememberPassword'));
+  assert.match(body, /localStorage\.getItem\(PW_KEY\)/);
+  // The one-time fallback read, then the write that promotes it.
+  assert.match(body, /sessionStorage\.getItem\(PW_KEY\)/);
+  assert.match(body, /localStorage\.setItem\(PW_KEY, legacy\)/);
+  assert.match(body, /sessionStorage\.removeItem\(PW_KEY\)/);
+  assert.match(html, /function rememberPassword\(pw\) \{ localStorage\.setItem\(PW_KEY, pw\); \}/);
+});
+
+test('every password read goes through the helper — no direct storage reads left', () => {
+  const reads = html.match(/sessionStorage\.getItem\('co_pw'\)/g) || [];
+  assert.equal(reads.length, 0, 'a sessionStorage read of co_pw survived the move to localStorage');
+  assert.ok((html.match(/storedPassword\(\) \|\| ''/g) || []).length > 30,
+    'the request call sites should all read through storedPassword()');
+});
+
+test('logging out clears both vaults and returns to the gate', () => {
+  const fn = html.slice(html.indexOf('function logOut()'));
+  const body = fn.slice(0, fn.indexOf('\n  function showGate'));
+  assert.match(body, /forgetPassword\(\)/);
+  assert.match(body, /showGate\(''\)/);
+  assert.match(body, /getElementById\('app'\)\.style\.display = 'none'/);
+  // Stale health from the previous session must not leak into the next one.
+  assert.match(body, /_health = null/);
+  // forgetPassword clears the session-era copy too, or a logged-out browser
+  // would silently log itself back in on the next load.
+  const forget = html.slice(html.indexOf('function forgetPassword()'));
+  const forgetBody = forget.slice(0, forget.indexOf('\n  function unlock'));
+  assert.match(forgetBody, /localStorage\.removeItem\(PW_KEY\)/);
+  assert.match(forgetBody, /sessionStorage\.removeItem\(PW_KEY\)/);
+  assert.match(html, /id="logout-btn"[^>]*onclick="logOut\(\)"/);
+});
+
+test('persistence did not weaken the verified gate', () => {
+  // The stored password is still re-verified on every load before anything
+  // unlocks — that check is the whole reason keeping it around is safe.
+  const boot = html.slice(html.indexOf('  (async () => {'));
+  const body = boot.slice(0, boot.indexOf("getElementById('pw-form').addEventListener"));
+  assert.match(body, /if \(storedPw !== null\) \{\s*\n\s*await verifyAndUnlock\(/);
+  assert.match(body, /Your saved password no longer matches — enter the current one\./);
 });
