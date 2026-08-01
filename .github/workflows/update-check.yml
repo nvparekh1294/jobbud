@@ -54,13 +54,9 @@ jobs:
 
           BASE_SHA="$(git rev-parse HEAD)"
 
-          # 1. Add upstream as a read-only remote and fetch its main branch plus its
-          #    tags. The tags land in their own refs/upstream-tags/* namespace rather
-          #    than the local refs/tags/*, so upstream's releases can never collide
-          #    with (or overwrite) tags the user has made in their own repo.
+          # 1. Add upstream as a read-only remote and fetch its main branch.
           git remote add upstream "$UPSTREAM_URL"
           git fetch --no-tags upstream main
-          git fetch --no-tags upstream '+refs/tags/*:refs/upstream-tags/*'
 
           # 1b. Repair the missing shared history, if there is none.
           #
@@ -112,53 +108,9 @@ jobs:
             fi
           fi
 
-          # 1c. Choose what "the update" actually is.
-          #
-          #     Downstream copies should receive RELEASES, not upstream's working tip.
-          #     main carries in-progress work that has not been through a release, and
-          #     shipping it to a non-technical user's live deployment is how they end up
-          #     debugging someone else's half-finished change. So: the newest v* tag
-          #     wins, ordered by version (v0.10.0 > v0.9.0 — a plain lexical sort gets
-          #     that backwards).
-          #
-          #     Prereleases are skipped. `-v:refname` ranks v2.0.0-rc1 ABOVE v2.0.0,
-          #     so once a release candidate is tagged upstream every downstream copy
-          #     would pin itself to the RC and never move again — the merge-base check
-          #     below would report "up to date" forever. A tag containing `-` is a
-          #     prerelease by semver's own rule, so drop those and keep the rest in
-          #     version order.
-          #
-          #     Before the first release exists there is nothing to track, so we fall
-          #     back to main exactly as before. Everything downstream of this point
-          #     merges $TARGET_REF and never names a branch directly.
-          #
-          #     awk (not `head -1`) so the producer is drained: closing the pipe early
-          #     kills git with SIGPIPE and `set -o pipefail` aborts the step.
-          LATEST_TAG="$(git for-each-ref --sort=-v:refname --format='%(refname:strip=2)' 'refs/upstream-tags/v*' \
-                        | awk '!/-/ && !found { print; found = 1 }')"
-          if [ -n "$LATEST_TAG" ]; then
-            TARGET_REF="refs/upstream-tags/$LATEST_TAG"
-            TARGET_DESC="release $LATEST_TAG"
-            # Mirror the workflow's own fetch. `git fetch upstream --tags` writes into
-            # the user's LOCAL tag namespace and will not overwrite a tag they already
-            # have, so their own v1.2.0 would silently win over upstream's. Fetching
-            # into refs/upstream-tags/* keeps the two apart, exactly as above.
-            # (main comes along too — step 4 of the recipe needs upstream/main to
-            # find the snapshot the copy was made from.)
-            HUMAN_FETCH="git fetch --no-tags upstream main '+refs/tags/*:refs/upstream-tags/*'"
-            HUMAN_REF="refs/upstream-tags/$LATEST_TAG"
-            echo "Tracking $TARGET_DESC ($(git rev-parse --short "$TARGET_REF^{commit}"))."
-          else
-            echo "no release tags found — tracking main until the first release"
-            TARGET_REF="upstream/main"
-            TARGET_DESC="the latest changes on main"
-            HUMAN_FETCH="git fetch upstream"
-            HUMAN_REF="upstream/main"
-          fi
-
-          # 2. If we already contain everything the target ref has, there is nothing to do.
-          if git merge-base --is-ancestor "$TARGET_REF" HEAD; then
-            echo "Up to date with upstream ($TARGET_DESC) — no update needed."
+          # 2. If we already contain everything upstream has, there is nothing to do.
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "Up to date with upstream — no update needed."
             exit 0
           fi
 
@@ -167,15 +119,15 @@ jobs:
           #     the PR is already current — don't churn it or open a duplicate.
           git fetch --no-tags origin "$UPDATE_BRANCH" 2>/dev/null || true
           if git rev-parse --verify --quiet "refs/remotes/origin/$UPDATE_BRANCH" >/dev/null; then
-            if git merge-base --is-ancestor "$TARGET_REF" "origin/$UPDATE_BRANCH" \
+            if git merge-base --is-ancestor upstream/main "origin/$UPDATE_BRANCH" \
                && git merge-base --is-ancestor "$BASE_SHA" "origin/$UPDATE_BRANCH"; then
-              echo "Update branch already includes $TARGET_DESC — PR is current."
+              echo "Update branch already includes these upstream changes — PR is current."
               exit 0
             fi
           fi
 
           # 3. Capture the incoming commit subjects BEFORE merging (used in the PR body).
-          INCOMING="$(git log --oneline --no-merges "HEAD..$TARGET_REF")"
+          INCOMING="$(git log --oneline --no-merges "HEAD..upstream/main")"
           echo "Incoming upstream commits:"
           echo "$INCOMING"
 
@@ -188,11 +140,11 @@ jobs:
           #    a harmless no-op on every later run. Real content conflicts (you edited
           #    JobBud's own tool files) still fail and fall through to the issue path.
           git checkout -B "$UPDATE_BRANCH"
-          if git merge --no-edit --allow-unrelated-histories -m "Merge upstream JobBud $TARGET_DESC into $UPDATE_BRANCH" "$TARGET_REF"; then
+          if git merge --no-edit --allow-unrelated-histories -m "Merge upstream JobBud updates into $UPDATE_BRANCH" upstream/main; then
             echo "Clean merge — pushing branch and opening/updating a PR."
             git push --force origin "$UPDATE_BRANCH"
 
-            PR_BODY="$(printf 'This PR brings in %s from the upstream JobBud repo (%s).\n\nIncoming commits:\n\n```\n%s\n```\n\nReview the diff and click **Merge** to update your copy. Nothing is applied until you approve.\n\n**Use "Merge pull request", not "Squash and merge".** Squashing throws away the merge commit that links your copy to upstream'"'"'s history, and without it the next update check will re-open a PR that appears to change nothing.' "$TARGET_DESC" "$UPSTREAM_URL" "$INCOMING")"
+            PR_BODY="$(printf 'This PR brings in new changes from the upstream JobBud repo (%s).\n\nIncoming commits:\n\n```\n%s\n```\n\nReview the diff and click **Merge** to update your copy. Nothing is applied until you approve.\n\n**Use "Merge pull request", not "Squash and merge".** Squashing throws away the merge commit that links your copy to upstream'"'"'s history, and without it the next update check will re-open a PR that appears to change nothing.' "$UPSTREAM_URL" "$INCOMING")"
 
             EXISTING_PR="$(gh pr list --head "$UPDATE_BRANCH" --state open --json number --jq '.[0].number // empty')"
             if [ -n "$EXISTING_PR" ]; then
@@ -208,18 +160,18 @@ jobs:
 
             # Self-contained merge recipe — this issue must stand on its own, without
             # sending the reader back to the README or to a workflow run.
-            MANUAL_RECIPE="$(printf '# 1. Point your clone at the upstream repo. Safe to re-run — if it is\n#    already set up, this does nothing.\ngit remote add upstream %s 2>/dev/null || true\n\n# 2. Get upstream'"'"'s latest commits and releases (nothing is changed yet).\n%s\n\n# 3. Find your repo'"'"'s very first commit, and the snapshot of files it holds.\nROOT=$(git rev-list --max-parents=0 HEAD | tail -1)\nTREE=$(git rev-parse $ROOT^{tree})\n\n# 4. Tell Git which upstream commit your copy was made from, by finding the\n#    upstream commit holding that identical snapshot.\ngit replace --graft $ROOT $(git log --format='"'"'%%H %%T'"'"' upstream/main | awk -v t=$TREE '"'"'$2==t && !f {print $1; f=1}'"'"')\n\n# 5. Now merge normally. Only files you edited yourself can conflict.\ngit merge %s' "$UPSTREAM_URL" "$HUMAN_FETCH" "$HUMAN_REF")"
+            MANUAL_RECIPE="$(printf '# 1. Point your clone at the upstream repo. Safe to re-run — if it is\n#    already set up, this does nothing.\ngit remote add upstream %s 2>/dev/null || true\n\n# 2. Get upstream'"'"'s latest commits (nothing is changed yet).\ngit fetch upstream\n\n# 3. Find your repo'"'"'s very first commit, and the snapshot of files it holds.\nROOT=$(git rev-list --max-parents=0 HEAD | tail -1)\nTREE=$(git rev-parse $ROOT^{tree})\n\n# 4. Tell Git which upstream commit your copy was made from, by finding the\n#    upstream commit holding that identical snapshot.\ngit replace --graft $ROOT $(git log --format='"'"'%%H %%T'"'"' upstream/main | awk -v t=$TREE '"'"'$2==t && !f {print $1; f=1}'"'"')\n\n# 5. Now merge normally. Only files you edited yourself can conflict.\ngit merge upstream/main' "$UPSTREAM_URL")"
 
             if [ -n "$UNRELATED_NO_MATCH" ]; then
               # No reference point exists, so the conflicts are an artefact of that, not
               # of anything the user edited. Don't offer the graft recipe — its lookup is
               # exactly what already failed.
-              ISSUE_BODY="$(printf 'Upstream JobBud has new changes, but they could not be merged automatically.\n\n**This is not because of anything you did.** Your copy'"'"'s starting snapshot could not be matched to any commit in upstream'"'"'s history, so Git has no reference point for comparing the two versions — and without one it treats *every* file that differs as a conflict, including files you have never opened. Expect a long list.\n\nMerge by hand in a local clone of this repo:\n\n```bash\n# Point your clone at the upstream repo. Safe to re-run — if it is already\n# set up, this does nothing.\ngit remote add upstream %s 2>/dev/null || true\n\n# Get upstream'"'"'s latest commits and releases (nothing is changed yet).\n%s\n\n# Merge, accepting that Git cannot find a common starting point.\ngit merge --allow-unrelated-histories %s\n```\n\nGit will stop and list the conflicting files. Work through them one at a time:\n\n- Anything under `api/`, `lib/`, `scanner/`, `dashboard/`, `.github/` — JobBud'"'"'s own tool files. Keep **upstream'"'"'s** version.\n- Anything under `data/` or `config/` — your job data and your profile. Keep **your** version.\n- Anything else at the top level (`README.md`, `SETUP.md`, `package.json`, `vercel.json`, and friends) — keep **upstream'"'"'s** version, unless you deliberately customised the file.\n\n`git add` each file as you finish it, then `git commit` to complete the merge and `git push`.\n\nYou only have to do this once. This merge links the two histories permanently, and future updates will merge normally.\n\nIncoming commits:\n\n```\n%s\n```' "$UPSTREAM_URL" "$HUMAN_FETCH" "$HUMAN_REF" "$INCOMING")"
+              ISSUE_BODY="$(printf 'Upstream JobBud has new changes, but they could not be merged automatically.\n\n**This is not because of anything you did.** Your copy'"'"'s starting snapshot could not be matched to any commit in upstream'"'"'s history, so Git has no reference point for comparing the two versions — and without one it treats *every* file that differs as a conflict, including files you have never opened. Expect a long list.\n\nMerge by hand in a local clone of this repo:\n\n```bash\n# Point your clone at the upstream repo. Safe to re-run — if it is already\n# set up, this does nothing.\ngit remote add upstream %s 2>/dev/null || true\n\n# Get upstream'"'"'s latest commits (nothing is changed yet).\ngit fetch upstream\n\n# Merge, accepting that Git cannot find a common starting point.\ngit merge --allow-unrelated-histories upstream/main\n```\n\nGit will stop and list the conflicting files. Work through them one at a time:\n\n- Anything under `api/`, `lib/`, `scanner/`, `dashboard/`, `.github/` — JobBud'"'"'s own tool files. Keep **upstream'"'"'s** version.\n- Anything under `data/` or `config/` — your job data and your profile. Keep **your** version.\n- Anything else at the top level (`README.md`, `SETUP.md`, `package.json`, `vercel.json`, and friends) — keep **upstream'"'"'s** version, unless you deliberately customised the file.\n\n`git add` each file as you finish it, then `git commit` to complete the merge and `git push`.\n\nYou only have to do this once. This merge links the two histories permanently, and future updates will merge normally.\n\nIncoming commits:\n\n```\n%s\n```' "$UPSTREAM_URL" "$INCOMING")"
             elif [ -n "$GRAFTED" ]; then
               ISSUE_BODY="$(printf 'Upstream JobBud has new changes, but they could not be merged automatically because you and upstream both changed the same lines in one of JobBud'"'"'s own tool files.\n\nMerge by hand in a local clone of this repo. Run these one at a time:\n\n```bash\n%s\n```\n\nGit will stop and list the conflicting files. Open each one, decide which version to keep, then `git add` it and run `git commit` to finish the merge. Finally, `git push`.\n\nIncoming commits:\n\n```\n%s\n```' "$MANUAL_RECIPE" "$INCOMING")"
             else
               # Ordinary related history — no graft needed, plain merge instructions.
-              ISSUE_BODY="$(printf 'Upstream JobBud has new changes, but they could not be merged automatically because you and upstream both changed the same lines in one of JobBud'"'"'s own tool files.\n\nMerge by hand in a local clone of this repo:\n\n```bash\n# Point your clone at the upstream repo. Safe to re-run — if it is already\n# set up, this does nothing.\ngit remote add upstream %s 2>/dev/null || true\n\n%s\ngit merge %s\n```\n\nGit will stop and list the conflicting files. Open each one, decide which version to keep, then `git add` it and run `git commit` to finish the merge. Finally, `git push`.\n\nIncoming commits:\n\n```\n%s\n```' "$UPSTREAM_URL" "$HUMAN_FETCH" "$HUMAN_REF" "$INCOMING")"
+              ISSUE_BODY="$(printf 'Upstream JobBud has new changes, but they could not be merged automatically because you and upstream both changed the same lines in one of JobBud'"'"'s own tool files.\n\nMerge by hand in a local clone of this repo:\n\n```bash\n# Point your clone at the upstream repo. Safe to re-run — if it is already\n# set up, this does nothing.\ngit remote add upstream %s 2>/dev/null || true\n\ngit fetch upstream\ngit merge upstream/main\n```\n\nGit will stop and list the conflicting files. Open each one, decide which version to keep, then `git add` it and run `git commit` to finish the merge. Finally, `git push`.\n\nIncoming commits:\n\n```\n%s\n```' "$UPSTREAM_URL" "$INCOMING")"
             fi
 
             EXISTING_ISSUE="$(gh issue list --state open --json number,title --jq 'map(select(.title == env.ISSUE_TITLE)) | .[0].number // empty')"
