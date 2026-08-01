@@ -101,6 +101,34 @@ test('the gate can show a reason, and one exists for an unreachable server', () 
   assert.match(html, /Could not reach the server to check your password\./);
 });
 
+// A pasted password carrying a non-Latin-1 character makes fetch() throw a
+// TypeError while building the X-Dashboard-Password header, before any request
+// is sent. Reporting that as "check your connection" sends the user hunting a
+// network fault that does not exist. api/health.js already names this for
+// tokens; the gate is one inline script and cannot import it, so it carries its
+// own copy of the same 0x21–0x7E rule.
+test('the gate names an invisible pasted character instead of blaming the network', () => {
+  assert.match(html, /function passwordHasInvalidChar\(pw\)/);
+  assert.match(html, /code < 0x21 \|\| code > 0x7e/);
+  assert.match(html, /invisible or special character \(often from copy-pasting\)/);
+  // Checked before the request is attempted, on the submit path.
+  const form = html.slice(html.indexOf("getElementById('pw-form').addEventListener"));
+  const body = form.slice(0, 400);
+  assert.match(body, /passwordHasInvalidChar\(pw\)[\s\S]{0,80}showGate\(BAD_CHAR_MESSAGE\)/);
+  assert.ok(body.indexOf('passwordHasInvalidChar') < body.indexOf('verifyAndUnlock(pw)'),
+    'the character scan must run before verifyAndUnlock, not after');
+  // and a backstop in the catch, which must still keep the real network wording
+  const fn = html.slice(html.indexOf('async function verifyAndUnlock'));
+  const vb = fn.slice(0, fn.indexOf('\n  let driveConfigured'));
+  assert.match(vb, /isHeaderCharError\(err\)[\s\S]{0,120}BAD_CHAR_MESSAGE/);
+  assert.match(vb, /Could not reach the server to check your password\./);
+  assert.match(html, /function isHeaderCharError\(err\)[\s\S]{0,200}ByteString/);
+});
+
+test('the password form cannot navigate away even if its submit listener never attaches', () => {
+  assert.match(html, /<form id="pw-form"[^>]*onsubmit="return false"/);
+});
+
 // ── Banner and panel ──────────────────────────────────────────────────────────
 
 test('the banner counts failing checks and is dismissible', () => {
@@ -219,7 +247,7 @@ test('a run in flight disables the button and renames it', () => {
   // Restoring it must be unconditional, so a thrown check cannot strand the
   // button disabled forever.
   assert.ok(body.indexOf('} finally {') < body.indexOf("btn.textContent = 'Run setup check'"),
-    'the button is restored outside the finally block');
+    'the button is restored outside the finally block — it must be inside it');
 });
 
 test('the results area itself says a check is running, and re-renders when done', () => {

@@ -276,6 +276,30 @@ test('a schemeful VERCEL_URL passes too', async () => {
   const c = byName(checks, 'env:VERCEL_URL');
   assert.equal(c.ok, true);
   assert.match(c.message, /https:\/\/jobbud\.vercel\.app/);
+  // The wording has to match the value printed beside it. Telling someone
+  // "which is why it has no https:// in front" while showing them a value that
+  // starts with https:// reads as a broken checker.
+  assert.match(c.message, /already includes the scheme/);
+  assert.doesNotMatch(c.message, /has no https:\/\/ in front/);
+});
+
+// The VERCEL_URL pass carries the only mention of the GitHub Actions copy. The
+// setup panel renders failures and informational entries only, so an ok:true
+// non-informational check means that sentence is written for nobody.
+test('the VERCEL_URL pass is informational, so the setup panel actually shows it', async () => {
+  for (const url of ['jobbud.vercel.app', 'https://jobbud.vercel.app']) {
+    const checks = await withFetch(routeFetch(HEALTHY_ROUTES), () => runHealthChecks({ ...HEALTHY_ENV, VERCEL_URL: url }));
+    const c = byName(checks, 'env:VERCEL_URL');
+    assert.equal(c.ok, true);
+    assert.equal(c.informational, true, `VERCEL_URL pass not informational for ${url}`);
+  }
+});
+
+test('a MISSING VERCEL_URL is a real failure, not an informational note', async () => {
+  const checks = await withFetch(routeFetch(HEALTHY_ROUTES), () => runHealthChecks({ ...HEALTHY_ENV, VERCEL_URL: '' }));
+  const c = byName(checks, 'env:VERCEL_URL');
+  assert.equal(c.ok, false);
+  assert.equal(c.informational, false);
 });
 
 test('a set VERCEL_URL points at the GitHub Actions copy as the one that needs https://', async () => {

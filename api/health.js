@@ -160,11 +160,26 @@ function envChecks(env) {
       ),
     );
   } else {
+    // The value we print has to match the words next to it. Vercel's own
+    // injected value is a bare hostname, but a self-hosted or locally-run copy
+    // may well carry a scheme — telling that user "which is why it has no
+    // https:// in front" while showing them a value that plainly starts with
+    // https:// reads as a bug in the checker.
+    const hasScheme = /^https?:\/\//i.test(vercelUrl);
+    const shape = hasScheme
+      ? 'This one already includes the scheme, which is fine — nothing here is broken by it.'
+      : 'Vercel fills this in automatically, which is why it has no https:// in front — that is normal and nothing here is broken by it.';
     checks.push(
       check(
         'env:VERCEL_URL',
         true,
-        `VERCEL_URL is set to ${vercelUrl} (Vercel fills this in automatically, which is why it has no https:// in front — that is normal and nothing here is broken by it). The copy that your digest-email buttons use lives in your GitHub Actions secrets and must include https:// — this page can't check that one.`,
+        `VERCEL_URL is set to ${vercelUrl}. ${shape} The copy that your digest-email buttons use lives in your GitHub Actions secrets and must include https:// — this page can't check that one.`,
+        '',
+        // Informational: this is a fact worth surfacing, not a failure. The
+        // setup panel only renders failures and informational entries, so
+        // without this flag the GitHub-Actions guidance above is written for
+        // nobody.
+        true,
       ),
     );
   }

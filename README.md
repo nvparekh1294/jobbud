@@ -310,6 +310,8 @@ With it: the dashboard identifies mutual LinkedIn connections at target companie
 
 `DASHBOARD_PASSWORD` is **required**, not optional — it is listed with the other required variables in [Deploy to Vercel](#1-deploy-to-vercel) above. The dashboard fails closed: without it set, the API returns 401 and serves no job data, so the dashboard cannot work. Set `DASHBOARD_PASSWORD` in your Vercel environment variables, ticked for **Production**, and use a strong value. If your dashboard opens with no password prompt at all, that variable is not reaching Production — see the note in [Deploy to Vercel](#1-deploy-to-vercel).
 
+Once you unlock it, the dashboard remembers your password on that computer so you are not asked again every visit. The **Log out** link in the header clears it. On a shared or public computer, log out when you are done.
+
 (The GitHub Actions scanner pipeline does not use this variable — it runs without it. Only the Vercel dashboard needs it.)
 
 ### What your deployment serves (and what it doesn't)

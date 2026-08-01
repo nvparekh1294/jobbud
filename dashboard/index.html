@@ -1147,7 +1147,10 @@
     <!-- A real form with a real submit button, because that is what Chrome and
          Safari look for before they offer to save the password. A password-only
          form is a shape both recognise, so there is no username field to fake. -->
-    <form id="pw-form" autocomplete="on">
+    <!-- onsubmit="return false" is belt and braces: if the submit listener ever
+         fails to attach, the form must still not navigate away and lose what was
+         typed. The listener's own preventDefault runs normally when it is there. -->
+    <form id="pw-form" autocomplete="on" onsubmit="return false">
       <input type="password" id="pw-input" name="password" placeholder="Password" autocomplete="current-password">
       <button type="submit" id="pw-btn">Unlock</button>
     </form>
@@ -2344,6 +2347,35 @@
     if (btn) btn.disabled = !!on;
   }
 
+  // The same invisible-character trap that bit the GitHub token, one layer up.
+  // A password pasted out of a password manager or an email can carry a
+  // non-breaking space, a smart quote, a bullet or a stray newline. We put it in
+  // the X-Dashboard-Password header, and fetch() refuses to build a header value
+  // out of anything outside Latin-1 — it throws a TypeError ("Cannot convert
+  // argument to a ByteString...") synchronously, before any request leaves the
+  // machine. The catch below used to call that "Could not reach the server",
+  // blaming the network for a paste. api/health.js has findInvalidTokenChar for
+  // exactly this, but this file is one inline script with no imports, so the
+  // check is duplicated here deliberately. Header values may only carry visible
+  // ASCII, 0x21 to 0x7E.
+  const BAD_CHAR_MESSAGE =
+    'Your password contains an invisible or special character (often from copy-pasting) — try typing it by hand.';
+  function passwordHasInvalidChar(pw) {
+    const s = String(pw == null ? '' : pw);
+    for (let i = 0; i < s.length; i++) {
+      const code = s.charCodeAt(i);
+      if (code < 0x21 || code > 0x7e) return true;
+    }
+    return false;
+  }
+  // Backstop for anything that slips past the scan above: a ByteString
+  // conversion failure is a TypeError thrown by fetch itself, never a network
+  // error, so it must not be reported as one.
+  function isHeaderCharError(err) {
+    return !!err && (err.name === 'TypeError' || err instanceof TypeError) &&
+      /ByteString|Latin-1|header/i.test(String(err.message || ''));
+  }
+
   // Verify a password against /api/health before unlocking anything.
   //
   // This is the fix for the stale-password failure: the old gate stored whatever
@@ -2359,7 +2391,9 @@
     } catch (err) {
       gatePending(false);
       forgetPassword();
-      showGate('Could not reach the server to check your password. Check your connection and try again.');
+      showGate(isHeaderCharError(err)
+        ? BAD_CHAR_MESSAGE
+        : 'Could not reach the server to check your password. Check your connection and try again.');
       return false;
     }
     gatePending(false);
@@ -2420,7 +2454,9 @@
   document.getElementById('pw-form').addEventListener('submit', e => {
     e.preventDefault();
     const pw = document.getElementById('pw-input').value;
-    if (pw) verifyAndUnlock(pw);
+    if (!pw) return;
+    if (passwordHasInvalidChar(pw)) { showGate(BAD_CHAR_MESSAGE); return; }
+    verifyAndUnlock(pw);
   });
 
   // ── Data loading ─────────────────────────────────────────────────────────
