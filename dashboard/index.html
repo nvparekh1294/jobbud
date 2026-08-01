@@ -420,6 +420,7 @@
     .role-option input[type=checkbox] { width: 16px; height: 16px; flex-shrink: 0; margin-top: 2px; accent-color: var(--accent); cursor: pointer; }
     .role-option-text { font-size: 13px; color: var(--text); line-height: 1.4; }
     .role-option-desc { font-size: 11px; color: var(--muted); font-style: italic; margin-top: 3px; }
+    .role-type-source { font-size: 11.5px; color: var(--muted); font-style: italic; margin: 2px 0 4px; line-height: 1.45; }
     #role-modal .guidance-label { font-size: 13px; font-weight: 600; color: var(--text); margin: 16px 0 6px; }
     #role-guidance { width: 100%; height: 80px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; font-family: inherit; color: var(--text); resize: vertical; outline: none; }
     #role-guidance:focus { border-color: #aaa; }
@@ -785,11 +786,12 @@
     <div class="modal-label">Job description <span style="font-weight:400;color:var(--muted)">— edit or paste if missing</span></div>
     <textarea id="role-jd" rows="6" placeholder="Paste the job description here if it wasn't captured automatically..." style="margin-bottom:16px"></textarea>
     <div class="modal-label">Which role types best describe this position? Select all that apply.</div>
-    <label class="role-option"><input type="checkbox" value="ops"><span class="role-option-text">Business Operations / Chief of Staff / COO</span></label>
-    <label class="role-option"><input type="checkbox" value="corpdev"><span class="role-option-text">Corporate Development / M&amp;A</span></label>
-    <label class="role-option"><input type="checkbox" value="stratfin"><span class="role-option-text">Strategic Finance / FP&amp;A</span></label>
-    <label class="role-option"><input type="checkbox" value="investing"><span class="role-option-text">Venture / Growth Equity / Investing</span></label>
-    <label class="role-option"><input type="checkbox" value="ceo-office"><span class="role-option-text">CEO's Office / Special Projects</span></label>
+    <!-- Populated at runtime from the tag legend in the user's own bullet-bank.md
+         (GET /api/jobs?resource=role-tags). It used to be a hardcoded list of the
+         original author's five categories, which meant every other user filtered
+         their bullets against tags their bank had never heard of. -->
+    <div id="role-type-options"></div>
+    <div id="role-type-source" class="role-type-source"></div>
     <div class="guidance-label">Additional guidance for Claude (optional)</div>
     <textarea id="role-guidance" placeholder="e.g. emphasize portfolio operating support; lead with operations bullet; highlight key deal or project experience"></textarea>
     <div class="guidance-label" style="margin-top:16px">Additional application questions <span style="font-weight:400;color:var(--muted)">(optional)</span></div>
@@ -3331,6 +3333,69 @@
   // ── Role-type modal state ─────────────────────────────────────────────────
   let _modalJobId = null, _modalTitle = null, _modalCompany = null, _modalJobUrl = '', _modalJobDescription = '';
 
+  // Role-type options come from the tag legend in the user's own bullet-bank.md.
+  // Cached for the session: the bank only changes at onboarding/refresh, and a
+  // fetch per modal open would add latency to every Prepare to Apply click.
+  let _roleTagsLoaded = false;
+
+  // Same generic set the API falls back to. Duplicated here only so the modal can
+  // render instantly on a failed fetch — the server copy in lib/bulletBank.mjs is
+  // the source of truth.
+  const FALLBACK_ROLE_TAGS = [
+    { value: 'operations', label: 'Operations / Program Management' },
+    { value: 'strategy',   label: 'Strategy / Business Development' },
+    { value: 'finance',    label: 'Finance / Analytics' },
+    { value: 'product',    label: 'Product / Project Management' },
+    { value: 'leadership', label: 'Leadership / People Management' },
+  ];
+
+  // Build the checkboxes. Every string goes in via textContent / setAttribute —
+  // labels originate in an AI-generated file, so they are never interpolated
+  // into markup.
+  function renderRoleTypeOptions(tags, source) {
+    const box = document.getElementById('role-type-options');
+    const note = document.getElementById('role-type-source');
+    if (!box) return;
+    box.textContent = '';
+    (tags || []).forEach(tag => {
+      const label = document.createElement('label');
+      label.className = 'role-option';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.value = tag.value;
+      const span = document.createElement('span');
+      span.className = 'role-option-text';
+      span.textContent = tag.label || tag.value;
+      label.appendChild(cb);
+      label.appendChild(span);
+      box.appendChild(label);
+    });
+    if (note) {
+      note.textContent = source === 'bullet-bank'
+        ? 'These are the role types from your bullet bank.'
+        : 'Generic role types for now — these become your own tags from your bullet bank once onboarding creates it.';
+    }
+  }
+
+  async function loadRoleTypeOptions() {
+    if (_roleTagsLoaded) return;
+    try {
+      const pw = storedPassword() || '';
+      const res = await fetch(`${VERCEL_URL}/api/jobs?resource=role-tags`, {
+        headers: { 'X-Dashboard-Password': pw },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const tags = Array.isArray(data.tags) && data.tags.length ? data.tags : FALLBACK_ROLE_TAGS;
+      renderRoleTypeOptions(tags, Array.isArray(data.tags) && data.tags.length ? data.source : 'fallback');
+      _roleTagsLoaded = true;
+    } catch (err) {
+      console.error('loadRoleTypeOptions error:', err);
+      renderRoleTypeOptions(FALLBACK_ROLE_TAGS, 'fallback');
+      // Not marked loaded — retry on the next modal open in case it was transient.
+    }
+  }
+
   function prepareInline(id, title, company, url) {
     _modalJobId          = id;
     _modalTitle          = title;
@@ -3348,6 +3413,7 @@
       urlRow.style.display = 'none';
     }
     document.getElementById('role-jd').value = _modalJobDescription;
+    loadRoleTypeOptions();
     document.querySelectorAll('#role-modal input[type=checkbox]').forEach(cb => cb.checked = false);
     document.getElementById('role-guidance').value = '';
     document.getElementById('role-app-questions').value = '';
@@ -3359,13 +3425,14 @@
     document.getElementById('role-modal-overlay').classList.remove('open');
   }
 
-  // Keep Generate button in sync with checkbox state
+  // Keep Generate button in sync with checkbox state. Delegated to the modal
+  // rather than bound per checkbox: the options are now rendered at runtime from
+  // the user's bullet bank, so there is nothing to bind to at DOMContentLoaded.
   document.addEventListener('DOMContentLoaded', () => {
-    document.querySelectorAll('#role-modal input[type=checkbox]').forEach(cb => {
-      cb.addEventListener('change', () => {
-        const any = [...document.querySelectorAll('#role-modal input[type=checkbox]')].some(c => c.checked);
-        document.getElementById('modal-generate').disabled = !any;
-      });
+    document.getElementById('role-modal').addEventListener('change', e => {
+      if (!e.target.matches('input[type=checkbox]')) return;
+      const any = [...document.querySelectorAll('#role-modal input[type=checkbox]')].some(c => c.checked);
+      document.getElementById('modal-generate').disabled = !any;
     });
     // Close on overlay click (but not on modal itself)
     document.getElementById('role-modal-overlay').addEventListener('click', e => {

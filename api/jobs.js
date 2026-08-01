@@ -3,7 +3,8 @@
 // even though the repo is private.
 
 import { safeEqual } from '../lib/auth.mjs';
-import { normalizeJsonDoc } from '../lib/github.js';
+import { normalizeJsonDoc, readGithubText } from '../lib/github.js';
+import { parseBulletBankTags, FALLBACK_ROLE_TAGS } from '../lib/bulletBank.mjs';
 
 export default async function handler(req, res) {
   const password = process.env.DASHBOARD_PASSWORD;
@@ -45,6 +46,27 @@ export default async function handler(req, res) {
   }
 
   const [owner, repo] = githubRepo.split('/');
+
+  // ── Role-type tags for the Generate Package modal ──────────────────────────
+  // The modal used to ship a hardcoded list of the original author's five
+  // categories, so every user filtered their bullets against tags that did not
+  // exist in their own bank — the selection silently matched nothing. The tags
+  // are the user's, defined in their bullet-bank.md legend, so we read them from
+  // there. Soft-read + defensive parse: a missing or unparseable bank yields the
+  // generic fallback set rather than an error, and the dashboard says where the
+  // real ones will come from.
+  if (req.query.resource === 'role-tags') {
+    const bank = await readGithubText(githubToken, owner, repo, 'bullet-bank.md');
+    const tags = parseBulletBankTags(bank);
+    const source = tags.length ? 'bullet-bank' : 'fallback';
+    console.log(`[jobs] resource=role-tags source=${source} count=${tags.length || FALLBACK_ROLE_TAGS.length}`);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json({
+      tags: tags.length ? tags : FALLBACK_ROLE_TAGS,
+      source,
+    });
+  }
+
   const url = `https://api.github.com/repos/${owner}/${repo}/contents/data/job-status.json`;
 
   const ghRes = await fetch(url, {

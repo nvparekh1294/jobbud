@@ -24,6 +24,12 @@ export const maxDuration = 60;
 
 // roleTypes → human-readable function for the research agent. Mirrors the mapping
 // the dashboard used to apply client-side before the JSON moved server-side.
+//
+// KNOWN HARDCODED LEFTOVER: these five keys are the original author's role types.
+// Role types are now the user's own, parsed from their bullet-bank.md tag legend
+// (lib/bulletBank.mjs), so for everyone else this map simply misses and
+// researchFunction() returns '' — a degraded hint to the research agent, not a
+// break. Fixing it properly belongs with the LinkedIn research feature, not here.
 const RESEARCH_FUNCTION_MAP = {
   'ops':        'Strategy & Operations / Business Operations',
   'corpdev':    'Corporate Development',
