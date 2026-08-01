@@ -9,8 +9,13 @@
 //    detail view — was painted over by the detail overlay that comes later in
 //    the DOM. The button looked dead.
 //
-// Asserted against source, as elsewhere in this suite; the interactive walk ran
-// under jsdom against this same file.
+// These assert against dashboard/index.html as source text, the same way
+// memoryDashboard and watchList do — the repo test suite stays dependency-free.
+// So they pin the wiring (the dead-end note is gone, the inline careers-link
+// input exists and gates Add on an http(s) URL, the suggestion row still writes
+// through textContent, Edit closes the detail view before opening, and the
+// add/edit overlay's z-index outranks the others) rather than exercising the
+// DOM. Nothing here renders or clicks the page.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
