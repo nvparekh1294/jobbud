@@ -346,6 +346,11 @@ export default async function handler(req, res) {
               applicationQuestions: pkg.applicationQuestions || [],
               checklist: pkg.checklist || [],
               tailoringNotes: pkg.tailoringNotes || '',
+              // The ATS analysis (score, missing keywords, suggested bullet edits,
+              // bullet-optimization check) used to be generated and then dropped on
+              // the floor here: it only ever reached the Google Doc, so a user
+              // without Drive configured paid for the analysis and never saw it.
+              atsText: pkg.atsText || '',
             },
           });
         } catch (err) {

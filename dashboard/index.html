@@ -3239,6 +3239,30 @@
         </section>`
       : '';
 
+    // ATS analysis — score, missing keywords, suggested bullet edits, suggested
+    // additions, bullet-optimization check. This was previously generated on every
+    // package and then thrown away unless Google Drive happened to be configured.
+    // Amber styling echoes the shaded advisory block in the Google Doc.
+    const atsHtml = content.atsText
+      ? `<section class="ats">
+          <h2>🔍 ATS &amp; Keyword Analysis</h2>
+          <p class="ats-note">Suggestions only — the resume above uses your bullet bank verbatim. Nothing here has been applied.</p>
+          <pre id="ats">${esc(content.atsText)}</pre>
+        </section>`
+      : '';
+
+    // When a Google Doc was created it stays the nicely formatted resume artifact,
+    // but the panel no longer redirects to it — the full package is shown here too.
+    // Allowlisted to the Docs origin — nothing else is ever rendered as a link.
+    const safeDocUrl = /^https:\/\/docs\.google\.com\/[\w/-]*$/.test(content.docUrl || '')
+      ? content.docUrl : '';
+    const docHtml = safeDocUrl
+      ? `<section class="docnote">
+          <h2>📎 Google Doc</h2>
+          <p class="notes">A formatted copy was saved to your Drive: <a href="${esc(safeDocUrl)}" target="_blank" rel="noopener">open the Google Doc ↗</a></p>
+        </section>`
+      : '';
+
     // Build plain-text version for clipboard (used by Copy Full Package)
     const plainParts = [
       content.title || 'Application Package',
@@ -3261,13 +3285,26 @@
       plainParts.push('');
     }
     if (content.tailoringNotes) {
-      plainParts.push('TAILORING NOTES', '-'.repeat(40), content.tailoringNotes);
+      plainParts.push('TAILORING NOTES', '-'.repeat(40), content.tailoringNotes, '');
+    }
+    if (content.atsText) {
+      plainParts.push('ATS & KEYWORD ANALYSIS (suggestions only — not applied to the resume)',
+        '-'.repeat(40), content.atsText);
     }
     const plainText = plainParts.join('\n');
 
+    // Filename for the downloaded .html — ASCII-safe, no path separators.
+    const fileName = (content.title || 'application-package')
+      .replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-').slice(0, 80).toLowerCase() || 'application-package';
+
     // Safely embed JS string literals — escape any script-closing tags in AI
-    // content so they can't break the generated page's script block.
-    const safeJson = obj => JSON.stringify(obj).replace(/<\/script>/gi, '<\\/script>');
+    // content so they can't break the generated page's script block. `<!--` is
+    // escaped too: it flips the HTML parser into script-double-escaped state,
+    // where a later closing script tag inside the string stops terminating the
+    // block as expected.
+    const safeJson = obj => JSON.stringify(obj)
+      .replace(/<\/script>/gi, '<\\/script>')
+      .replace(/<!--/g, '<\\!--');
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -3293,8 +3330,24 @@
     .a{font-size:13px;color:#444;line-height:1.6;background:#f9f9f9;border-left:3px solid #e5e5e5;padding:10px 14px;border-radius:0 6px 6px 0;white-space:pre-wrap}
     ul{padding-left:20px}li{font-size:13px;color:#444;padding:3px 0;line-height:1.5}
     .notes{font-size:13px;color:#555;line-height:1.6;font-style:italic}
+    .notes a{color:#1a56db}
+    section.ats{background:#fffbe8;border-color:#e8d9a0}
+    section.ats pre{font-size:12px;color:#3d3210}
+    .ats-note{font-size:12px;color:#7a6a2a;font-style:italic;margin-bottom:12px}
     .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#111;color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none}
     .toast.show{opacity:1}
+    .btn-dl{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
+    /* Print → PDF: drop the chrome, let sections flow, keep the shading legible. */
+    @media print{
+      body{background:#fff}
+      .topbar,.toast{display:none !important}
+      .wrap{max-width:none;margin:0;padding:0;gap:0}
+      section{border:none;border-radius:0;padding:0 0 18px;break-inside:avoid;page-break-inside:avoid}
+      section.ats{background:#fff}
+      h2{color:#333;margin-top:14px}
+      pre,.a,li,.notes{color:#000}
+      a{color:#000;text-decoration:underline}
+    }
   </style>
 </head>
 <body>
@@ -3302,8 +3355,10 @@
     <div class="topbar-title">${esc(content.title || 'Application Package')}</div>
     <button class="btn btn-resume" onclick="copyResume()">Copy Resume</button>
     <button class="btn btn-all" onclick="copyAll()">Copy Full Package</button>
+    <button class="btn btn-dl" onclick="downloadPackage()">Download</button>
   </div>
   <div class="wrap">
+    ${docHtml}
     <section>
       <h2>📄 Tailored Resume</h2>
       <pre id="resume">${esc(content.resume || '')}</pre>
@@ -3311,11 +3366,13 @@
     ${questionsHtml}
     ${checklistHtml}
     ${notesHtml}
+    ${atsHtml}
   </div>
   <div class="toast" id="toast"></div>
   <script>
-    var RESUME = ${safeJson(content.resume || '')};
-    var FULL   = ${safeJson(plainText)};
+    var RESUME   = ${safeJson(content.resume || '')};
+    var FULL     = ${safeJson(plainText)};
+    var FILENAME = ${safeJson(fileName)};
     function toast(msg){var t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(function(){t.classList.remove('show')},2200)}
     function copyText(txt){
       if(navigator.clipboard&&navigator.clipboard.writeText){
@@ -3325,6 +3382,24 @@
     function fallback(txt){var ta=document.createElement('textarea');ta.value=txt;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);toast('Copied!')}
     function copyResume(){copyText(RESUME)}
     function copyAll(){copyText(FULL)}
+    // Save the whole package as ONE self-contained .html file. The page is already
+    // standalone — inline styles, no external resources — so the download is a
+    // clone of this document with the toolbar and scripts stripped out. Print CSS
+    // rides along, so browser print → PDF gives a clean document. No libraries,
+    // nothing fetched at open time; the file works offline forever.
+    function downloadPackage(){
+      var clone = document.documentElement.cloneNode(true);
+      var strip = clone.querySelectorAll('script,.topbar,.toast');
+      for (var i=0;i<strip.length;i++) strip[i].parentNode.removeChild(strip[i]);
+      var html = '<!DOCTYPE html>\n' + clone.outerHTML;
+      var blob = new Blob([html], {type:'text/html;charset=utf-8'});
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url; a.download = FILENAME + '.html';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(function(){URL.revokeObjectURL(url)}, 1000);
+      toast('Downloaded — open it in any browser, or print it to PDF.');
+    }
   <\/script>
 </body>
 </html>`;
@@ -3495,19 +3570,23 @@
       _removeJobFromView(id);
       renderPipeline();
 
-      if (data.docUrl && pkgWin) {
+      // The panel is now shown in EVERY case, Drive or no Drive. It used to
+      // redirect straight to the Google Doc whenever one existed, which meant the
+      // only way to see the package was through Drive — and the ATS analysis was
+      // invisible to everyone else. The Doc is still created and still the nicely
+      // formatted resume artifact; the panel links to it and shows everything.
+      if (pkgWin && data.content) {
+        pkgWin.document.open();
+        pkgWin.document.write(buildPackageHtml({ ...data.content, docUrl: data.docUrl || '' }));
+        pkgWin.document.close();
+        showToast(data.docUrl ? `📋 Package ready — Google Doc linked inside.` : `📋 Package ready!`, 4000);
+      } else if (data.docUrl && pkgWin) {
+        // No inline content came back but the Doc exists — send them there.
         pkgWin.location.href = data.docUrl;
         showToast(`📋 Package ready! Opening Google Doc...`);
       } else {
-        if (pkgWin && data.content) {
-          pkgWin.document.open();
-          pkgWin.document.write(buildPackageHtml(data.content));
-          pkgWin.document.close();
-          showToast(`📋 Package ready!`, 4000);
-        } else {
-          if (pkgWin) pkgWin.close();
-          showToast(`📋 Package generated but could not display. Try again.`, 6000);
-        }
+        if (pkgWin) pkgWin.close();
+        showToast(`📋 Package generated but could not display. Try again.`, 6000);
       }
     } catch (err) {
       if (pkgWin) pkgWin.close();
