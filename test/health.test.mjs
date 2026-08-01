@@ -255,21 +255,47 @@ test('a GH_REPO that is a URL rather than owner/repo is caught by format', async
   assert.match(c.message, /no https:\/\//);
 });
 
-test('a bare-hostname VERCEL_URL is called out as dead email links, with the fixed value', async () => {
+// Vercel injects VERCEL_URL itself, always schemeless, on every deployment, and
+// a user-set value cannot override it. Failing on the missing scheme nagged
+// every single Vercel user with an instruction that could never work.
+test('a bare-hostname VERCEL_URL passes — that is the form Vercel itself injects', async () => {
   const env = { ...HEALTHY_ENV, VERCEL_URL: 'jobbud.vercel.app' };
   const checks = await withFetch(routeFetch(HEALTHY_ROUTES), () => runHealthChecks(env));
   const c = byName(checks, 'env:VERCEL_URL');
-  assert.equal(c.ok, false);
-  assert.match(c.message, /dead links/);
-  assert.match(c.fix, /https:\/\/jobbud\.vercel\.app/);
+  assert.equal(c.ok, true);
+  assert.match(c.message, /jobbud\.vercel\.app/);
+  assert.match(c.message, /automatically/i);
+  // It must not tell the user to go and change the injected value.
+  assert.doesNotMatch(c.message, /dead links/);
+  assert.doesNotMatch(c.message + c.fix, /Change VERCEL_URL/);
 });
 
-test('a missing VERCEL_URL says the email buttons will point at localhost', async () => {
+test('a schemeful VERCEL_URL passes too', async () => {
+  const checks = await withFetch(routeFetch(HEALTHY_ROUTES), () => runHealthChecks({ ...HEALTHY_ENV }));
+  const c = byName(checks, 'env:VERCEL_URL');
+  assert.equal(c.ok, true);
+  assert.match(c.message, /https:\/\/jobbud\.vercel\.app/);
+});
+
+test('a set VERCEL_URL points at the GitHub Actions copy as the one that needs https://', async () => {
+  const env = { ...HEALTHY_ENV, VERCEL_URL: 'jobbud.vercel.app' };
+  const checks = await withFetch(routeFetch(HEALTHY_ROUTES), () => runHealthChecks(env));
+  const c = byName(checks, 'env:VERCEL_URL');
+  assert.match(c.message, /GitHub Actions secrets/);
+  assert.match(c.message, /can't check that one/);
+});
+
+test('a missing VERCEL_URL still fails and says the email buttons will point at localhost', async () => {
   const env = { ...HEALTHY_ENV, VERCEL_URL: '' };
   const checks = await withFetch(routeFetch(HEALTHY_ROUTES), () => runHealthChecks(env));
   const c = byName(checks, 'env:VERCEL_URL');
   assert.equal(c.ok, false);
   assert.match(c.message, /localhost/);
+  // The fix names BOTH vaults, and does not claim editing the Vercel side
+  // replaces the value Vercel injects.
+  assert.match(c.fix, /Actions/);
+  assert.match(c.fix, /https:\/\//);
+  assert.match(c.fix, /will not replace it/);
 });
 
 test('a VERCEL_URL problem does not block the GitHub checks — they are independent', async () => {

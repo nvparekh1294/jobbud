@@ -136,27 +136,37 @@ function envChecks(env) {
     checks.push(check('env:GH_REPO', true, `GH_REPO is set to ${repo}.`));
   }
 
+  // VERCEL_URL is a Vercel SYSTEM variable: Vercel injects it into every
+  // deployment as a bare, deployment-specific hostname with no scheme, and a
+  // user-set value of the same name does NOT override it. So the schemeless
+  // form is not a misconfiguration here and there is nothing the user can do
+  // about it — this endpoint used to FAIL on it and hand every Vercel user an
+  // instruction that could never succeed. api/action.js already puts a scheme
+  // back on the bare hostname for the links it builds, so nothing on the Vercel
+  // side is broken by it.
+  //
+  // The copy that genuinely needs https:// is the SEPARATE VERCEL_URL in the
+  // GitHub Actions secrets vault, which the scanner reads when it builds the
+  // Apply/Reject buttons in digest emails. A Vercel function cannot read that
+  // vault, so we say so instead of pretending to have checked it.
   const vercelUrl = (env.VERCEL_URL || '').trim();
   if (!vercelUrl) {
     checks.push(
       check(
         'env:VERCEL_URL',
         false,
-        'VERCEL_URL is not set in Vercel. The Apply and Reject buttons in your digest emails are built from it, so they will point at localhost and go nowhere.',
-        'In Vercel → Settings → Environment Variables, add VERCEL_URL as the full address including https:// (for example https://your-app.vercel.app), tick Production, then Redeploy. Add the same value to your GitHub Actions secrets.',
-      ),
-    );
-  } else if (!/^https?:\/\//i.test(vercelUrl)) {
-    checks.push(
-      check(
-        'env:VERCEL_URL',
-        false,
-        `VERCEL_URL is set to "${vercelUrl}" with no https:// in front. Parts of the scanner use that value exactly as written, so the buttons in your digest emails come out with no scheme and are dead links.`,
-        `Change VERCEL_URL to https://${vercelUrl.replace(/^\/+/, '')} in Vercel → Settings → Environment Variables (and in your GitHub Actions secrets), then Redeploy.`,
+        'VERCEL_URL is not set. Vercel normally fills this in by itself on every deployment, so seeing it empty means this check is running somewhere other than a Vercel deployment. The Apply and Reject buttons in your digest emails are built from a copy of this value, so they will point at localhost and go nowhere.',
+        'Two separate places hold this value. Your digest-email buttons use the copy in your repo under Settings → Secrets and variables → Actions: set VERCEL_URL there to the full address including https:// (for example https://your-app.vercel.app). On the Vercel side, Vercel supplies its own value automatically on each deployment — a value you add there will not replace it — so if this is a real Vercel deployment, redeploy and check again.',
       ),
     );
   } else {
-    checks.push(check('env:VERCEL_URL', true, `VERCEL_URL is set to ${vercelUrl}.`));
+    checks.push(
+      check(
+        'env:VERCEL_URL',
+        true,
+        `VERCEL_URL is set to ${vercelUrl} (Vercel fills this in automatically, which is why it has no https:// in front — that is normal and nothing here is broken by it). The copy that your digest-email buttons use lives in your GitHub Actions secrets and must include https:// — this page can't check that one.`,
+      ),
+    );
   }
 
   return checks;
