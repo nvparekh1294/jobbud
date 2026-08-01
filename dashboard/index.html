@@ -3313,13 +3313,19 @@
       .replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-').slice(0, 80).toLowerCase() || 'application-package';
 
     // Safely embed JS string literals — escape any script-closing tags in AI
-    // content so they can't break the generated page's script block. `<!--` is
-    // escaped too: it flips the HTML parser into script-double-escaped state,
-    // where a later closing script tag inside the string stops terminating the
-    // block as expected.
+    // content so they can't break the generated page's script block. An HTML
+    // comment opener is escaped too: it flips the HTML parser into
+    // script-double-escaped state, where a later closing script tag inside the
+    // string stops terminating the block as expected.
+    //
+    // Both the comment above and the pattern below deliberately avoid writing
+    // that four-character opener literally — this file is itself served inside a
+    // <script> block, and a literal one here would spring the exact trap it is
+    // meant to defuse (see test/dashboardScriptBlock.test.mjs). \x2D is '-', so
+    // the regex still matches the opener; only its source text differs.
     const safeJson = obj => JSON.stringify(obj)
       .replace(/<\/script>/gi, '<\\/script>')
-      .replace(/<!--/g, '<\\!--');
+      .replace(/<!\x2D\x2D/g, '<\\!--');
 
     return `<!DOCTYPE html>
 <html lang="en">
