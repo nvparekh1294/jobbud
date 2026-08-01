@@ -150,7 +150,7 @@ Watch List**.
 | Service | What it adds |
 |---------|--------------|
 | **JSearch** | A broad aggregated job feed, searched by your target roles and locations. |
-| **Adzuna** | Job-board listings for the US, UK, and Singapore. |
+| **Adzuna** | Job-board listings for the US, UK, and Singapore. In `config/profile.yml` write the country as `us`, `gb` or `sg` — `usa` and `uk` are understood too; anything else is skipped, and the scan log says which location it skipped and why. |
 | **SerpApi** | Google Jobs results — which sweeps up LinkedIn, Greenhouse, Lever, Ashby and Workday postings Google has indexed. |
 
 ### Where to sign up

@@ -8,11 +8,17 @@ import { normalizeJsonDoc } from '../lib/github.js';
 export default async function handler(req, res) {
   const password = process.env.DASHBOARD_PASSWORD;
 
-  // ── Config probe — called by the frontend on load to decide whether to show the gate.
-  // No auth needed: it only reveals whether a password is required, not any data.
+  // ── Config probe — called by the frontend on load, before the gate is answered.
+  // No auth needed: it reveals which optional integrations are wired up, not any data.
+  //
+  // It used to also return `passwordRequired`, and the frontend used it to skip the
+  // gate entirely when no password was set — straight into a dashboard where every
+  // request 401'd, because the auth below fails closed. The gate is now
+  // unconditional and /api/health explains an unset DASHBOARD_PASSWORD properly, so
+  // nothing reads that field any more; publishing it would only invite the shortcut
+  // back. The probe stays because the Drive flag still has to be known pre-unlock.
   if (req.query.config === 'true') {
     return res.status(200).json({
-      passwordRequired: !!password,
       driveConfigured: !!process.env.GOOGLE_CLIENT_ID,
     });
   }

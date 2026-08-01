@@ -59,7 +59,10 @@
     nav button { padding: 7px 13px; border: none; background: transparent; font-family: 'Hanken Grotesk', sans-serif; font-size: 14px; color: #8a9085; cursor: pointer; border-radius: 9px; white-space: nowrap; font-weight: 500; }
     nav button.active { background: #ECE5D6; color: #1E241D; font-weight: 600; }
     nav button:hover:not(.active) { background: #EFEADF; color: #1E241D; }
-    #refresh-btn { display: inline-flex; align-items: center; gap: 6px; background: transparent; color: #5c6358; border: 1px solid #DED7C9; border-radius: 9px; padding: 8px 14px; font-family: 'Hanken Grotesk', sans-serif; font-size: 14px; font-weight: 500; cursor: pointer; white-space: nowrap; }
+    #refresh-btn, #setup-btn { display: inline-flex; align-items: center; gap: 6px; background: transparent; color: #5c6358; border: 1px solid #DED7C9; border-radius: 9px; padding: 8px 14px; font-family: 'Hanken Grotesk', sans-serif; font-size: 14px; font-weight: 500; cursor: pointer; white-space: nowrap; }
+    /* ⚙ is a single glyph, so it gets a squarer box than the labelled Refresh. */
+    #setup-btn { padding: 8px 11px; font-size: 15px; line-height: 1; }
+    #refresh-btn:hover, #setup-btn:hover { background: #EFEADF; color: #1E241D; }
 
     main { padding: 34px 30px 80px; max-width: 1180px; margin: 0 auto; }
     /* Pipeline view breaks out of the narrow main container */
@@ -321,6 +324,9 @@
       nav::-webkit-scrollbar { display: none; }
       nav button { white-space: nowrap; flex-shrink: 0; }
       .header-logo-name { display: none; }
+      /* Refresh goes — pull-to-refresh already exists on a phone. ⚙ STAYS: every
+         load-failure message on this dashboard ends with "open the ⚙ setup check
+         in the header", and that instruction has to remain followable on mobile. */
       #refresh-btn { display: none; }
 
       main { padding: 22px 16px 80px; }
@@ -2071,13 +2077,30 @@
   let _health = null;          // last /api/health payload, or null if never run
   let _setupBannerDismissed = false;
 
+  // Callers that can overlap share one request. unlock() fires loadData() and
+  // loadRadar() together, so a broken setup has both failing at once and both
+  // calling healthSentence — two identical health runs, each making its own
+  // sequential GitHub round-trips, to print the same sentence twice. Only an
+  // identical password may share: a different one is a different question.
+  // The handle clears on settle, so a later run (the ⚙ Run setup check button)
+  // always gets a fresh answer.
+  let _healthInFlight = null;   // { pw, promise } while a run is open
   async function fetchHealth(pw) {
-    const res = await fetch('/api/health?t=' + Date.now(), {
-      headers: { 'X-Dashboard-Password': pw },
-    });
-    const data = await res.json();
-    if (!data || !Array.isArray(data.checks)) throw new Error('unreadable setup-check response');
-    return data;
+    if (_healthInFlight && _healthInFlight.pw === pw) return _healthInFlight.promise;
+    const promise = (async () => {
+      const res = await fetch('/api/health?t=' + Date.now(), {
+        headers: { 'X-Dashboard-Password': pw },
+      });
+      const data = await res.json();
+      if (!data || !Array.isArray(data.checks)) throw new Error('unreadable setup-check response');
+      return data;
+    })();
+    _healthInFlight = { pw, promise };
+    try {
+      return await promise;
+    } finally {
+      if (_healthInFlight && _healthInFlight.promise === promise) _healthInFlight = null;
+    }
   }
 
   function healthCheck(name) {

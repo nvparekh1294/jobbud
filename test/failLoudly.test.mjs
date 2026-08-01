@@ -75,6 +75,25 @@ test('an unset DASHBOARD_PASSWORD no longer skips the gate into a dead dashboard
   assert.doesNotMatch(html, /if \(!cfg\.passwordRequired\) \{ unlock\(''\); return; \}/);
 });
 
+test('overlapping health runs share one request', () => {
+  // unlock() starts loadData() and loadRadar() together; when setup is broken
+  // both fail and both ask healthSentence, which would otherwise fire two
+  // identical /api/health runs, each with its own GitHub round-trips.
+  const fn = html.slice(html.indexOf('async function fetchHealth'));
+  const body = fn.slice(0, fn.indexOf('\n  function healthCheck'));
+  assert.match(body, /if \(_healthInFlight && _healthInFlight\.pw === pw\) return _healthInFlight\.promise/);
+  // and the handle is released on settle, so ⚙ Run setup check is never stale
+  assert.match(body, /finally \{[\s\S]{0,160}_healthInFlight = null/);
+});
+
+test('the ⚙ setup button survives on mobile, because the error text points at it', () => {
+  const mobile = html.slice(html.indexOf('#refresh-btn { display: none; }') - 400,
+                            html.indexOf('#refresh-btn { display: none; }') + 60);
+  assert.doesNotMatch(mobile, /#setup-btn \{ display: none/);
+  // it is styled as a sibling of #refresh-btn rather than left unstyled
+  assert.match(html, /#refresh-btn, #setup-btn \{/);
+});
+
 test('the gate can show a reason, and one exists for an unreachable server', () => {
   assert.match(html, /id="pw-error"/);
   assert.match(html, /function showGate\(message\)/);
