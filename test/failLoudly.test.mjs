@@ -115,6 +115,18 @@ test('the health sentence is chosen most-specific-first per area', () => {
   assert.equal((html.match(/'auth'\],/g) || []).length, 3);
 });
 
+test('an unrelated failure is never offered as the cause of an area failure', () => {
+  // ANTHROPIC_API_KEY is Coach-only. Falling back to "the first failure of any
+  // kind" made an unset key the stated reason a Radar load failed, sending the
+  // user to fix something that was never involved. Say nothing instead — every
+  // caller already has a generic line pointing at the setup panel.
+  const fn = html.slice(html.indexOf('async function healthSentence'));
+  const body = fn.slice(0, fn.indexOf('\n  function renderSetupState'));
+  assert.doesNotMatch(body, /healthFailures\(\)/);
+  assert.match(body, /HEALTH_PRIORITY\[area\]/);
+  assert.match(body, /\n\s*return '';\n\s*\}/);
+});
+
 test('Radar quotes the health sentence and keeps the generic line as a fallback only', () => {
   const fn = html.slice(html.indexOf('async function loadRadar'));
   const body = fn.slice(0, fn.indexOf('\n  // Thin wrapper over /api/radar'));

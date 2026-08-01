@@ -2101,10 +2101,17 @@
     watchlist: ['github:repo', 'github:token', 'env:GH_TOKEN', 'env:GH_REPO', 'auth'],
   };
 
-  // Returns the health sentence for `area`, or '' when the check ran clean (or
-  // could not be run at all) and the caller should fall back to generic text.
+  // Returns the health sentence for `area`, or '' when nothing this area depends
+  // on is broken (or the check could not be run at all) and the caller should
+  // fall back to its generic "open the ⚙ setup check" line.
   // Triggers a health run if we have not done one yet, so an error path always
   // has something real to say.
+  //
+  // ONLY checks listed for this area may answer. There used to be a fallback to
+  // the first failure of any kind, and it lied: ANTHROPIC_API_KEY is Coach-only,
+  // so an unset key turned "your companies could not be loaded" into a confident
+  // accusation against a variable that has nothing to do with Radar. A wrong
+  // cause is worse than a generic one — the user goes and fixes the wrong thing.
   async function healthSentence(area) {
     if (!_health) {
       try { _health = await fetchHealth(sessionStorage.getItem('co_pw') || ''); }
@@ -2115,8 +2122,6 @@
       const c = healthCheck(name);
       if (c && !c.ok) return c.fix ? `${c.message} ${c.fix}` : c.message;
     }
-    const first = healthFailures()[0];
-    if (first) return first.fix ? `${first.message} ${first.fix}` : first.message;
     return '';
   }
 
