@@ -3412,7 +3412,15 @@
       var clone = document.documentElement.cloneNode(true);
       var strip = clone.querySelectorAll('script,.topbar,.toast');
       for (var i=0;i<strip.length;i++) strip[i].parentNode.removeChild(strip[i]);
-      var html = '<!DOCTYPE html>\n' + clone.outerHTML;
+      // Doubled backslash, deliberately. Everything in this script is inside
+      // buildPackageHtml's template literal, so a single backslash is consumed
+      // when the template is evaluated and a REAL newline is emitted into the
+      // generated page — splitting the string literal below across two lines and
+      // throwing SyntaxError before any function on this page is defined. The
+      // doubled backslash emits the two-character escape the generated page
+      // needs. No comment in this region may contain a backslash escape either,
+      // for the same reason. Guarded by test/packageHtmlScript.test.mjs.
+      var html = '<!DOCTYPE html>\\n' + clone.outerHTML;
       var blob = new Blob([html], {type:'text/html;charset=utf-8'});
       var url = URL.createObjectURL(blob);
       var a = document.createElement('a');
