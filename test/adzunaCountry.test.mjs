@@ -109,4 +109,23 @@ test('zero buildable queries says plainly that Adzuna will not run', async () =>
   assert.equal(urls.length, 0, 'no request should be made when no query was built');
   assert.ok(warnings.some(w => /Adzuna will not run this scan/.test(w)),
     'a scan that fetches nothing must say so');
+  assert.ok(warnings.some(w => /None of your locations are in a country/.test(w)),
+    'when a location really was dropped for its country, say so');
+});
+
+test('an empty location list is diagnosed as empty, not as unsupported countries', async () => {
+  // Blaming unsupported countries when the user listed no locations at all is a
+  // confident wrong answer that sends them looking in the wrong file.
+  const urls = stubFetch();
+  const warnings = captureWarnings();
+
+  const jobs = await fetchAdzuna({ ...BASE_CONFIG, locations: [] });
+
+  assert.deepEqual(jobs, []);
+  assert.equal(urls.length, 0);
+  const warned = warnings.find(w => /Adzuna will not run this scan/.test(w));
+  assert.ok(warned, 'a scan that fetches nothing must say so');
+  assert.match(warned, /No target_locations are configured/);
+  assert.ok(!/None of your locations are in a country/.test(warned),
+    'nothing was skipped for its country, so that must not be blamed');
 });

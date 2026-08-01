@@ -59,13 +59,19 @@ function buildQueries(config) {
 
   const queries = [];
   const supported = Object.keys(BASE_URLS).join('/');
+  // Whether any location was actually dropped for its country. Without this we
+  // cannot tell "your countries are unsupported" apart from "you listed no
+  // locations at all", and the warning below would confidently give the wrong
+  // diagnosis for the second case.
+  let skippedForCountry = false;
 
-  for (const location of config.locations) {
+  for (const location of config.locations || []) {
     // "US", "USA" and " us " all mean the same market; only the ISO code is a
     // key in BASE_URLS. An unsupported country is a real answer to "why did I
     // get nothing?", so it is said out loud rather than skipped in silence.
     const country = normalizeCountry(location.country);
     if (!BASE_URLS[country]) {
+      skippedForCountry = true;
       console.warn(`[adzuna] Skipping ${location.city}: country "${location.country}" is not one Adzuna is wired up for here (supported: ${supported}). Fix target_locations in config/profile.yml.`);
       continue;
     }
@@ -81,9 +87,15 @@ function buildQueries(config) {
   }
 
   // Credentials are set, roles are set, and still nothing to ask for: that is a
-  // scan that will report zero Adzuna jobs for a fixable reason.
+  // scan that will report zero Adzuna jobs for a fixable reason. Which reason
+  // depends on whether anything was actually dropped above — saying "none of
+  // your locations are supported" to someone who listed none would send them
+  // hunting for a problem that isn't there.
   if (queries.length === 0) {
-    console.warn(`[adzuna] No searches could be built from your target_locations, so Adzuna will not run this scan. None of your locations are in a country Adzuna is set up for here (${supported}).`);
+    const why = skippedForCountry
+      ? `None of your locations are in a country Adzuna is set up for here (${supported}).`
+      : `No target_locations are configured, so there is nothing for Adzuna to search. Add at least one location in config/profile.yml (Adzuna is set up for ${supported} here).`;
+    console.warn(`[adzuna] No searches could be built from your target_locations, so Adzuna will not run this scan. ${why}`);
   }
 
   return queries;
