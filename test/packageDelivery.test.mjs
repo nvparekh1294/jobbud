@@ -169,6 +169,127 @@ test('Copy Full Package includes the ATS analysis', () => {
   assert.match(text, /Why us\?/);
 });
 
+// ── The user's own pasted questions get their answers back ────────────────────
+// Exactly the bug atsText had: draftQA was generated on every package and handed
+// only to createGoogleDoc, so without Drive the user paid for answers to the
+// questions THEY typed in and never saw them.
+
+const DRAFT_QA = [{ question: 'Describe a time you led <a> change', answer: 'I led the migration.\nIt shipped early.' }];
+
+test('generateAndSendPackage returns draftQA instead of only feeding it to Drive', () => {
+  assert.match(pkgSrc, /return \{ pkg, docUrl, draftQA, resumeSource \};/);
+});
+
+test('api/action.js carries draftQA in the dashboard package payload', () => {
+  assert.match(actionSrc, /const \{ pkg, docUrl, draftQA, resumeSource \} = await generateAndSendPackage/);
+  const contentBlock = actionSrc.slice(actionSrc.indexOf('content: {'), actionSrc.indexOf('});', actionSrc.indexOf('content: {')));
+  assert.ok(contentBlock.includes('draftQA:'), 'content payload is missing draftQA');
+  assert.ok(contentBlock.includes('resumeSource:'), 'content payload is missing resumeSource');
+});
+
+test('the panel renders pasted-form answers and labels both question streams', () => {
+  const out = buildPackageHtml({ ...CONTENT, draftQA: DRAFT_QA });
+  assert.ok(out.includes('From your application form'));
+  assert.ok(out.includes('Found in the job description'));
+  assert.ok(out.includes('I led the migration.'), 'the pasted question\'s answer never rendered');
+  assert.ok(out.includes('Why us?'), 'the JD-derived questions were lost');
+  // Same escaping as everywhere else in the panel. Check the rendered markup
+  // only — the raw text also appears in the page's <script> as a JS string
+  // literal, where the HTML parser does not interpret it.
+  const markup = out.slice(0, out.indexOf('<script>'));
+  assert.ok(markup.includes('&lt;a&gt; change'));
+  assert.ok(!markup.includes('<a> change'), 'raw markup survived into the panel');
+  // The pasted-form stream comes first — the user asked for those by name.
+  assert.ok(out.indexOf('From your application form') < out.indexOf('Found in the job description'));
+});
+
+test('the panel labels nothing when only one question stream exists', () => {
+  const jdOnly = buildPackageHtml(CONTENT);
+  assert.ok(!jdOnly.includes('From your application form'));
+  assert.ok(jdOnly.includes('Found in the job description'));
+
+  const formOnly = buildPackageHtml({ ...CONTENT, applicationQuestions: [], draftQA: DRAFT_QA });
+  assert.ok(formOnly.includes('From your application form'));
+  assert.ok(!formOnly.includes('Found in the job description'));
+
+  const neither = buildPackageHtml({ ...CONTENT, applicationQuestions: [], draftQA: [] });
+  assert.doesNotMatch(neither, /Application Questions/);
+});
+
+test('Copy Full Package and the download include the pasted-form answers', () => {
+  const out = buildPackageHtml({ ...CONTENT, draftQA: DRAFT_QA });
+  const full = out.match(/var FULL\s+= (".*?");\n/s);
+  assert.ok(full, 'FULL payload not embedded');
+  const text = JSON.parse(full[1]);
+  assert.match(text, /\[From your application form\]/);
+  assert.match(text, /\[Found in the job description\]/);
+  assert.match(text, /I led the migration\./);
+  assert.match(text, /Why us\?/);
+});
+
+// ── The ATS note tells the truth about where the resume came from ─────────────
+
+test('the ATS note names the real resume source in all three modes', () => {
+  const note = c => buildPackageHtml({ ...CONTENT, ...c }).match(/<p class="ats-note">([^<]*)<\/p>/)[1];
+
+  assert.equal(note({ resumeSource: 'bank' }),
+    'Suggestions only — the resume above uses your bullet bank verbatim. Nothing here has been applied.');
+  assert.equal(note({ resumeSource: 'cv' }),
+    'Suggestions only — the resume above uses your resume&#x27;s own wording. Nothing here has been applied.'
+      .replace('&#x27;', "'"));
+  assert.equal(note({ resumeSource: 'ai-drafted' }),
+    'No resume on file — this draft is AI-written; treat every line as a suggestion to verify. Nothing here has been applied.');
+});
+
+test('the ATS note never claims the bullet bank was used when it was not', () => {
+  for (const resumeSource of ['cv', 'ai-drafted', undefined, 'something-new']) {
+    const out = buildPackageHtml({ ...CONTENT, resumeSource });
+    assert.ok(!out.includes('uses your bullet bank verbatim'),
+      `resumeSource=${resumeSource} still claims the bullet bank was used verbatim`);
+  }
+});
+
+test('an unrecognized resumeSource falls back to a claim that is true in every mode', () => {
+  const out = buildPackageHtml({ ...CONTENT, resumeSource: 'not-a-mode' });
+  assert.ok(out.includes('Suggestions only — nothing here has been applied to the resume above.'));
+});
+
+test('generateAndSendPackage derives resumeSource from the real bank/cv decision', () => {
+  assert.match(pkgSrc, /const resumeSource = \(hadOwnBank && usableBank\) \? 'bank' : \(hasCv \? 'cv' : 'ai-drafted'\);/);
+});
+
+// ── AI-drafted suggestions carry an accuracy warning ─────────────────────────
+
+const ACCURACY = /AI-drafted from your conversation, not from your resume — they may not be 100% accurate/;
+
+test('the panel warns that Suggested Additions are AI-drafted and need checking', () => {
+  const out = buildPackageHtml(CONTENT);
+  assert.match(out, ACCURACY);
+  assert.match(out, /Review and edit each one for accuracy before using it anywhere/);
+});
+
+test('the warning rides along in Copy Full Package and the download', () => {
+  const out = buildPackageHtml(CONTENT);
+  const text = JSON.parse(out.match(/var FULL\s+= (".*?");\n/s)[1]);
+  assert.match(text, ACCURACY);
+});
+
+test('the generation prompt tells the model each suggestion is an unverified draft', () => {
+  // In the atsText structure the model copies...
+  assert.match(pkgSrc, /These are AI-drafted from what you described in conversation, not taken from your resume\. Treat each as a draft/);
+  // ...and in the instructions that govern the block.
+  assert.match(pkgSrc, /Every entry here is a DRAFT, not a fact on file/);
+  assert.match(pkgSrc, /never present these as verified/);
+});
+
+test('the bullet-bank file itself carries the accuracy warning', () => {
+  const coachSrc = readFileSync(join(ROOT, 'api', 'coach.js'), 'utf8');
+  const start = coachSrc.indexOf('const BULLET_BANK_SYSTEM');
+  const prompt = coachSrc.slice(start, coachSrc.indexOf('function buildOnboardingShared', start));
+  assert.match(prompt, /may not be 100% accurate/);
+  assert.match(prompt, /Review and edit each one before using it anywhere/);
+});
+
 // ── The panel is no longer bypassed when Drive is configured ──────────────────
 
 test('submitRoleModal renders the panel even when a Google Doc was created', () => {

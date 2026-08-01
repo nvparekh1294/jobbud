@@ -238,13 +238,13 @@ Respond with exactly this JSON:
     "<checklist item>"
   ],
   "tailoringNotes": "<2-3 sentences on what was emphasized, what was cut, which JD keywords were matched, and which role type bullets were prioritized>",
-  "atsText": "<ATS & KEYWORD OPTIMIZATION section as plain text — use exactly the structure below>\n\nATS & KEYWORD OPTIMIZATION\n\nMISSING KEYWORDS\n[keyword or phrase]: [which role section to add it to, and in what context]\n\nSUGGESTED ADDITIONS\n[Each AI-suggested or non-traceable bullet that is relevant to THIS job description, one per entry, in this shape:]\nSuggested: [the bullet text]\nWhy: [the rationale from the bullet bank, or one sentence on what it proves for this role]\n[If none are relevant, write the single line: None relevant to this role.]\n\nSUGGESTED BULLET EDITS\nOriginal: [exact existing bullet text starting with •]\nSuggested: [replacement bullet — same facts, slightly different wording to incorporate a missing keyword]\nWhy: [one sentence explaining the keyword or phrasing benefit]\n\nATS SCORE ESTIMATE\nScore: [X/10]\n[2-3 sentences: why this score, the resume's top ATS strengths, and the most important remaining gaps]\n\nBULLET OPTIMIZATION CHECK\nBullet check: [bullet # or opening words] — [exactly ONE of: interview-proof | differentiating | one-metric | rules-clean] — suggested alternative: [a complete rewritten bullet]\n[one line per selected bullet that strains a gate; omit bullets that pass all four gates cleanly. The 'suggested alternative:' field is MANDATORY and must be a full rewritten sentence, never blank and never a note about the problem. Suggestions only — the resume above still uses Bullet Bank text verbatim]"
+  "atsText": "<ATS & KEYWORD OPTIMIZATION section as plain text — use exactly the structure below>\n\nATS & KEYWORD OPTIMIZATION\n\nMISSING KEYWORDS\n[keyword or phrase]: [which role section to add it to, and in what context]\n\nSUGGESTED ADDITIONS\nThese are AI-drafted from what you described in conversation, not taken from your resume. Treat each as a draft: check it is accurate and edit it into your own words before using it anywhere.\n[Each AI-suggested or non-traceable bullet that is relevant to THIS job description, one per entry, in this shape:]\nSuggested: [the bullet text]\nWhy: [the rationale from the bullet bank, or one sentence on what it proves for this role]\n[If none are relevant, write the single line: None relevant to this role.]\n\nSUGGESTED BULLET EDITS\nOriginal: [exact existing bullet text starting with •]\nSuggested: [replacement bullet — same facts, slightly different wording to incorporate a missing keyword]\nWhy: [one sentence explaining the keyword or phrasing benefit]\n\nATS SCORE ESTIMATE\nScore: [X/10]\n[2-3 sentences: why this score, the resume's top ATS strengths, and the most important remaining gaps]\n\nBULLET OPTIMIZATION CHECK\nBullet check: [bullet # or opening words] — [exactly ONE of: interview-proof | differentiating | one-metric | rules-clean] — suggested alternative: [a complete rewritten bullet]\n[one line per selected bullet that strains a gate; omit bullets that pass all four gates cleanly. The 'suggested alternative:' field is MANDATORY and must be a full rewritten sentence, never blank and never a note about the problem. Suggestions only — the resume above still uses Bullet Bank text verbatim]"
 }
 
 For applicationQuestions: scan the job description for explicit application questions (e.g., "Why do you want to work here?", "Describe a time when...", etc.). If none found, return an empty array.
 For checklist: include 5-8 items specific to THIS role — things to verify, customize, or prepare before submitting.
 For atsText: list 5-8 missing JD keywords not present in the resume, suggest 2-3 bullet edits maximum where a keyword fits naturally, and provide an ATS score 1-10. Never invent facts, change metrics, or alter company names. Keep bullet meaning identical — only rephrase to absorb a missing keyword.
-For the SUGGESTED ADDITIONS block of atsText: this is where every bullet that is BANNED from the resume gets its say — bullets tagged [${AI_SUGGESTED_TAG}], anything from the AI-SUGGESTED ADDITIONS block, and any bank bullet that failed the provenance check. Include only the ones genuinely relevant to this job description, each with its rationale. Do not write new bullets here that are not already in those sources, and do not repeat a bullet that is already in the resume. These are things the user could choose to add to their real resume — never anything this package added on their behalf.
+For the SUGGESTED ADDITIONS block of atsText: this is where every bullet that is BANNED from the resume gets its say — bullets tagged [${AI_SUGGESTED_TAG}], anything from the AI-SUGGESTED ADDITIONS block, and any bank bullet that failed the provenance check. Include only the ones genuinely relevant to this job description, each with its rationale. Do not write new bullets here that are not already in those sources, and do not repeat a bullet that is already in the resume. These are things the user could choose to add to their real resume — never anything this package added on their behalf. Every entry here is a DRAFT, not a fact on file: it was written from what the user said in conversation, not copied from their resume, so it may be imprecise or not fully accurate. Open the block with the exact accuracy line given in the atsText structure above, and never present these as verified.
 For the BULLET OPTIMIZATION CHECK: review each resume bullet you selected from the Bullet Bank against four gates — (1) interview-proof: every claim survives "walk me through that"; (2) differentiating: a generic peer could not truthfully write the same sentence; (3) one-metric: exactly one metric per bullet, and never two different quantities (for example a cost-savings figure and a growth figure) in the same bullet; (4) rules-clean: passes the RESUME FORMAT RULES above. Check each selected bullet against the bullet anatomy — [strong verb] + [specific thing done] + [scope/scale] + [outcome with exactly ONE real number] — and confirm the variant (action-led / outcome-led / scale-led) matches the JD's emphasis; a variant mismatch (e.g. a scale-led bullet on an execution-focused JD) is itself a strain on the 'differentiating' gate and must be flagged. For EVERY bullet that strains any gate, output exactly one line in this format: "Bullet check: [bullet # or opening words] — [gate it strains] — suggested alternative: [text]". Two non-negotiable requirements for each line: (a) the gate token is EXACTLY one of interview-proof / differentiating / one-metric / rules-clean — no other wording; (b) 'suggested alternative:' is a CONCRETE, COMPLETE rewritten bullet — never blank, never a description of the problem — and the rewrite must itself obey every RESUME FORMAT RULE above and any resume rules stated in the user's own profile files: start with a strong action verb (never "responsible for"), contain exactly ONE metric, use no banned or hype vocabulary, no double dashes, and stay interview-provable from the user's real experience. A flagged bullet with a gate name but no rewrite is an incomplete answer. HARD RULE: these are SUGGESTIONS ONLY. The resume body above MUST still use the Bullet Bank text VERBATIM — never apply a suggested alternative to the resume itself. Nothing is rewritten unless the user adds it to the bank themselves.`,
       }],
     }),
@@ -1024,6 +1024,20 @@ export async function generateAndSendPackage(job, jobId, options = {}) {
     console.log(`[appPkg] bullet-bank.md loaded (${bulletBank.length} chars)`);
   }
 
+  // Which language the resume is actually built from. The panel prints a
+  // sentence about this, and until now that sentence was hardcoded to "uses your
+  // bullet bank verbatim" — which is a lie in the two fallback modes, printed
+  // directly above a resume that is partly or wholly AI-drafted.
+  //
+  // buildBulletSourceBlocks is pure string work and is the single source of
+  // truth for the usable-bank / has-cv decision, so it is asked here rather than
+  // duplicating the rules. callClaude re-derives the same answer; the cost is
+  // negligible next to the API call it precedes.
+  const hadOwnBank = !!(bulletBankRaw && bulletBankRaw.length >= 50);
+  const { usableBank, hasCv } = buildBulletSourceBlocks(bulletBank, cvMd);
+  const resumeSource = (hadOwnBank && usableBank) ? 'bank' : (hasCv ? 'cv' : 'ai-drafted');
+  console.log(`[appPkg] resumeSource=${resumeSource}`);
+
   // Generate package + ATS analysis in a single Claude call
   const pkg = await callClaude(anthropicApiKey, articleDigest, bulletBank, job, roleTypes, additionalGuidance, memoryBlock, cvMd);
 
@@ -1065,5 +1079,9 @@ export async function generateAndSendPackage(job, jobId, options = {}) {
   }
 
   console.log(`[appPkg] Package ready for ${job.company} — ${job.title}`);
-  return { pkg, docUrl };
+  // draftQA rides back with the package. It used to be handed to createGoogleDoc
+  // and nowhere else, so a user without Drive configured paid for answers to the
+  // questions THEY pasted in and never saw them — the same way the ATS analysis
+  // used to be dropped.
+  return { pkg, docUrl, draftQA, resumeSource };
 }

@@ -1080,7 +1080,7 @@ Put in it any achievement the user described in the conversation that does NOT a
 - Follow these writing requirements — WHICH APPLY ONLY TO THIS SECTION, never to a resume bullet: start with a strong action verb, include exactly one specific metric or concrete outcome, past tense, 1-2 lines maximum, written for maximum strength
 - Never fabricate a metric. If the user mentioned an achievement but not the number, write [ADD: specific number] and leave it for them to fill in. The same rule holds everywhere in this file: no invented numbers, companies, titles, dates, or credentials.
 
-Open the section with one line telling the user these bullets are AI-written, are not used on generated resumes, and will only be suggested alongside a package until the user adds one to their own resume.
+Open the section with one line telling the user these bullets are AI-written, are not used on generated resumes, and will only be suggested alongside a package until the user adds one to their own resume. That same line must carry the accuracy warning, in these words or very close to them: "These are AI-drafted from your conversation, not from your resume — they may not be 100% accurate. Review and edit each one before using it anywhere."
 If the conversation surfaced nothing that is missing from the resume, still emit the heading with a single line saying nothing was found.
 
 If no resume was provided at all and you must work from the conversation only, say so in one line under 'How to Use This File' and put EVERY bullet in the Suggested Additions section — none of it is the user's resume language, so none of it belongs in the body.

@@ -317,7 +317,7 @@ export default async function handler(req, res) {
       if (wantJson) {
         // Dashboard path: run synchronously, return full package content as JSON.
         try {
-          const { pkg, docUrl } = await generateAndSendPackage(job, jobId, { roleTypes, additionalGuidance, applicationQuestions });
+          const { pkg, docUrl, draftQA, resumeSource } = await generateAndSendPackage(job, jobId, { roleTypes, additionalGuidance, applicationQuestions });
 
           // Persist docUrl (and the possibly-updated description) back to
           // job-status.json as a second, field-safe commit so the dashboard can
@@ -344,6 +344,15 @@ export default async function handler(req, res) {
               title: `Application Package: ${title} at ${company}`,
               resume: pkg.resume || '',
               applicationQuestions: pkg.applicationQuestions || [],
+              // Answers to the questions the USER pasted into the modal. Same
+              // bug as atsText had: generated on every package, then handed only
+              // to createGoogleDoc, so without Drive the user never saw the
+              // answers to the questions they typed in themselves.
+              draftQA: draftQA || [],
+              // Which language the resume is actually built from, so the panel
+              // can print a sentence that is true in all three modes instead of
+              // always claiming the bullet bank was used verbatim.
+              resumeSource: resumeSource || 'ai-drafted',
               checklist: pkg.checklist || [],
               tailoringNotes: pkg.tailoringNotes || '',
               // The ATS analysis (score, missing keywords, suggested bullet edits,

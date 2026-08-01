@@ -3229,14 +3229,25 @@
   function buildPackageHtml(content) {
     const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-    const questionsHtml = (content.applicationQuestions || []).length
+    // Two independent streams of questions, and they must stay distinguishable:
+    // draftQA answers the questions the USER pasted into the modal, while
+    // applicationQuestions are the ones the model found in the job description.
+    // draftQA goes first — the user asked for those by name.
+    const qaGroups = [
+      { label: 'From your application form', items: content.draftQA || [] },
+      { label: 'Found in the job description', items: content.applicationQuestions || [] },
+    ].filter(g => g.items.length);
+
+    const questionsHtml = qaGroups.length
       ? `<section>
           <h2>📝 Application Questions</h2>
-          ${content.applicationQuestions.map(qa => `
+          ${qaGroups.map(g => `
+            <h3 class="qa-group">${esc(g.label)}</h3>
+            ${g.items.map(qa => `
             <div class="qa">
               <div class="q">${esc(qa.question)}</div>
               <div class="a">${esc(qa.answer || '').replace(/\n/g, '<br>')}</div>
-            </div>`).join('')}
+            </div>`).join('')}`).join('')}
         </section>`
       : '';
 
@@ -3258,10 +3269,25 @@
     // additions, bullet-optimization check. This was previously generated on every
     // package and then thrown away unless Google Drive happened to be configured.
     // Amber styling echoes the shaded advisory block in the Google Doc.
+    // The old note said "the resume above uses your bullet bank verbatim" no
+    // matter what actually happened. On a package generated with no bank and no
+    // cv.md that sentence sat directly above an entirely AI-written resume.
+    // resumeSource comes from the generator, which knows which mode ran.
+    const RESUME_SOURCE_NOTES = {
+      'bank': 'Suggestions only — the resume above uses your bullet bank verbatim. Nothing here has been applied.',
+      'cv': "Suggestions only — the resume above uses your resume's own wording. Nothing here has been applied.",
+      'ai-drafted': 'No resume on file — this draft is AI-written; treat every line as a suggestion to verify. Nothing here has been applied.',
+    };
+    // An unrecognized value must not be allowed to pick a sentence that might be
+    // false, so it gets the one claim that is true in every mode.
+    const resumeSourceNote = RESUME_SOURCE_NOTES[content.resumeSource]
+      || 'Suggestions only — nothing here has been applied to the resume above.';
+
     const atsHtml = content.atsText
       ? `<section class="ats">
           <h2>🔍 ATS &amp; Keyword Analysis</h2>
-          <p class="ats-note">Suggestions only — the resume above uses your bullet bank verbatim. Nothing here has been applied.</p>
+          <p class="ats-note">${esc(resumeSourceNote)}</p>
+          <p class="ats-note">Suggested Additions below are AI-drafted from your conversation, not from your resume — they may not be 100% accurate. Review and edit each one for accuracy before using it anywhere.</p>
           <pre id="ats">${esc(content.atsText)}</pre>
         </section>`
       : '';
@@ -3288,10 +3314,13 @@
       content.resume || '',
       '',
     ];
-    if ((content.applicationQuestions || []).length) {
+    if (qaGroups.length) {
       plainParts.push('APPLICATION QUESTIONS', '-'.repeat(40));
-      content.applicationQuestions.forEach(qa => {
-        plainParts.push(`Q: ${qa.question}`, `A: ${qa.answer || ''}`, '');
+      qaGroups.forEach(g => {
+        plainParts.push(`[${g.label}]`, '');
+        g.items.forEach(qa => {
+          plainParts.push(`Q: ${qa.question}`, `A: ${qa.answer || ''}`, '');
+        });
       });
     }
     if ((content.checklist || []).length) {
@@ -3304,7 +3333,9 @@
     }
     if (content.atsText) {
       plainParts.push('ATS & KEYWORD ANALYSIS (suggestions only — not applied to the resume)',
-        '-'.repeat(40), content.atsText);
+        '-'.repeat(40), resumeSourceNote,
+        'Suggested Additions below are AI-drafted from your conversation, not from your resume — they may not be 100% accurate. Review and edit each one for accuracy before using it anywhere.',
+        '', content.atsText);
     }
     const plainText = plainParts.join('\n');
 
@@ -3346,6 +3377,8 @@
     section{background:#fff;border:1px solid #e5e5e5;border-radius:10px;padding:24px 28px}
     h2{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:16px}
     pre{font-family:'Courier New',Courier,monospace;font-size:12.5px;line-height:1.75;white-space:pre-wrap;word-wrap:break-word;color:#1a1a1a}
+    .qa-group{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#999;margin:0 0 10px}
+    .qa-group:not(:first-of-type){margin-top:20px;padding-top:16px;border-top:1px solid #eee}
     .qa{margin-bottom:16px}.qa:last-child{margin-bottom:0}
     .q{font-size:13px;font-weight:600;margin-bottom:6px}
     .a{font-size:13px;color:#444;line-height:1.6;background:#f9f9f9;border-left:3px solid #e5e5e5;padding:10px 14px;border-radius:0 6px 6px 0;white-space:pre-wrap}
