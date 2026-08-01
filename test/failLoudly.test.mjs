@@ -120,7 +120,10 @@ test('the panel lists each failing check with its message and its fix', () => {
   assert.match(body, /fix\.textContent = c\.fix/);
   // XSS discipline: a health message is data, never markup.
   assert.doesNotMatch(body, /innerHTML\s*\+?=\s*[^']*c\./);
-  assert.match(body, /noteEl\.textContent = \(_health && _health\.note\)/);
+  // The server's note is still rendered verbatim — now alongside the
+  // "Last checked at …" stamp, and still as text rather than markup.
+  assert.match(body, /const note = \(_health && _health\.note\) \|\| '';/);
+  assert.match(body, /noteEl\.textContent = \[stamp, note\]/);
 });
 
 test('the setup panel has a re-run button and is reachable when nothing is wrong', () => {
@@ -198,4 +201,44 @@ test('the setup overlay sits above every other overlay', () => {
   const setupZ = Number((html.match(/#setup-overlay \{[^}]*z-index: (\d+)/) || [])[1]);
   const radarZ = Number((html.match(/#radar-add-overlay, #radar-detail-overlay[^}]*z-index: (\d+)/) || [])[1]);
   assert.ok(setupZ > radarZ, `setup overlay z-index ${setupZ} must beat the radar overlays' ${radarZ}`);
+});
+
+// ── The setup-check button says it is working ─────────────────────────────────
+//
+// Live staging: the owner pressed "Run setup check" and asked "does the button
+// do anything?". The button label did change, but the RESULTS area — the part
+// being watched — sat unchanged through several seconds of GitHub round-trips,
+// and a re-run that found the same things redrew identical text.
+
+test('a run in flight disables the button and renames it', () => {
+  const fn = html.slice(html.indexOf('async function rerunSetupCheck'));
+  const body = fn.slice(0, fn.indexOf('\n  // ── Password gate'));
+  assert.match(body, /btn\.disabled = true; btn\.textContent = 'Checking…'/);
+  assert.match(body, /btn\.disabled = false; btn\.textContent = 'Run setup check'/);
+  // Restoring it must be unconditional, so a thrown check cannot strand the
+  // button disabled forever.
+  assert.ok(body.indexOf('} finally {') < body.indexOf("btn.textContent = 'Run setup check'"),
+    'the button is restored outside the finally block');
+});
+
+test('the results area itself says a check is running, and re-renders when done', () => {
+  const fn = html.slice(html.indexOf('async function rerunSetupCheck'));
+  const body = fn.slice(0, fn.indexOf('\n  // ── Password gate'));
+  assert.match(body, /_healthRunning = true;\s*\n\s*renderSetupPanel\(\)/);
+  assert.match(body, /_healthRunning = false;/);
+  assert.match(body, /renderSetupState\(\);/);
+  // The panel honours the flag rather than leaving the stale results up.
+  const panel = html.slice(html.indexOf('function renderSetupPanel'));
+  assert.match(panel.slice(0, 900), /if \(_healthRunning\)/);
+  assert.match(panel.slice(0, 900), /Running the setup check…/);
+});
+
+test('a second click cannot start a second run', () => {
+  const fn = html.slice(html.indexOf('async function rerunSetupCheck'));
+  assert.match(fn.slice(0, 200), /if \(_healthRunning\) return;/);
+});
+
+test('a finished run is stamped, so an unchanged result still visibly changed', () => {
+  assert.match(html, /_healthRanAt = new Date\(\)\.toLocaleTimeString/);
+  assert.match(html, /Last checked at \$\{_healthRanAt\}\./);
 });

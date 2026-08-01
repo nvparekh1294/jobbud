@@ -2076,6 +2076,14 @@
 
   let _health = null;          // last /api/health payload, or null if never run
   let _setupBannerDismissed = false;
+  // True while the ⚙ panel has a check running. The button label alone was not
+  // enough feedback — the user watches the RESULTS area, which sat unchanged for
+  // the several seconds of GitHub round-trips, and a re-run that found the same
+  // things redrew identical text, so the honest question was "does the button do
+  // anything?". The panel now says out loud that it is working, and stamps the
+  // time each run finished so an unchanged result still visibly changed.
+  let _healthRunning = false;
+  let _healthRanAt = null;
 
   // Callers that can overlap share one request. unlock() fires loadData() and
   // loadRadar() together, so a broken setup has both failing at once and both
@@ -2168,6 +2176,16 @@
     if (!wrap) return;
     wrap.innerHTML = '';
 
+    if (_healthRunning) {
+      const p = document.createElement('div');
+      p.className = 'setup-check';
+      p.textContent = 'Running the setup check… this takes a few seconds.';
+      wrap.appendChild(p);
+      const noteWhileRunning = document.getElementById('setup-note');
+      if (noteWhileRunning) noteWhileRunning.textContent = '';
+      return;
+    }
+
     if (!_health) {
       const p = document.createElement('div');
       p.className = 'setup-check';
@@ -2200,7 +2218,11 @@
     }
 
     const noteEl = document.getElementById('setup-note');
-    if (noteEl) noteEl.textContent = (_health && _health.note) || '';
+    if (noteEl) {
+      const note = (_health && _health.note) || '';
+      const stamp = _healthRanAt ? `Last checked at ${_healthRanAt}.` : '';
+      noteEl.textContent = [stamp, note].filter(Boolean).join(' ');
+    }
   }
 
   function openSetupPanel() {
@@ -2215,8 +2237,11 @@
   }
 
   async function rerunSetupCheck() {
+    if (_healthRunning) return;   // a second click must not start a second run
     const btn = document.getElementById('setup-rerun-btn');
     if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+    _healthRunning = true;
+    renderSetupPanel();           // say "running" where the user is looking
     try {
       _health = await fetchHealth(sessionStorage.getItem('co_pw') || '');
       _setupBannerDismissed = false;
@@ -2231,6 +2256,8 @@
         note: '',
       };
     } finally {
+      _healthRunning = false;
+      _healthRanAt = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
       if (btn) { btn.disabled = false; btn.textContent = 'Run setup check'; }
       renderSetupState();
     }
