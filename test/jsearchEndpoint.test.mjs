@@ -115,6 +115,41 @@ test('a v2 payload that wraps its jobs in an object still normalizes', async () 
   assert.equal(jobs[0].sourceId, 'v2-1');
 });
 
+test('an unrecognized payload shape fails the query instead of reporting zero jobs', async () => {
+  // A 200 whose `data` is an object we have no reader for used to yield
+  // jobs=0/failures=0 — a green run with nothing in it. It must count as a
+  // failure, and the log must name the keys (never the values, which can carry
+  // personal data).
+  const errors = [];
+  const realError = console.error;
+  console.error = (...args) => errors.push(args.join(' '));
+  let jobs;
+  try {
+    stubFetch(() => jsonResponse({
+      status: 'OK',
+      request_id: 'req-1',
+      data: { cursor: 'abc', items: [V2_JOB] },
+    }));
+    jobs = await fetchJSearch(CONFIG);
+  } finally {
+    console.error = realError;
+  }
+
+  assert.deepEqual(jobs, []);
+  assert.equal(jsearchStats.queries, 1);
+  assert.equal(jsearchStats.failures, 1, 'the query must be counted as a failure');
+  assert.equal(jsearchStats.failures, jsearchStats.queries,
+    'every query failed, so the 100%-failure summary must be able to fire');
+
+  const loud = errors.join('\n');
+  assert.match(loud, /cursor/);
+  assert.match(loud, /items/);
+  assert.match(loud, /request_id/);
+  // Keys only — no value from the payload may appear in the log.
+  assert.ok(!loud.includes('abc'), 'payload values must not be logged');
+  assert.ok(!loud.includes('Globex'), 'payload values must not be logged');
+});
+
 test('a v1-only subscription falls back to /search and normalizes as before', async () => {
   const urls = stubFetch((url) =>
     url.includes('/search-v2')

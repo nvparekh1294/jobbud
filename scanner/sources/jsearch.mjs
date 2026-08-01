@@ -49,7 +49,9 @@ export async function fetchJSearch(config) {
     } catch (err) {
       jsearchStats.failures++;
       jsearchStats.lastError = err.message;
-      console.error(`JSearch query failed for "${query}":`, err.message);
+      if (!err.alreadyReported) {
+        console.error(`JSearch query failed for "${query}":`, err.message);
+      }
     }
   }
 
@@ -112,7 +114,11 @@ async function searchJSearch(query, apiKey) {
         `No JSearch jobs will be fetched this run. Check the JSearch plan on your RapidAPI ` +
         `account (a current subscription should expose ${V2_PATH}).`;
       console.error(message);
-      throw new Error(`JSearch subscription exposes neither ${V2_PATH} nor ${V1_PATH}`);
+      // The line above already says everything the per-query line would, for
+      // this same event — flagged so the caller does not print it twice.
+      const bothMissing = new Error(`JSearch subscription exposes neither ${V2_PATH} nor ${V1_PATH}`);
+      bothMissing.alreadyReported = true;
+      throw bothMissing;
     }
   }
 }
@@ -156,11 +162,40 @@ function buildParams(path, query) {
 // v1 returns { data: [ ...jobs ] }. v2's envelope is documented as cursor-based
 // but its exact `data` shape is not published, so accept both an array and an
 // object wrapping the array rather than guessing one.
+//
+// If the envelope is there but carries the jobs somewhere we do not recognize,
+// returning [] would report "0 jobs" from a perfectly healthy 200 and the run
+// would go green — exactly the silent-zero bug this file exists to prevent. So
+// we say which keys came back (KEYS ONLY — values can carry personal data) and
+// throw, which makes the query count as a failure and lets the all-failed
+// summary in index.mjs shout.
 function extractJobs(data) {
-  const payload = data?.data ?? data?.jobs ?? [];
+  const payload = data?.data ?? data?.jobs;
+  if (payload === undefined || payload === null) return [];
   if (Array.isArray(payload)) return payload;
+
   const nested = payload.jobs ?? payload.results ?? payload.data;
-  return Array.isArray(nested) ? nested : [];
+  if (Array.isArray(nested)) return nested;
+
+  console.error(
+    `[jsearch] Unrecognized response shape — could not find the job list. ` +
+    `Top-level keys: ${describeKeys(data)}. Payload keys: ${describeKeys(payload)}. ` +
+    `(Keys only; values are not logged.) Treating this query as a failure rather ` +
+    `than reporting zero jobs from a 200.`
+  );
+  throw new Error(
+    `JSearch returned an unrecognized response shape (top-level keys: ${describeKeys(data)}; ` +
+    `payload keys: ${describeKeys(payload)})`
+  );
+}
+
+// Names the keys of an object, never the values. Non-objects are described by
+// type so the log never echoes a raw string body back.
+function describeKeys(value) {
+  if (value === null || typeof value !== 'object') return `<${typeof value}>`;
+  if (Array.isArray(value)) return '<array>';
+  const keys = Object.keys(value);
+  return keys.length ? keys.join(', ') : '<none>';
 }
 
 function isMissingEndpoint(err) {
