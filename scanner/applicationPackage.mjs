@@ -162,22 +162,23 @@ export function parsePackageResponse(data) {
 // Accepts {draftResponses: [...]} and a bare top-level array, because a model
 // that has already ignored one formatting instruction may ignore another.
 export function parseDraftQAResponse(rawText) {
-  // The request uses an assistant prefill of '{', so the reply continues from
-  // mid-object; the prefilled attempt is tried first, the raw text second in
-  // case the prefill was ignored or removed.
-  for (const candidate of [`{${rawText == null ? '' : rawText}`, rawText]) {
-    const parsed = parseLooseJson(candidate);
-    if (parsed === undefined) continue;
-    const list = Array.isArray(parsed) ? parsed
-      : (parsed && Array.isArray(parsed.draftResponses)) ? parsed.draftResponses
-      : null;
-    if (!list) continue;
-    return list
-      .filter(qa => qa && typeof qa === 'object')
-      .map(qa => ({ question: String(qa.question || ''), answer: String(qa.answer || '') }))
-      .filter(qa => qa.question || qa.answer);
-  }
-  return null;   // null means "could not parse" — distinct from "parsed, empty"
+  // The request declares a json_schema output format, so the reply should be
+  // schema-valid JSON with no preamble. Everything below is a defensive
+  // backstop for the day that guarantee doesn't hold — a fence-wrapped reply,
+  // prose either side of the payload, or a bare top-level array.
+  const parsed = parseLooseJson(rawText);
+  if (parsed === undefined) return null;
+
+  const list = Array.isArray(parsed) ? parsed
+    : (parsed && Array.isArray(parsed.draftResponses)) ? parsed.draftResponses
+    : null;
+  if (!list) return null;
+
+  return list
+    .filter(qa => qa && typeof qa === 'object')
+    .map(qa => ({ question: String(qa.question || ''), answer: String(qa.answer || '') }))
+    .filter(qa => qa.question || qa.answer);
+  // null means "could not parse" — distinct from "parsed, empty"
 }
 
 // ── Measured package quality ─────────────────────────────────────────────────
@@ -1200,15 +1201,44 @@ Respond with exactly this JSON:
 }
 
 Return one entry per question in the same order as the input list.`,
-      }, {
-        // Assistant prefill. Asking for "valid JSON only" was not enough — in
-        // staging this call failed on every run because the model opened with a
-        // sentence of prose. Putting the opening brace in its mouth leaves it
-        // mid-object with nowhere to put a preamble. The fence-strip and the
-        // brace carve-out in parseDraftQAResponse remain as backstops.
-        role: 'assistant',
-        content: '{',
       }],
+      // STRUCTURED OUTPUTS. Asking for "valid JSON only" was not enough — in
+      // staging this call failed on every run because the model opened with a
+      // sentence of prose ("I will draft these for you.") and JSON.parse threw
+      // on the first character. The schema below makes the API itself guarantee
+      // the first text block is JSON matching this shape, so there is no
+      // preamble to strip.
+      //
+      // Assistant prefill was the old fix for this and is NOT usable here: it
+      // returns HTTP 400 on this model generation. Do not reintroduce it.
+      //
+      // Schema constraints: every object needs additionalProperties:false and
+      // required; length/range constraints (minLength, minimum, ...) are not
+      // supported and will be rejected.
+      output_config: {
+        format: {
+          type: 'json_schema',
+          schema: {
+            type: 'object',
+            properties: {
+              draftResponses: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    question: { type: 'string' },
+                    answer: { type: 'string' },
+                  },
+                  required: ['question', 'answer'],
+                  additionalProperties: false,
+                },
+              },
+            },
+            required: ['draftResponses'],
+            additionalProperties: false,
+          },
+        },
+      },
     }),
   });
 

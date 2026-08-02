@@ -41,9 +41,9 @@ test('parseDraftQAResponse survives prose before the JSON', () => {
   assert.deepEqual(parseDraftQAResponse(raw), QA);
 });
 
-test('parseDraftQAResponse reads the assistant-prefill continuation', () => {
-  // The request now puts '{' in the assistant's mouth, so the reply starts
-  // mid-object and is only valid once that brace is put back.
+test('parseDraftQAResponse salvages a reply whose opening brace is missing', () => {
+  // Not a shape we expect under structured outputs — a backstop for a reply
+  // that arrives structurally damaged. The array carve-out still finds it.
   assert.deepEqual(parseDraftQAResponse('"draftResponses":[{"question":"Q1","answer":"A1"}]}'), QA);
 });
 
@@ -74,7 +74,31 @@ test('callClaudeDraftQA logs the reply shape when it cannot parse', () => {
   // The old log said only "Unexpected token 'I'", which told the next debugging
   // session nothing about what actually came back.
   assert.match(pkgSrc, /could not parse the model reply\. First 120 characters: \$\{text\.slice\(0, 120\)\}/);
-  assert.match(pkgSrc, /role: 'assistant',\n\s*content: '\{',/);
+});
+
+test('the draft-QA request asks the API to guarantee the JSON shape', () => {
+  // Structured outputs replace the prose-preamble problem at the source. The
+  // schema must satisfy the API's rules: additionalProperties:false and
+  // required on every object.
+  const body = pkgSrc.slice(pkgSrc.indexOf('async function callClaudeDraftQA'));
+  assert.match(body, /output_config: \{\s*format: \{\s*type: 'json_schema',\s*schema: \{/);
+  assert.match(body, /draftResponses: \{\s*type: 'array'/);
+  assert.match(body, /required: \['question', 'answer'\],\s*additionalProperties: false,/);
+  assert.match(body, /required: \['draftResponses'\],\s*additionalProperties: false,/);
+});
+
+test('the draft-QA request does NOT use assistant prefill', () => {
+  // Prefill returns HTTP 400 on this model generation — it was the previous
+  // fix for the prose-preamble failure and must not come back.
+  const body = pkgSrc.slice(
+    pkgSrc.indexOf('async function callClaudeDraftQA'),
+    pkgSrc.indexOf('export async function generateAndSendPackage'),
+  );
+  assert.ok(!/role: 'assistant'/.test(body), 'an assistant prefill turn is back in the request');
+  // Every turn in the request is a user turn, so messages necessarily ends on one.
+  const roles = [...body.matchAll(/role: '(\w+)'/g)].map(m => m[1]);
+  assert.ok(roles.length > 0, 'no message turns found');
+  assert.deepEqual([...new Set(roles)], ['user'], `unexpected roles: ${roles.join(', ')}`);
 });
 
 test('parseLooseJson carves the payload out of surrounding prose', () => {
