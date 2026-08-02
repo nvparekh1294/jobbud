@@ -121,6 +121,139 @@ export function parsePackageResponse(data) {
   return JSON.parse(text.replace(/```json|```/g, '').trim());
 }
 
+// ── Measured package quality ─────────────────────────────────────────────────
+//
+// The package used to ask the model to estimate its own ATS score out of ten.
+// That number was indefensible: it clustered on 6-7 whatever it was given, no
+// real ATS works that way, and a staging package scored 6 on a resume that
+// still said [YOUR NAME] and had bracketed placeholders where the education
+// section should be. A number that survives that is not measuring anything.
+//
+// The score stays, because it is useful — but it is computed here, from facts
+// this code checked itself, and shown with its arithmetic visible so the user
+// can see exactly what it is made of. The model supplies the JD's key terms and
+// a qualitative FIT READ; it never sees or influences the digit.
+
+// A bracketed placeholder the draft must not ship with: [YOUR NAME],
+// [School Name], [ADD: specific number], [X]%. Two to sixty characters, no
+// newline, so it cannot swallow a paragraph.
+export const PLACEHOLDER_RE = /\[[^\]\n]{2,60}\]/g;
+
+// Points available to each measured component. Keyword coverage is a matter of
+// degree; completeness is not — a resume with [YOUR NAME] in it is not
+// partially finished, so its 3 points are all-or-nothing.
+const KEYWORD_POINTS = 7;
+const COMPLETENESS_POINTS = 3;
+
+export function findPlaceholders(resumeText) {
+  const found = String(resumeText || '').match(PLACEHOLDER_RE) || [];
+  const seen = new Set();
+  const out = [];
+  for (const raw of found) {
+    const key = raw.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(raw);
+  }
+  return out;
+}
+
+// Literal, case-insensitive containment. Deliberately not fuzzy: a term the
+// resume only paraphrases has not been matched by a keyword filter either, and
+// a generous check here would rebuild the same comfortable fiction the invented
+// score was.
+export function computeKeywordCoverage(resumeText, keyTerms) {
+  const haystack = String(resumeText || '').toLowerCase();
+  const present = [];
+  const missing = [];
+  const seen = new Set();
+  for (const raw of Array.isArray(keyTerms) ? keyTerms : []) {
+    const term = String(raw == null ? '' : raw).trim();
+    if (!term) continue;
+    const key = term.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    (haystack.includes(key) ? present : missing).push(term);
+  }
+  return { present, missing, total: present.length + missing.length };
+}
+
+// 4.5 → "4.5", 7 → "7". Keeps the arithmetic readable rather than "7.0/7".
+const fmtScore = n => (Number.isInteger(n) ? String(n) : n.toFixed(1));
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+export function computePackageScore(coverage, placeholders) {
+  const total = coverage?.total || 0;
+  const present = coverage?.present?.length || 0;
+  // Rounded to the nearest half point — finer precision would imply the term
+  // list is more exact than a 10-15 item judgement call really is.
+  const keyword = total > 0
+    ? Math.round((KEYWORD_POINTS * present / total) * 2) / 2
+    : 0;
+  const completeness = placeholders.length === 0 ? COMPLETENESS_POINTS : 0;
+  return {
+    keyword,
+    completeness,
+    total: keyword + completeness,
+    scorable: total > 0,
+  };
+}
+
+// The one sentence the placeholder gate uses, so the ATS block and the
+// checklist item cannot drift apart.
+export function placeholderGateLine(placeholders) {
+  return `This draft still contains ${plural(placeholders.length, 'placeholder')} that must be replaced before applying: ${placeholders.join(', ')}`;
+}
+
+// Fold the measured blocks into the ATS section and the checklist. Everything
+// downstream — the panel, the plain-text copy, the download, and the Google Doc
+// (buildResumeRequests renders atsText verbatim) — inherits from here.
+export function finalizePackage(pkg) {
+  const resumeText = pkg?.resume || '';
+  const placeholders = findPlaceholders(resumeText);
+  const coverage = computeKeywordCoverage(resumeText, pkg?.keyTerms);
+  const score = computePackageScore(coverage, placeholders);
+
+  const blocks = [];
+
+  // The gate leads: nothing else in the section matters if the draft cannot be
+  // submitted at all.
+  if (placeholders.length) {
+    blocks.push(`NOT SUBMITTABLE YET\n${placeholderGateLine(placeholders)}`);
+  }
+
+  if (score.scorable) {
+    const lines = [
+      `SCORE: ${fmtScore(score.total)}/10`,
+      `Keyword match: ${fmtScore(score.keyword)}/${KEYWORD_POINTS} (${coverage.present.length} of ${coverage.total} key JD terms present)`,
+      placeholders.length
+        ? `Completeness: 0/${COMPLETENESS_POINTS} — ${plural(placeholders.length, 'placeholder')} still to fill in`
+        : `Completeness: ${COMPLETENESS_POINTS}/${COMPLETENESS_POINTS} — no placeholders left in the draft`,
+    ];
+    if (score.total < KEYWORD_POINTS + COMPLETENESS_POINTS) {
+      lines.push(placeholders.length
+        ? 'Fix the placeholders and add the missing terms below to raise this.'
+        : 'Add the missing terms below to raise this.');
+    }
+    blocks.push(lines.join('\n'));
+
+    blocks.push([
+      'KEYWORD COVERAGE',
+      `${coverage.present.length} of ${coverage.total} key JD terms present in the resume.`,
+      `Present: ${coverage.present.length ? coverage.present.join(', ') : 'none'}`,
+      `Missing: ${coverage.missing.length ? coverage.missing.join(', ') : 'none'}`,
+    ].join('\n'));
+  }
+
+  const body = String(pkg?.atsText || '').trim();
+  const atsText = [...blocks, body].filter(Boolean).join('\n\n');
+
+  const checklist = Array.isArray(pkg?.checklist) ? [...pkg.checklist] : [];
+  if (placeholders.length) checklist.unshift(placeholderGateLine(placeholders));
+
+  return { ...pkg, atsText, checklist, placeholders, keywordCoverage: coverage, score };
+}
+
 async function callClaude(anthropicApiKey, articleDigest, bulletBank, job, roleTypes, additionalGuidance, memoryBlock = '', cvMd = '') {
   const roleTypeStr = roleTypes && roleTypes.length ? roleTypes.join(', ') : 'not specified';
   const { bankBody, suggestionsBlock, provenanceBlock, provenanceRules, bulletSelectionRules, usableBank } =
@@ -238,12 +371,14 @@ Respond with exactly this JSON:
     "<checklist item>"
   ],
   "tailoringNotes": "<2-3 sentences on what was emphasized, what was cut, which JD keywords were matched, and which role type bullets were prioritized>",
-  "atsText": "<ATS & KEYWORD OPTIMIZATION section as plain text — use exactly the structure below>\n\nATS & KEYWORD OPTIMIZATION\n\nMISSING KEYWORDS\n[keyword or phrase]: [which role section to add it to, and in what context]\n\nSUGGESTED ADDITIONS\nThese are AI-drafted from what you described in conversation, not taken from your resume. Treat each as a draft: check it is accurate and edit it into your own words before using it anywhere.\n[Each AI-suggested or non-traceable bullet that is relevant to THIS job description, one per entry, in this shape:]\nSuggested: [the bullet text]\nWhy: [the rationale from the bullet bank, or one sentence on what it proves for this role]\n[If none are relevant, write the single line: None relevant to this role.]\n\nSUGGESTED BULLET EDITS\nOriginal: [exact existing bullet text starting with •]\nSuggested: [replacement bullet — same facts, slightly different wording to incorporate a missing keyword]\nWhy: [one sentence explaining the keyword or phrasing benefit]\n\nATS SCORE ESTIMATE\nScore: [X/10]\n[2-3 sentences: why this score, the resume's top ATS strengths, and the most important remaining gaps]\n\nBULLET OPTIMIZATION CHECK\nBullet check: [bullet # or opening words] — [exactly ONE of: interview-proof | differentiating | one-metric | rules-clean] — suggested alternative: [a complete rewritten bullet]\n[one line per selected bullet that strains a gate; omit bullets that pass all four gates cleanly. The 'suggested alternative:' field is MANDATORY and must be a full rewritten sentence, never blank and never a note about the problem. Suggestions only — the resume above still uses Bullet Bank text verbatim]"
+  "atsText": "<ATS & KEYWORD OPTIMIZATION section as plain text — use exactly the structure below>\n\nATS & KEYWORD OPTIMIZATION\n\nMISSING KEYWORDS\n[keyword or phrase]: [which role section to add it to, and in what context]\n\nSUGGESTED ADDITIONS\nThese are AI-drafted from what you described in conversation, not taken from your resume. Treat each as a draft: check it is accurate and edit it into your own words before using it anywhere.\n[Each AI-suggested or non-traceable bullet that is relevant to THIS job description, one per entry, in this shape:]\nSuggested: [the bullet text]\nWhy: [the rationale from the bullet bank, or one sentence on what it proves for this role]\n[If none are relevant, write the single line: None relevant to this role.]\n\nSUGGESTED BULLET EDITS\nOriginal: [exact existing bullet text starting with •]\nSuggested: [replacement bullet — same facts, slightly different wording to incorporate a missing keyword]\nWhy: [one sentence explaining the keyword or phrasing benefit]\n\nFIT READ\n[2-4 sentences on how a recruiter or a semantic matcher would read THIS resume against THIS job description: title alignment, scope and seniority, domain fit, and the most important gaps. Write it in words only. Do NOT include a numeric score, a rating, a letter grade, a percentage, an "X out of Y", or any other number standing in for a judgement of fit. The package computes the only score it shows from measured facts; an invented one would contradict it.]\n\nBULLET OPTIMIZATION CHECK\nBullet check: [bullet # or opening words] — [exactly ONE of: interview-proof | differentiating | one-metric | rules-clean] — suggested alternative: [a complete rewritten bullet]\n[one line per selected bullet that strains a gate; omit bullets that pass all four gates cleanly. The 'suggested alternative:' field is MANDATORY and must be a full rewritten sentence, never blank and never a note about the problem. Suggestions only — the resume above still uses Bullet Bank text verbatim]",
+  "keyTerms": ["<exact phrase from the job description>", "..."]
 }
 
 For applicationQuestions: scan the job description for explicit application questions (e.g., "Why do you want to work here?", "Describe a time when...", etc.). If none found, return an empty array.
 For checklist: include 5-8 items specific to THIS role — things to verify, customize, or prepare before submitting.
-For atsText: list 5-8 missing JD keywords not present in the resume, suggest 2-3 bullet edits maximum where a keyword fits naturally, and provide an ATS score 1-10. Never invent facts, change metrics, or alter company names. Keep bullet meaning identical — only rephrase to absorb a missing keyword.
+For atsText: list 5-8 missing JD keywords not present in the resume and suggest 2-3 bullet edits maximum where a keyword fits naturally. Never invent facts, change metrics, or alter company names. Keep bullet meaning identical — only rephrase to absorb a missing keyword. Do NOT rate, score, or grade the resume anywhere in atsText: the package measures keyword coverage and completeness itself and prints the only score the user sees. A number you invent would sit next to a number that was actually measured, and contradict it.
+For keyTerms: return 10-15 of the job description's most important terms — the skills, tools, domains, and role-defining phrases a reader or a keyword filter would look for. Each entry must be an EXACT phrase as it appears in the job description, lowercase or as written, short enough to match literally (1-4 words; "stakeholder management", "SQL", "demand forecasting"), and NOT a generic filler word ("team", "work", "role"). This list is checked against the resume in code, literally and case-insensitively, so a paraphrase or an expanded acronym will read as missing. Return the array even if the resume already covers every term.
 For the SUGGESTED ADDITIONS block of atsText: this is where every bullet that is BANNED from the resume gets its say — bullets tagged [${AI_SUGGESTED_TAG}], anything from the AI-SUGGESTED ADDITIONS block, and any bank bullet that failed the provenance check. Include only the ones genuinely relevant to this job description, each with its rationale. Do not write new bullets here that are not already in those sources, and do not repeat a bullet that is already in the resume. These are things the user could choose to add to their real resume — never anything this package added on their behalf. Every entry here is a DRAFT, not a fact on file: it was written from what the user said in conversation, not copied from their resume, so it may be imprecise or not fully accurate. Open the block with the exact accuracy line given in the atsText structure above, and never present these as verified.
 For the BULLET OPTIMIZATION CHECK: review each resume bullet you selected from the Bullet Bank against four gates — (1) interview-proof: every claim survives "walk me through that"; (2) differentiating: a generic peer could not truthfully write the same sentence; (3) one-metric: exactly one metric per bullet, and never two different quantities (for example a cost-savings figure and a growth figure) in the same bullet; (4) rules-clean: passes the RESUME FORMAT RULES above. Check each selected bullet against the bullet anatomy — [strong verb] + [specific thing done] + [scope/scale] + [outcome with exactly ONE real number] — and confirm the variant (action-led / outcome-led / scale-led) matches the JD's emphasis; a variant mismatch (e.g. a scale-led bullet on an execution-focused JD) is itself a strain on the 'differentiating' gate and must be flagged. For EVERY bullet that strains any gate, output exactly one line in this format: "Bullet check: [bullet # or opening words] — [gate it strains] — suggested alternative: [text]". Two non-negotiable requirements for each line: (a) the gate token is EXACTLY one of interview-proof / differentiating / one-metric / rules-clean — no other wording; (b) 'suggested alternative:' is a CONCRETE, COMPLETE rewritten bullet — never blank, never a description of the problem — and the rewrite must itself obey every RESUME FORMAT RULE above and any resume rules stated in the user's own profile files: start with a strong action verb (never "responsible for"), contain exactly ONE metric, use no banned or hype vocabulary, no double dashes, and stay interview-provable from the user's real experience. A flagged bullet with a gate name but no rewrite is an incomplete answer. HARD RULE: these are SUGGESTIONS ONLY. The resume body above MUST still use the Bullet Bank text VERBATIM — never apply a suggested alternative to the resume itself. Nothing is rewritten unless the user adds it to the bank themselves.`,
       }],
@@ -1038,8 +1173,12 @@ export async function generateAndSendPackage(job, jobId, options = {}) {
   const resumeSource = (hadOwnBank && usableBank) ? 'bank' : (hasCv ? 'cv' : 'ai-drafted');
   console.log(`[appPkg] resumeSource=${resumeSource}`);
 
-  // Generate package + ATS analysis in a single Claude call
-  const pkg = await callClaude(anthropicApiKey, articleDigest, bulletBank, job, roleTypes, additionalGuidance, memoryBlock, cvMd);
+  // Generate package + ATS analysis in a single Claude call, then measure it.
+  // finalizePackage computes the score, the keyword coverage and the
+  // placeholder gate from the returned text — the model never supplies a digit.
+  const rawPkg = await callClaude(anthropicApiKey, articleDigest, bulletBank, job, roleTypes, additionalGuidance, memoryBlock, cvMd);
+  const pkg = finalizePackage(rawPkg);
+  console.log(`[appPkg] score=${pkg.score.scorable ? pkg.score.total + '/10' : 'n/a'} keywords=${pkg.keywordCoverage.present.length}/${pkg.keywordCoverage.total} placeholders=${pkg.placeholders.length}`);
 
   // Extract ATS text from the same response (no second API call needed)
   const atsText = pkg.atsText || '';

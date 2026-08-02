@@ -41,7 +41,9 @@ const CONTENT = {
   applicationQuestions: [{ question: 'Why us?', answer: 'Because.' }],
   checklist: ['Check the salary band'],
   tailoringNotes: 'Led with operations bullets.',
-  atsText: 'ATS & KEYWORD OPTIMIZATION\n\nATS SCORE ESTIMATE\nScore: 8/10\n\nSUGGESTED ADDITIONS\nSuggested: Ran the vendor consolidation\nWhy: Fills the cost-ownership gap.',
+  // Shaped like real post-finalize output: the score block is code-computed and
+  // prepended by finalizePackage, then the model's own sections follow.
+  atsText: 'SCORE: 7.5/10\nKeyword match: 4.5/7 (9 of 14 key JD terms present)\nCompleteness: 3/3 — no placeholders left in the draft\n\nATS & KEYWORD OPTIMIZATION\n\nFIT READ\nReads as a credible operations match on scope and domain.\n\nSUGGESTED ADDITIONS\nSuggested: Ran the vendor consolidation\nWhy: Fills the cost-ownership gap.',
 };
 
 // ── The API now hands the ATS analysis back ───────────────────────────────────
@@ -64,7 +66,7 @@ test('the Google Doc path is unchanged — atsText still goes into the doc', () 
 test('the package panel renders the ATS analysis', () => {
   const out = buildPackageHtml(CONTENT);
   assert.match(out, /ATS &amp; Keyword Analysis/);
-  assert.ok(out.includes('Score: 8/10'));
+  assert.ok(out.includes('SCORE: 7.5/10'));
   assert.ok(out.includes('SUGGESTED ADDITIONS'));
   // Framed as advisory, matching the hard rule in the generation prompt.
   assert.match(out, /Suggestions only/);
@@ -83,7 +85,7 @@ test('the panel shows the full package alongside a Google Doc link', () => {
   assert.ok(out.includes('https://docs.google.com/document/d/abc123/edit'));
   assert.match(out, /open the Google Doc/);
   // The Doc does not replace the panel — the analysis is still there.
-  assert.ok(out.includes('Score: 8/10'));
+  assert.ok(out.includes('SCORE: 7.5/10'));
 });
 
 test('a non-Docs docUrl is never rendered as a link', () => {
@@ -164,7 +166,7 @@ test('Copy Full Package includes the ATS analysis', () => {
   assert.ok(full, 'FULL payload not embedded');
   const text = JSON.parse(full[1]);
   assert.match(text, /ATS & KEYWORD ANALYSIS/);
-  assert.match(text, /Score: 8\/10/);
+  assert.match(text, /SCORE: 7\.5\/10/);
   assert.match(text, /TAILORING NOTES/);
   assert.match(text, /Why us\?/);
 });
