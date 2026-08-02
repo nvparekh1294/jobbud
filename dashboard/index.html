@@ -3314,8 +3314,20 @@
     // draftQA answers the questions the USER pasted into the modal, while
     // applicationQuestions are the ones the model found in the job description.
     // draftQA goes first — the user asked for those by name.
+    //
+    // When drafting failed outright, the user's own questions are still listed
+    // with a retry note in place of each answer. Silently dropping the section
+    // made a failed run look exactly like never having pasted anything —
+    // which is how a run that failed every single time went unnoticed.
+    const QA_RETRY_NOTE = "A draft answer couldn't be generated this run — hit Generate Package again to retry.";
+    const formItems = (content.draftQA || []).length
+      ? content.draftQA
+      : (content.draftQAFailed
+          ? (content.pastedQuestions || []).map(q => ({ question: q, answer: QA_RETRY_NOTE, failed: true }))
+          : []);
+
     const qaGroups = [
-      { label: 'From your application form', items: content.draftQA || [] },
+      { label: 'From your application form', items: formItems },
       { label: 'Found in the job description', items: content.applicationQuestions || [] },
     ].filter(g => g.items.length);
 
@@ -3327,7 +3339,7 @@
             ${g.items.map(qa => `
             <div class="qa">
               <div class="q">${esc(qa.question)}</div>
-              <div class="a">${esc(qa.answer || '').replace(/\n/g, '<br>')}</div>
+              <div class="a${qa.failed ? ' a-failed' : ''}">${esc(qa.answer || '').replace(/\n/g, '<br>')}</div>
             </div>`).join('')}`).join('')}
         </section>`
       : '';
@@ -3476,6 +3488,7 @@
     .qa{margin-bottom:16px}.qa:last-child{margin-bottom:0}
     .q{font-size:13px;font-weight:600;margin-bottom:6px}
     .a{font-size:13px;color:#444;line-height:1.6;background:#f9f9f9;border-left:3px solid #e5e5e5;padding:10px 14px;border-radius:0 6px 6px 0;white-space:pre-wrap}
+    .a-failed{background:#fff7ed;border-left-color:#fdba74;color:#9a3412;font-style:italic}
     ul{padding-left:20px}li{font-size:13px;color:#444;padding:3px 0;line-height:1.5}
     .notes{font-size:13px;color:#555;line-height:1.6;font-style:italic}
     .notes a{color:#1a56db}

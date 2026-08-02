@@ -179,14 +179,70 @@ test('Copy Full Package includes the ATS analysis', () => {
 const DRAFT_QA = [{ question: 'Describe a time you led <a> change', answer: 'I led the migration.\nIt shipped early.' }];
 
 test('generateAndSendPackage returns draftQA instead of only feeding it to Drive', () => {
-  assert.match(pkgSrc, /return \{ pkg, docUrl, draftQA, resumeSource \};/);
+  assert.match(pkgSrc, /return \{ pkg, docUrl, draftQA, draftQAFailed, pastedQuestions: parsedQuestions, resumeSource \};/);
 });
 
 test('api/action.js carries draftQA in the dashboard package payload', () => {
-  assert.match(actionSrc, /const \{ pkg, docUrl, draftQA, resumeSource \} = await generateAndSendPackage/);
+  assert.match(actionSrc, /const \{ pkg, docUrl, draftQA, draftQAFailed, pastedQuestions, resumeSource \} = await generateAndSendPackage/);
   const contentBlock = actionSrc.slice(actionSrc.indexOf('content: {'), actionSrc.indexOf('});', actionSrc.indexOf('content: {')));
-  assert.ok(contentBlock.includes('draftQA:'), 'content payload is missing draftQA');
-  assert.ok(contentBlock.includes('resumeSource:'), 'content payload is missing resumeSource');
+  for (const field of ['draftQA:', 'draftQAFailed:', 'pastedQuestions:', 'resumeSource:']) {
+    assert.ok(contentBlock.includes(field), `content payload is missing ${field}`);
+  }
+});
+
+// ── A failed draft is reported, never silently dropped ───────────────────────
+// The draft-Q&A call failed on every staging run. The user saw nothing at all,
+// because the panel omitted the section — a total failure and never having
+// asked looked identical.
+
+test('generateAndSendPackage flags a draft failure when questions were pasted', () => {
+  assert.match(pkgSrc, /if \(draftQA\.length === 0\) \{\n\s*draftQAFailed = true;/);
+});
+
+test('the panel lists the pasted questions with a retry note when drafting failed', () => {
+  const out = buildPackageHtml({
+    ...CONTENT,
+    draftQA: [],
+    draftQAFailed: true,
+    pastedQuestions: ['Describe a time you led <a> change', 'Why this team?'],
+  });
+  assert.ok(out.includes('From your application form'), 'the section was dropped on failure');
+  assert.ok(out.includes('Describe a time you led &lt;a&gt; change'), 'the pasted question is missing');
+  assert.ok(out.includes('Why this team?'));
+  assert.ok(out.includes("A draft answer couldn't be generated this run — hit Generate Package again to retry."));
+});
+
+test('the retry note is worded for a human and styled as a failure', () => {
+  const out = buildPackageHtml({
+    ...CONTENT, draftQA: [], draftQAFailed: true, pastedQuestions: ['Why this team?'],
+  });
+  assert.ok(out.includes("A draft answer couldn't be generated this run — hit Generate Package again to retry."));
+  assert.match(out, /<div class="a a-failed">/);
+  // And it reaches the clipboard and the download too.
+  const text = JSON.parse(out.match(/var FULL\s+= (".*?");\n/s)[1]);
+  assert.match(text, /A draft answer couldn't be generated this run/);
+  assert.match(text, /Q: Why this team\?/);
+});
+
+test('a successful draft is unaffected by the failure path', () => {
+  const out = buildPackageHtml({
+    ...CONTENT,
+    draftQA: [{ question: 'Why this team?', answer: 'Because the ops problem is the product.' }],
+    draftQAFailed: false,
+    pastedQuestions: ['Why this team?'],
+  });
+  assert.ok(out.includes('Because the ops problem is the product.'));
+  assert.ok(!out.includes("couldn't be generated"));
+  // The .a-failed rule is always in the stylesheet; what must not appear is an
+  // element wearing it.
+  assert.ok(!out.includes('class="a a-failed"'));
+});
+
+test('no section appears when the user never pasted any questions', () => {
+  const out = buildPackageHtml({
+    ...CONTENT, applicationQuestions: [], draftQA: [], draftQAFailed: false, pastedQuestions: [],
+  });
+  assert.doesNotMatch(out, /Application Questions/);
 });
 
 test('the panel renders pasted-form answers and labels both question streams', () => {

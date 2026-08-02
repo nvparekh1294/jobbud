@@ -317,7 +317,7 @@ export default async function handler(req, res) {
       if (wantJson) {
         // Dashboard path: run synchronously, return full package content as JSON.
         try {
-          const { pkg, docUrl, draftQA, resumeSource } = await generateAndSendPackage(job, jobId, { roleTypes, additionalGuidance, applicationQuestions });
+          const { pkg, docUrl, draftQA, draftQAFailed, pastedQuestions, resumeSource } = await generateAndSendPackage(job, jobId, { roleTypes, additionalGuidance, applicationQuestions });
 
           // Persist docUrl (and the possibly-updated description) back to
           // job-status.json as a second, field-safe commit so the dashboard can
@@ -349,6 +349,11 @@ export default async function handler(req, res) {
               // to createGoogleDoc, so without Drive the user never saw the
               // answers to the questions they typed in themselves.
               draftQA: draftQA || [],
+              // When drafting failed, the panel still shows the user's own
+              // pasted questions with a retry note. Omitting the section made a
+              // failure look identical to never having asked.
+              draftQAFailed: !!draftQAFailed,
+              pastedQuestions: pastedQuestions || [],
               // Which language the resume is actually built from, so the panel
               // can print a sentence that is true in all three modes instead of
               // always claiming the bullet bank was used verbatim.

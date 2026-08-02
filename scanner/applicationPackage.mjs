@@ -113,12 +113,71 @@ export function buildBulletSourceBlocks(bulletBank, cvMd) {
 // reply cut off at the token limit is a half-written object: JSON.parse throws a
 // SyntaxError, and the user sees an unexplained 500 with no hint that the cause
 // was length. Exported so the guard is testable without a network round-trip.
+// "Respond with valid JSON only" is a request, not a guarantee. In staging the
+// draft-Q&A call failed on EVERY run with `Unexpected token 'I'` — the model
+// opened with a sentence of prose before the JSON, JSON.parse threw on the
+// first character, and the whole feature silently produced nothing.
+//
+// So: strip fences, try a straight parse, and if that fails carve out the span
+// from the first opening brace/bracket to the matching last closing one and
+// parse that. Returns undefined rather than throwing, so callers decide what a
+// failure means.
+export function parseLooseJson(text) {
+  const cleaned = String(text == null ? '' : text).replace(/```json|```/g, '').trim();
+  if (!cleaned) return undefined;
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    // Prose before and/or after the payload. Anchor on whichever structure
+    // opens first so a top-level array is handled as readily as an object.
+    const objAt = cleaned.indexOf('{');
+    const arrAt = cleaned.indexOf('[');
+    if (objAt === -1 && arrAt === -1) return undefined;
+    const start = objAt === -1 ? arrAt : arrAt === -1 ? objAt : Math.min(objAt, arrAt);
+    const end = cleaned.lastIndexOf(cleaned[start] === '{' ? '}' : ']');
+    if (end <= start) return undefined;
+    try {
+      return JSON.parse(cleaned.slice(start, end + 1));
+    } catch {
+      return undefined;
+    }
+  }
+}
+
 export function parsePackageResponse(data) {
   if (data && data.stop_reason === 'max_tokens') {
     throw new Error('Package generation was cut off before it finished (hit the response length limit). Try again, or shorten the job description and any additional guidance.');
   }
   const text = data?.content?.[0]?.text || '';
-  return JSON.parse(text.replace(/```json|```/g, '').trim());
+  const parsed = parseLooseJson(text);
+  // Still a throw on failure — the package IS the response, so there is nothing
+  // to degrade to. The brace carve-out just means prose no longer causes it.
+  if (parsed === undefined || parsed === null || typeof parsed !== 'object') {
+    throw new Error(`Package generation returned no parseable JSON. First 120 characters of the reply: ${String(text).slice(0, 120)}`);
+  }
+  return parsed;
+}
+
+// Normalize whatever shape came back into [{question, answer}].
+// Accepts {draftResponses: [...]} and a bare top-level array, because a model
+// that has already ignored one formatting instruction may ignore another.
+export function parseDraftQAResponse(rawText) {
+  // The request uses an assistant prefill of '{', so the reply continues from
+  // mid-object; the prefilled attempt is tried first, the raw text second in
+  // case the prefill was ignored or removed.
+  for (const candidate of [`{${rawText == null ? '' : rawText}`, rawText]) {
+    const parsed = parseLooseJson(candidate);
+    if (parsed === undefined) continue;
+    const list = Array.isArray(parsed) ? parsed
+      : (parsed && Array.isArray(parsed.draftResponses)) ? parsed.draftResponses
+      : null;
+    if (!list) continue;
+    return list
+      .filter(qa => qa && typeof qa === 'object')
+      .map(qa => ({ question: String(qa.question || ''), answer: String(qa.answer || '') }))
+      .filter(qa => qa.question || qa.answer);
+  }
+  return null;   // null means "could not parse" — distinct from "parsed, empty"
 }
 
 // ── Measured package quality ─────────────────────────────────────────────────
@@ -1141,6 +1200,14 @@ Respond with exactly this JSON:
 }
 
 Return one entry per question in the same order as the input list.`,
+      }, {
+        // Assistant prefill. Asking for "valid JSON only" was not enough — in
+        // staging this call failed on every run because the model opened with a
+        // sentence of prose. Putting the opening brace in its mouth leaves it
+        // mid-object with nowhere to put a preamble. The fence-strip and the
+        // brace carve-out in parseDraftQAResponse remain as backstops.
+        role: 'assistant',
+        content: '{',
       }],
     }),
   });
@@ -1152,8 +1219,14 @@ Return one entry per question in the same order as the input list.`,
   const data = await response.json();
   console.log('[tokenUsage callClaudeDraftQA]', JSON.stringify(data.usage));
   const text = data.content?.[0]?.text || '';
-  const parsed = JSON.parse(text.replace(/```json|```/g, '').trim());
-  return Array.isArray(parsed.draftResponses) ? parsed.draftResponses : [];
+  const parsed = parseDraftQAResponse(text);
+  if (parsed === null) {
+    // Log the shape, not just the failure — the previous version reported only
+    // "Unexpected token 'I'", which said nothing about what actually came back.
+    console.warn(`[appPkg] Draft Q&A: could not parse the model reply. First 120 characters: ${text.slice(0, 120)}`);
+    return [];
+  }
+  return parsed;
 }
 
 export async function generateAndSendPackage(job, jobId, options = {}) {
@@ -1235,6 +1308,7 @@ export async function generateAndSendPackage(job, jobId, options = {}) {
   // Generate draft responses for application questions, if any were pasted in.
   // This is a separate Sonnet call — non-fatal if it fails.
   let draftQA = [];
+  let draftQAFailed = false;
   const parsedQuestions = parseApplicationQuestions(rawApplicationQuestions);
   if (parsedQuestions.length > 0) {
     console.log(`[appPkg] Generating draft responses for ${parsedQuestions.length} application question(s)`);
@@ -1242,8 +1316,15 @@ export async function generateAndSendPackage(job, jobId, options = {}) {
       draftQA = await callClaudeDraftQA(anthropicApiKey, job, articleDigest, parsedQuestions);
       console.log(`[appPkg] Draft Q&A generated (${draftQA.length} response(s))`);
     } catch (err) {
-      console.warn(`[appPkg] Draft Q&A generation failed — omitting from doc: ${err.message}`);
+      console.warn(`[appPkg] Draft Q&A generation failed: ${err.message}`);
       draftQA = [];
+    }
+    // The user pasted questions and got nothing back. That must reach them —
+    // the old behaviour just dropped the section, so the failure looked exactly
+    // like never having asked.
+    if (draftQA.length === 0) {
+      draftQAFailed = true;
+      console.warn(`[appPkg] Draft Q&A produced no answers for ${parsedQuestions.length} pasted question(s) — surfacing the failure in the package`);
     }
   }
 
@@ -1266,5 +1347,9 @@ export async function generateAndSendPackage(job, jobId, options = {}) {
   // and nowhere else, so a user without Drive configured paid for answers to the
   // questions THEY pasted in and never saw them — the same way the ATS analysis
   // used to be dropped.
-  return { pkg, docUrl, draftQA, resumeSource };
+  // pastedQuestions is echoed back so the panel can list the user's own
+  // questions when no answers could be drafted for them. The server already
+  // parsed them out of the raw paste; re-deriving that client-side would be a
+  // second copy of parseApplicationQuestions to keep in step.
+  return { pkg, docUrl, draftQA, draftQAFailed, pastedQuestions: parsedQuestions, resumeSource };
 }

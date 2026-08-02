@@ -16,6 +16,9 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  parseLooseJson,
+  parseDraftQAResponse,
+  parsePackageResponse,
   findPlaceholders,
   computeKeywordCoverage,
   computePackageScore,
@@ -25,6 +28,78 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkgSrc = readFileSync(join(__dirname, '..', 'scanner', 'applicationPackage.mjs'), 'utf8');
+
+// ── Tolerating a model that will not just answer in JSON ─────────────────────
+// The draft-Q&A call failed on EVERY staging run with `Unexpected token 'I'`:
+// the model opened with a sentence of prose despite being told to return JSON
+// only, JSON.parse threw on the first character, and the user saw nothing.
+
+const QA = [{ question: 'Q1', answer: 'A1' }];
+
+test('parseDraftQAResponse survives prose before the JSON', () => {
+  const raw = 'I will draft these for you.\n\n{"draftResponses":[{"question":"Q1","answer":"A1"}]}';
+  assert.deepEqual(parseDraftQAResponse(raw), QA);
+});
+
+test('parseDraftQAResponse reads the assistant-prefill continuation', () => {
+  // The request now puts '{' in the assistant's mouth, so the reply starts
+  // mid-object and is only valid once that brace is put back.
+  assert.deepEqual(parseDraftQAResponse('"draftResponses":[{"question":"Q1","answer":"A1"}]}'), QA);
+});
+
+test('parseDraftQAResponse strips markdown fences', () => {
+  assert.deepEqual(parseDraftQAResponse('```json\n{"draftResponses":[{"question":"Q1","answer":"A1"}]}\n```'), QA);
+});
+
+test('parseDraftQAResponse accepts a bare top-level array', () => {
+  assert.deepEqual(parseDraftQAResponse('[{"question":"Q1","answer":"A1"}]'), QA);
+  // Even wrapped in prose on both sides.
+  assert.deepEqual(parseDraftQAResponse('Sure! [{"question":"Q1","answer":"A1"}] Hope that helps.'), QA);
+});
+
+test('parseDraftQAResponse returns null — not [] — when nothing parses', () => {
+  // null is "could not parse", which the caller logs. An empty array would be
+  // indistinguishable from a model that legitimately had nothing to say.
+  assert.equal(parseDraftQAResponse('I am unable to help with that request.'), null);
+  assert.equal(parseDraftQAResponse(''), null);
+  assert.equal(parseDraftQAResponse(null), null);
+});
+
+test('parseDraftQAResponse drops junk entries but keeps usable ones', () => {
+  const raw = '{"draftResponses":[{"question":"Q1","answer":"A1"},null,"nope",{"question":"","answer":""}]}';
+  assert.deepEqual(parseDraftQAResponse(raw), QA);
+});
+
+test('callClaudeDraftQA logs the reply shape when it cannot parse', () => {
+  // The old log said only "Unexpected token 'I'", which told the next debugging
+  // session nothing about what actually came back.
+  assert.match(pkgSrc, /could not parse the model reply\. First 120 characters: \$\{text\.slice\(0, 120\)\}/);
+  assert.match(pkgSrc, /role: 'assistant',\n\s*content: '\{',/);
+});
+
+test('parseLooseJson carves the payload out of surrounding prose', () => {
+  assert.deepEqual(parseLooseJson('Here you go: {"a":1} — enjoy'), { a: 1 });
+  assert.deepEqual(parseLooseJson('```json\n{"a":1}\n```'), { a: 1 });
+  assert.deepEqual(parseLooseJson('[1,2]'), [1, 2]);
+  assert.equal(parseLooseJson('no json here'), undefined);
+  assert.equal(parseLooseJson(''), undefined);
+});
+
+// The main package parse would have choked on exactly the same pattern.
+test('parsePackageResponse also tolerates a prose prefix', () => {
+  const data = { stop_reason: 'end_turn', content: [{ text: 'Here is the package:\n{"resume":"done"}' }] };
+  assert.deepEqual(parsePackageResponse(data), { resume: 'done' });
+});
+
+test('parsePackageResponse still throws on truncation, before anything else', () => {
+  const truncated = { stop_reason: 'max_tokens', content: [{ text: '{"resume":"half a jso' }] };
+  assert.throws(() => parsePackageResponse(truncated), /cut off before it finished/);
+});
+
+test('parsePackageResponse reports the reply shape when nothing parses', () => {
+  const junk = { stop_reason: 'end_turn', content: [{ text: 'I cannot help with that.' }] };
+  assert.throws(() => parsePackageResponse(junk), /no parseable JSON.*I cannot help with that\./s);
+});
 
 // ── Placeholder detection ────────────────────────────────────────────────────
 
