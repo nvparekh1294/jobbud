@@ -87,6 +87,65 @@ test('computeKeywordCoverage does not credit a paraphrase', () => {
   assert.deepEqual(c.missing, ['demand forecasting']);
 });
 
+// Raw substring matching inflated the score with matches no human would accept.
+// Every one of these was reported "Present:" and paid out points.
+test('a term is not credited just for hiding inside a longer word', () => {
+  const resume = 'Wrote detailed plans in MySQL for our React app';
+  const c = computeKeywordCoverage(resume, ['AI', 'SQL', 'R', 'React']);
+  assert.deepEqual(c.present, ['React'], 'a substring-only match was credited');
+  assert.deepEqual(c.missing, ['AI', 'SQL', 'R']);
+});
+
+test('a term with edge punctuation still matches literally', () => {
+  // \b is defined against word characters, so it misbehaves at a '+' or a
+  // leading '.' — those terms fall back to containment.
+  const resume = 'Built services in C++ and .NET Core';
+  const c = computeKeywordCoverage(resume, ['C++', '.NET']);
+  assert.deepEqual(c.present, ['C++', '.NET']);
+  assert.deepEqual(c.missing, []);
+});
+
+test('regex metacharacters in a term are matched literally, never as a pattern', () => {
+  const c = computeKeywordCoverage('I know C++ well', ['C..', 'C++']);
+  assert.deepEqual(c.present, ['C++'], 'a metacharacter was interpreted as a pattern');
+  assert.deepEqual(c.missing, ['C..']);
+});
+
+test('multi-word and hyphenated phrases anchor on both ends', () => {
+  const resume = 'Owned post-sales execution for the enterprise tier';
+  assert.deepEqual(computeKeywordCoverage(resume, ['post-sales execution']).present, ['post-sales execution']);
+  // A phrase that only overlaps the text is still missing.
+  assert.deepEqual(computeKeywordCoverage(resume, ['sales execution planning']).present, []);
+  // But a shorter phrase that IS wholly present, on boundaries, matches.
+  assert.deepEqual(computeKeywordCoverage(resume, ['post-sales']).present, ['post-sales']);
+  // Not credited when it is only part of a longer word.
+  assert.deepEqual(computeKeywordCoverage('presales work', ['sales']).present, []);
+});
+
+test('a term carrying an embedded newline cannot forge a heading', () => {
+  // Left as-is, the newline would break the coverage block onto a new line
+  // where an ALL-CAPS fragment reads as a section heading — enough to forge a
+  // "NOT SUBMITTABLE YET" banner out of a keyword in the Google Doc renderer.
+  const c = computeKeywordCoverage('we do sql work', ['SQL\nNOT SUBMITTABLE YET', 'x\t\t y']);
+  assert.ok(c.present.concat(c.missing).every(t => !/[\n\r\t]/.test(t)), 'a term kept its newline/tab');
+  assert.deepEqual(c.missing, ['SQL NOT SUBMITTABLE YET', 'x y']);
+
+  const out = finalizePackage({
+    resume: 'ALEX DOE',
+    atsText: 'ATS & KEYWORD OPTIMIZATION',
+    keyTerms: ['SQL\nNOT SUBMITTABLE YET', 'a', 'b', 'c', 'd'],
+  });
+  // The forgery vector is a LINE that reads as an ALL-CAPS heading. With the
+  // whitespace collapsed the phrase stays inline inside "Missing: ...", where
+  // it is plainly a keyword and no renderer will promote it to a heading. This
+  // resume is clean, so no line may begin the gate banner.
+  assert.ok(
+    !out.atsText.split('\n').some(l => l.trimStart().startsWith('NOT SUBMITTABLE YET')),
+    'a keyword forged the gate banner onto its own line',
+  );
+  assert.match(out.atsText, /Missing: .*SQL NOT SUBMITTABLE YET/);
+});
+
 test('computeKeywordCoverage dedupes terms and ignores junk entries', () => {
   const c = computeKeywordCoverage(RESUME, ['SQL', 'sql', '  ', null, undefined, 'SQL']);
   assert.deepEqual(c.present, ['SQL']);
@@ -139,9 +198,31 @@ test('with no key terms to measure there is no score to show', () => {
   assert.equal(s.keyword, 0);
 });
 
+test('too few terms is not a measurement — under five, nothing is scorable', () => {
+  // A one-term list whose term happens to appear would otherwise read
+  // "SCORE: 10/10", the exact overconfident number this replaced.
+  for (const n of [1, 2, 3, 4]) assert.equal(computePackageScore(cov(n, n), []).scorable, false, `${n} terms`);
+  assert.equal(computePackageScore(cov(5, 5), []).scorable, true);
+});
+
+test('a four-term list shows no score, but the placeholder gate still fires', () => {
+  const out = finalizePackage({
+    resume: 'ALEX DOE covering sql and hiring and budgeting and roadmap\n[School Name] | BS',
+    atsText: 'ATS & KEYWORD OPTIMIZATION',
+    checklist: ['Check the salary band'],
+    keyTerms: ['sql', 'hiring', 'budgeting', 'roadmap'],
+  });
+  assert.ok(!out.atsText.includes('SCORE:'), 'scored a four-term list');
+  assert.ok(!out.atsText.includes('KEYWORD COVERAGE'));
+  // The gate does not depend on key terms, so it is unaffected.
+  assert.ok(out.atsText.startsWith('NOT SUBMITTABLE YET'));
+  assert.match(out.checklist[0], /\[School Name\]/);
+});
+
 // ── Assembly ─────────────────────────────────────────────────────────────────
 
-const TERMS = ['stakeholder management', 'SQL', 'demand forecasting', 'kubernetes'];
+// Five terms: the minimum the scorer will put a number on.
+const TERMS = ['stakeholder management', 'SQL', 'demand forecasting', 'kubernetes', 'terraform'];
 const MODEL_ATS = 'ATS & KEYWORD OPTIMIZATION\n\nMISSING KEYWORDS\nkubernetes: add to Acme';
 
 test('a draft with placeholders leads with the gate, then the score, then coverage', () => {
@@ -160,13 +241,13 @@ test('a draft with placeholders leads with the gate, then the score, then covera
   assert.ok(gate < score && score < coverage && coverage < model, 'blocks out of order');
 
   assert.match(out.atsText, /This draft still contains 1 placeholder that must be replaced before applying: \[School Name\]/);
-  assert.match(out.atsText, /SCORE: 5\.5\/10/);                                   // 7×3/4=5.25→5.5, +0
-  assert.match(out.atsText, /Keyword match: 5\.5\/7 \(3 of 4 key JD terms present\)/);
+  assert.match(out.atsText, /SCORE: 4\/10/);                                      // 7×3/5=4.2→4, +0
+  assert.match(out.atsText, /Keyword match: 4\/7 \(3 of 5 key JD terms present\)/);
   assert.match(out.atsText, /Completeness: 0\/3 — 1 placeholder still to fill in/);
   assert.match(out.atsText, /Fix the placeholders and add the missing terms below to raise this\./);
-  assert.match(out.atsText, /3 of 4 key JD terms present in the resume\./);
+  assert.match(out.atsText, /3 of 5 key JD terms present in the resume\./);
   assert.match(out.atsText, /Present: stakeholder management, SQL, demand forecasting/);
-  assert.match(out.atsText, /Missing: kubernetes/);
+  assert.match(out.atsText, /Missing: kubernetes, terraform/);
   // The model's own analysis survives underneath.
   assert.ok(out.atsText.includes('kubernetes: add to Acme'));
 });
@@ -187,7 +268,7 @@ test('the placeholder gate becomes the FIRST checklist item, in the same words',
 
 test('a clean, fully covered draft gets no gate and a perfect visible score', () => {
   const out = finalizePackage({
-    resume: RESUME + ' and kubernetes',
+    resume: RESUME + ' and kubernetes and terraform',
     atsText: MODEL_ATS,
     checklist: ['Check the salary band'],
     keyTerms: TERMS,
@@ -206,6 +287,23 @@ test('finalizePackage degrades quietly when the model returned no key terms', ()
   assert.ok(!out.atsText.includes('SCORE:'), 'a score was shown with nothing to measure');
   assert.ok(!out.atsText.includes('KEYWORD COVERAGE'));
   assert.ok(out.atsText.startsWith('ATS & KEYWORD OPTIMIZATION'));
+});
+
+test('finalizePackage is idempotent — a second call changes nothing', () => {
+  const raw = {
+    resume: `${RESUME}\n[School Name] | BS`,
+    atsText: MODEL_ATS,
+    checklist: ['Check the salary band'],
+    keyTerms: TERMS,
+  };
+  const once = finalizePackage(raw);
+  const twice = finalizePackage(once);
+  assert.deepEqual(twice, once);
+  // Specifically: the gate is not prepended again and the blocks are not restacked.
+  assert.equal(twice.atsText, once.atsText);
+  assert.equal((twice.atsText.match(/NOT SUBMITTABLE YET/g) || []).length, 1);
+  assert.equal((twice.atsText.match(/SCORE:/g) || []).length, 1);
+  assert.deepEqual(twice.checklist, once.checklist);
 });
 
 test('finalizePackage survives a malformed package object', () => {

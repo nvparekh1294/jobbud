@@ -150,6 +150,13 @@ export const PLACEHOLDER_RE = /\[[^\]\n]{1,60}\]/g;
 const KEYWORD_POINTS = 7;
 const COMPLETENESS_POINTS = 3;
 
+// Below this many key terms the coverage percentage is not a measurement, it is
+// noise: a one-term list whose single term happens to appear would read
+// "SCORE: 10/10" — the exact overconfident number this whole mechanism exists to
+// replace. Too few terms and the score and coverage blocks are simply omitted;
+// the placeholder gate still fires, because that one does not depend on terms.
+const MIN_SCORABLE_TERMS = 5;
+
 export function findPlaceholders(resumeText) {
   const found = String(resumeText || '').match(PLACEHOLDER_RE) || [];
   const seen = new Set();
@@ -163,22 +170,48 @@ export function findPlaceholders(resumeText) {
   return out;
 }
 
-// Literal, case-insensitive containment. Deliberately not fuzzy: a term the
-// resume only paraphrases has not been matched by a keyword filter either, and
-// a generous check here would rebuild the same comfortable fiction the invented
-// score was.
+const escapeRegExp = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Does the resume actually contain this term?
+//
+// Raw substring matching was inflating the score with matches no human would
+// accept: "AI" inside "detAIled", "SQL" inside "MySQL", and a term like "R"
+// matching essentially every resume ever written. Every one of those became a
+// confident "Present:" line and points on a score.
+//
+// So an alphanumeric term is matched on word boundaries. A term whose own first
+// or last character is not a word character — "C++", ".NET" — falls back to
+// literal containment, because \b is defined relative to word characters and
+// would misbehave at those edges (\b after the '+' in "C++" demands a word
+// character follow it, so "C++ developer" would not match). Internal
+// punctuation is escaped and matched literally either way, so multi-word and
+// hyphenated phrases like "post-sales execution" still anchor on both ends.
+function resumeContainsTerm(resumeText, term) {
+  if (/^\w/.test(term) && /\w$/.test(term)) {
+    return new RegExp(`\\b${escapeRegExp(term)}\\b`, 'i').test(resumeText);
+  }
+  return resumeText.toLowerCase().includes(term.toLowerCase());
+}
+
+// Deliberately not fuzzy: a term the resume only paraphrases has not been
+// matched by a keyword filter either, and a generous check here would rebuild
+// the same comfortable fiction the invented score was.
 export function computeKeywordCoverage(resumeText, keyTerms) {
-  const haystack = String(resumeText || '').toLowerCase();
+  const haystack = String(resumeText || '');
   const present = [];
   const missing = [];
   const seen = new Set();
   for (const raw of Array.isArray(keyTerms) ? keyTerms : []) {
-    const term = String(raw == null ? '' : raw).trim();
+    // Collapse internal whitespace, not just the ends. A term carrying an
+    // embedded newline would break the coverage block onto its own line, where
+    // an ALL-CAPS fragment reads as a heading — in the Google Doc renderer that
+    // is enough to forge a "NOT SUBMITTABLE YET" banner out of a keyword.
+    const term = String(raw == null ? '' : raw).replace(/\s+/g, ' ').trim();
     if (!term) continue;
     const key = term.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    (haystack.includes(key) ? present : missing).push(term);
+    (resumeContainsTerm(haystack, term) ? present : missing).push(term);
   }
   return { present, missing, total: present.length + missing.length };
 }
@@ -200,7 +233,7 @@ export function computePackageScore(coverage, placeholders) {
     keyword,
     completeness,
     total: keyword + completeness,
-    scorable: total > 0,
+    scorable: total >= MIN_SCORABLE_TERMS,
   };
 }
 
@@ -214,6 +247,12 @@ export function placeholderGateLine(placeholders) {
 // downstream — the panel, the plain-text copy, the download, and the Google Doc
 // (buildResumeRequests renders atsText verbatim) — inherits from here.
 export function finalizePackage(pkg) {
+  // Idempotence guard. There is one call site today, but a second one would
+  // double-prepend the gate and re-stack the score and coverage blocks on top
+  // of the ones already there — a silent, plausible-looking corruption rather
+  // than a crash. Cheap to make impossible.
+  if (pkg && pkg._finalized) return pkg;
+
   const resumeText = pkg?.resume || '';
   const placeholders = findPlaceholders(resumeText);
   const coverage = computeKeywordCoverage(resumeText, pkg?.keyTerms);
@@ -256,7 +295,7 @@ export function finalizePackage(pkg) {
   const checklist = Array.isArray(pkg?.checklist) ? [...pkg.checklist] : [];
   if (placeholders.length) checklist.unshift(placeholderGateLine(placeholders));
 
-  return { ...pkg, atsText, checklist, placeholders, keywordCoverage: coverage, score };
+  return { ...pkg, atsText, checklist, placeholders, keywordCoverage: coverage, score, _finalized: true };
 }
 
 async function callClaude(anthropicApiKey, articleDigest, bulletBank, job, roleTypes, additionalGuidance, memoryBlock = '', cvMd = '') {
