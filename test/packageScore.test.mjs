@@ -32,21 +32,19 @@ test('findPlaceholders finds the bracketed tokens a draft must not ship with', (
   const resume = [
     '[YOUR NAME]',
     'Austin, TX | [Phone] | alex@example.com',
-    '• Cut spend by [ADD: specific number]% across [NN] contracts',
+    '• Cut spend by [ADD: specific number]% across [X] contracts',
     '[School Name] | BS Economics',
   ].join('\n');
   assert.deepEqual(findPlaceholders(resume), [
-    '[YOUR NAME]', '[Phone]', '[ADD: specific number]', '[NN]', '[School Name]',
+    '[YOUR NAME]', '[Phone]', '[ADD: specific number]', '[X]', '[School Name]',
   ]);
 });
 
-// KNOWN GAP, pinned deliberately rather than left as a surprise: the specified
-// pattern requires 2-60 characters between the brackets, so a single-character
-// placeholder like [X] is NOT caught. Widening to {1,60} would catch it at the
-// cost of also matching things like a stray [1]. Flagged for the owner; the
-// specified bound is what ships until they choose.
-test('single-character placeholders are a known blind spot of the 2-60 bound', () => {
-  assert.deepEqual(findPlaceholders('Grew revenue [X]% in one year'), []);
+// A one-character placeholder is the most common AI-drafting tell of all, and
+// an unfilled [X]% is exactly the not-submittable case.
+test('single-character placeholders are caught', () => {
+  assert.deepEqual(findPlaceholders('Grew revenue [X]% in one year'), ['[X]']);
+  assert.deepEqual(findPlaceholders('Led [N] teams across [Y] regions'), ['[N]', '[Y]']);
 });
 
 test('findPlaceholders dedupes case-insensitively, keeping first appearance', () => {
@@ -61,10 +59,10 @@ test('findPlaceholders leaves a clean resume alone', () => {
   assert.deepEqual(findPlaceholders(null), []);
 });
 
-test('findPlaceholders will not swallow a paragraph or match a bare pair', () => {
-  // Needs 2-60 chars and no newline, so [] and [x] are ignored and an
-  // unclosed bracket cannot run across lines.
-  assert.deepEqual(findPlaceholders('[] and [a]'), []);
+test('findPlaceholders will not swallow a paragraph or match an empty pair', () => {
+  // Needs 1-60 chars and no newline, so an empty [] is ignored, a single
+  // character counts, and an unclosed bracket cannot run across lines.
+  assert.deepEqual(findPlaceholders('[] and [a]'), ['[a]']);
   assert.deepEqual(findPlaceholders('[open\nclosed]'), []);
   assert.deepEqual(findPlaceholders(`[${'z'.repeat(61)}]`), []);
   assert.deepEqual(findPlaceholders(`[${'z'.repeat(60)}]`), [`[${'z'.repeat(60)}]`]);

@@ -135,9 +135,14 @@ export function parsePackageResponse(data) {
 // a qualitative FIT READ; it never sees or influences the digit.
 
 // A bracketed placeholder the draft must not ship with: [YOUR NAME],
-// [School Name], [ADD: specific number], [X]%. Two to sixty characters, no
+// [School Name], [ADD: specific number], [X]%. One to sixty characters, and no
 // newline, so it cannot swallow a paragraph.
-export const PLACEHOLDER_RE = /\[[^\]\n]{2,60}\]/g;
+//
+// The lower bound is 1, not 2, so single-character placeholders are caught:
+// "Grew revenue [X]% in one year" is precisely the not-submittable case, and a
+// resume containing a genuine one-character bracket token is vanishingly rare
+// next to that.
+export const PLACEHOLDER_RE = /\[[^\]\n]{1,60}\]/g;
 
 // Points available to each measured component. Keyword coverage is a matter of
 // degree; completeness is not — a resume with [YOUR NAME] in it is not
