@@ -290,6 +290,145 @@ test('the bullet-bank file itself carries the accuracy warning', () => {
   assert.match(prompt, /Review and edit each one before using it anywhere/);
 });
 
+// ── The resume is typeset, not dumped into a <pre> ───────────────────────────
+// The classification rules mirror classifyResumeLine in
+// scanner/applicationPackage.mjs, which is what formats the Google Doc. These
+// tests pin the panel to the same structure so the two cannot drift apart
+// unnoticed.
+
+const TYPESET_RESUME = [
+  'ALEX DOE',
+  'Austin, TX | 512-555-0100 | alex@example.com | linkedin.com/in/alexdoe',
+  '',
+  'PROFESSIONAL EXPERIENCE',
+  '',
+  'Acme Corp | Senior Operations Manager',
+  'Austin, TX | 2021 - Present',
+  '• Redesigned the quarterly planning process across 6 teams, cutting cycle time 40%',
+  '• Built the vendor scorecard that consolidated 14 contracts into 4',
+  '',
+  'Beta Industries | Strategy Associate',
+  'New York, NY | March 2018 - 2021',
+  '• Led the competitive teardown that reset pricing for the enterprise tier',
+  '',
+  '• Select Investment Experience',
+  '• $40M Series B in Northwind Robotics (warehouse automation): built the diligence model',
+  '',
+  'EDUCATION',
+  'State University | BS Economics | magna cum laude',
+  '',
+  'PERSONAL',
+  'Interests: distance swimming, hand-built espresso',
+  'Languages: English, Portuguese',
+].join('\n');
+
+const escHtml = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// The rendered resume block only — not the <script>, where the same text also
+// appears verbatim as a JS string literal.
+function resumeBlock(out) {
+  const start = out.indexOf('<div id="resume"');
+  assert.notEqual(start, -1, 'the typeset resume block is missing');
+  return out.slice(start, out.indexOf('</section>', start));
+}
+
+test('the typeset resume keeps every line of the plain text, in order', () => {
+  const block = resumeBlock(buildPackageHtml({ ...CONTENT, resume: TYPESET_RESUME }));
+  let cursor = -1;
+  for (const raw of TYPESET_RESUME.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    // The • glyph becomes the list marker that CSS draws back in. The verbatim
+    // text, glyph and all, still reaches the clipboard through RESUME — pinned
+    // by the Copy Resume test below.
+    const expected = escHtml(line.replace(/^•\s*/, ''));
+    const at = block.indexOf(expected, cursor);
+    assert.notEqual(at, -1, `line missing from the typeset resume: ${line}`);
+    assert.ok(at > cursor, `line rendered out of order: ${line}`);
+    cursor = at;
+  }
+});
+
+test('the typeset resume uses real document structure, not a monospace dump', () => {
+  const block = resumeBlock(buildPackageHtml({ ...CONTENT, resume: TYPESET_RESUME }));
+  assert.ok(!block.includes('<pre'), 'the resume is still rendered as preformatted text');
+
+  // Name in a header element, contact line muted beneath it.
+  assert.match(block, /<h1 class="r-name">ALEX DOE<\/h1>/);
+  assert.match(block, /<p class="r-contact">Austin, TX \| 512-555-0100/);
+
+  // ALL-CAPS lines are section headings.
+  for (const s of ['PROFESSIONAL EXPERIENCE', 'EDUCATION', 'PERSONAL']) {
+    assert.ok(block.includes(`<h3 class="r-section">${s}</h3>`), `${s} did not render as a section heading`);
+  }
+
+  // "Company | Role" is bold, "City, State | Dates" is the muted line beneath.
+  assert.match(block, /<p class="r-role">Acme Corp \| Senior Operations Manager<\/p>\n<p class="r-meta">Austin, TX \| 2021 - Present<\/p>/);
+  assert.match(block, /<p class="r-role">Beta Industries \| Strategy Associate<\/p>\n<p class="r-meta">New York, NY \| March 2018 - 2021<\/p>/);
+
+  // Bullets are a real list.
+  assert.match(block, /<ul class="r-bullets">/);
+  assert.match(block, /<li>Redesigned the quarterly planning process across 6 teams, cutting cycle time 40%<\/li>/);
+
+  // The Select Investment Experience LABEL is a label, never a section header
+  // or a bullet; the deal beneath it is a sub-bullet.
+  assert.match(block, /<p class="r-invest">Select Investment Experience<\/p>/);
+  assert.ok(!block.includes('<h3 class="r-section">• Select Investment Experience'));
+  assert.match(block, /<li class="r-deal">\$40M Series B in Northwind Robotics/);
+
+  // A line with pipes inside EDUCATION is body text, not a role title — the
+  // sibling classifier's currentSection rule.
+  assert.match(block, /<p class="r-body">State University \| BS Economics \| magna cum laude<\/p>/);
+  assert.match(block, /<p class="r-personal">Interests: distance swimming/);
+});
+
+test('an unclassifiable line becomes a plain paragraph rather than vanishing', () => {
+  const odd = 'ALEX DOE\ncontact line here\n\njust some prose that fits no rule at all\n';
+  const block = resumeBlock(buildPackageHtml({ ...CONTENT, resume: odd }));
+  assert.match(block, /<p class="r-body">just some prose that fits no rule at all<\/p>/);
+});
+
+test('Copy Resume still copies the PLAIN text, glyphs and line breaks intact', () => {
+  const out = buildPackageHtml({ ...CONTENT, resume: TYPESET_RESUME });
+  const m = out.match(/var RESUME\s+= (".*?");\n/s);
+  assert.ok(m, 'RESUME payload not embedded');
+  assert.equal(JSON.parse(m[1]), TYPESET_RESUME);
+  // The button is still wired to the plain payload, not to the typeset markup.
+  assert.match(out, /onclick="copyResume\(\)"/);
+  assert.match(out, /function copyResume\(\)\{copyText\(RESUME\)\}/);
+});
+
+test('hostile resume content is escaped in the typeset view', () => {
+  const nasty = '</div><img src=x onerror=alert(1)>\n"quoted" & <b>bold</b>\n• </ul><script>alert(2)</script>';
+  const block = resumeBlock(buildPackageHtml({ ...CONTENT, resume: nasty }));
+  assert.ok(!block.includes('<img src=x'), 'raw markup survived into the typeset resume');
+  assert.ok(!block.includes('<b>bold</b>'));
+  assert.ok(!block.includes('<script>alert(2)'));
+  assert.ok(block.includes('&lt;img src=x'));
+  assert.ok(block.includes('&lt;b&gt;bold&lt;/b&gt;'));
+  // Only the renderer's own tags remain.
+  assert.match(block, /<li>&lt;\/ul&gt;&lt;script&gt;alert\(2\)/);
+});
+
+test('print CSS turns the resume section into a resume page', () => {
+  const out = buildPackageHtml({ ...CONTENT, resume: TYPESET_RESUME });
+  const print = out.slice(out.indexOf('@media print'), out.indexOf('</style>'));
+  assert.match(print, /@page\{margin:0\.5in\}/);
+  assert.match(print, /section\.resume\{[^}]*page-break-after:always/);   // its own page
+  assert.match(print, /section\.resume h2\{display:none\}/);              // no card label
+  assert.match(print, /\.r-doc\{font-family:Georgia/);                    // serif document face
+  assert.match(print, /\.r-name\{font-size:19pt/);                        // name prominent
+  // The other sections keep the treatment they already had.
+  assert.match(print, /section\{border:none;border-radius:0/);
+  assert.match(print, /\.topbar,\.toast\{display:none !important\}/);
+});
+
+test('the panel renderer points at its sibling so the two stay in step', () => {
+  const fn = extractFunction(html, 'buildPackageHtml');
+  assert.match(fn, /SIBLING: scanner\/applicationPackage\.mjs/);
+  assert.match(fn, /classifyResumeLine/);
+});
+
 // ── The panel is no longer bypassed when Drive is configured ──────────────────
 
 test('submitRoleModal renders the panel even when a Google Doc was created', () => {

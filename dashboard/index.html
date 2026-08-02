@@ -3229,6 +3229,87 @@
   function buildPackageHtml(content) {
     const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+    // ── Typeset resume ────────────────────────────────────────────────────────
+    // Without Google Drive the resume used to be dumped into a monospace <pre>,
+    // so the only users who ever saw a real resume document were the ones with
+    // Drive configured. These two functions give the panel — and the downloaded
+    // .html, and its print-to-PDF — the same structure the Doc gets.
+    //
+    // SIBLING: scanner/applicationPackage.mjs, classifyResumeLine() and
+    // buildResumeRequests(). classifyResumeLineForPanel below is a port of
+    // classifyResumeLine's RESUME branch and must be kept in step with it — if a
+    // rule changes there, change it here too. The ATS and application-question
+    // branches of the original are deliberately absent: this renderer is only
+    // ever handed content.resume, and the panel gives those blocks their own
+    // sections. Pure string work either way — nothing is fetched.
+    //
+    // One deliberate divergence: the Doc path rewrites ' -- ' to '; ' before
+    // classifying. The panel does not, because it must stay a faithful
+    // rendering of the exact text Copy Resume puts on the clipboard.
+    function classifyResumeLineForPanel(trimmed, nonBlankCount, currentSection) {
+      if (trimmed.startsWith('⚠ WARNING:')) return 'warning';
+      if (nonBlankCount === 1) return 'name';
+      if (nonBlankCount === 2) return 'contact';
+      // Checked before the bullet and all-caps tests, exactly as in the sibling,
+      // so it never renders as a section header.
+      if (trimmed.replace(/^•\s*/, '').replace(/:\s*$/, '').trim().toLowerCase() === 'select investment experience') {
+        return 'investment_label';
+      }
+      if (trimmed.startsWith('•')) return /^•\s*\$/.test(trimmed) ? 'deal_header' : 'bullet';
+      if (trimmed.startsWith('$')) return 'deal_header';
+      if (/^(Interests|Global Experience|Languages|Community|Angel):/.test(trimmed)) return 'personal_line';
+      const isAllCaps = trimmed === trimmed.toUpperCase() && /[A-Z]{3,}/.test(trimmed) && !trimmed.includes('@');
+      if (isAllCaps) return 'section_header';
+      if (currentSection === 'EDUCATION' || currentSection === 'PERSONAL') return 'body';
+      if (trimmed.includes('|')) {
+        const hasDate = /\b(20\d{2}|19\d{2}|January|February|March|April|May|June|July|August|September|October|November|December|Present)\b/.test(trimmed);
+        return hasDate ? 'location_date' : 'role_title';
+      }
+      return 'body';
+    }
+
+    // Every non-blank line is emitted, in order; 'body' is the classifier's
+    // default, so an unrecognized line becomes a plain paragraph rather than
+    // being dropped. Blank lines carry no text — they only close a bullet list.
+    function renderResume(text) {
+      const lines = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+      const out = [];
+      let nonBlank = 0, section = null, inList = false;
+      const closeList = () => { if (inList) { out.push('</ul>'); inList = false; } };
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) { closeList(); continue; }
+        nonBlank++;
+        const type = classifyResumeLineForPanel(trimmed, nonBlank, section);
+        if (type === 'section_header') section = trimmed;
+
+        if (type === 'bullet' || type === 'deal_header') {
+          if (!inList) { out.push('<ul class="r-bullets">'); inList = true; }
+          // The • glyph becomes the list marker, which CSS draws back in — the
+          // verbatim text with its glyph still goes to the clipboard via RESUME.
+          out.push(`<li${type === 'deal_header' ? ' class="r-deal"' : ''}>${esc(trimmed.replace(/^•\s*/, ''))}</li>`);
+          continue;
+        }
+
+        closeList();
+        const body = esc(type === 'investment_label' ? trimmed.replace(/^•\s*/, '') : trimmed);
+        if (type === 'name')                  out.push(`<h1 class="r-name">${body}</h1>`);
+        else if (type === 'contact')          out.push(`<p class="r-contact">${body}</p>`);
+        else if (type === 'section_header')   out.push(`<h3 class="r-section">${body}</h3>`);
+        else if (type === 'role_title')       out.push(`<p class="r-role">${body}</p>`);
+        else if (type === 'location_date')    out.push(`<p class="r-meta">${body}</p>`);
+        else if (type === 'investment_label') out.push(`<p class="r-invest">${body}</p>`);
+        else if (type === 'personal_line')    out.push(`<p class="r-personal">${body}</p>`);
+        else if (type === 'warning')          out.push(`<p class="r-warning">${body}</p>`);
+        else                                  out.push(`<p class="r-body">${body}</p>`);
+      }
+      closeList();
+      return out.join('\n');
+    }
+
+    const resumeHtml = renderResume(content.resume || '');
+
     // Two independent streams of questions, and they must stay distinguishable:
     // draftQA answers the questions the USER pasted into the modal, while
     // applicationQuestions are the ones the model found in the job description.
@@ -3377,6 +3458,19 @@
     section{background:#fff;border:1px solid #e5e5e5;border-radius:10px;padding:24px 28px}
     h2{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:16px}
     pre{font-family:'Courier New',Courier,monospace;font-size:12.5px;line-height:1.75;white-space:pre-wrap;word-wrap:break-word;color:#1a1a1a}
+    /* Typeset resume — mirrors the Google Doc layout built by buildResumeRequests. */
+    .r-doc{color:#1a1a1a}
+    .r-name{font-size:22px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;line-height:1.2;margin:0 0 5px}
+    .r-contact{font-size:12px;color:#666;margin:0 0 18px}
+    .r-section{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:#111;margin:20px 0 8px;padding-bottom:4px;border-bottom:1px solid #e5e5e5}
+    .r-role{font-size:13.5px;font-weight:700;margin:12px 0 1px}
+    .r-meta{font-size:12px;color:#777;margin:0 0 6px}
+    .r-invest{font-size:13px;font-style:italic;margin:10px 0 4px}
+    .r-personal,.r-body{font-size:13px;line-height:1.6;margin:0 0 4px}
+    .r-warning{font-size:12.5px;color:#9a3412;background:#fff7ed;border-left:3px solid #fdba74;padding:8px 12px;margin:0 0 12px;border-radius:0 6px 6px 0}
+    ul.r-bullets{margin:0 0 6px;padding-left:18px;list-style:disc}
+    ul.r-bullets li{font-size:13px;color:#222;line-height:1.55;padding:2px 0}
+    ul.r-bullets li.r-deal{margin-left:14px;list-style:circle}
     .qa-group{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#999;margin:0 0 10px}
     .qa-group:not(:first-of-type){margin-top:20px;padding-top:16px;border-top:1px solid #eee}
     .qa{margin-bottom:16px}.qa:last-child{margin-bottom:0}
@@ -3401,6 +3495,21 @@
       h2{color:#333;margin-top:14px}
       pre,.a,li,.notes{color:#000}
       a{color:#000;text-decoration:underline}
+      /* The resume prints as an actual resume document: its own page, serif
+         face, no card chrome, no section label. Everything after it keeps the
+         treatment above. Rules come last so they win over the generic ones. */
+      @page{margin:0.5in}
+      section.resume{padding:0;break-after:page;page-break-after:always}
+      section.resume h2{display:none}
+      .r-doc{font-family:Georgia,'Times New Roman',serif;color:#000}
+      .r-name{font-size:19pt;letter-spacing:.4pt;margin:0 0 4pt}
+      .r-contact{font-size:9pt;color:#222;margin:0 0 14pt}
+      .r-section{font-size:10pt;color:#000;border-bottom:1px solid #000;margin:14pt 0 6pt}
+      .r-role{font-size:10.5pt;margin:10pt 0 1pt}
+      .r-meta{font-size:9pt;color:#222;margin:0 0 4pt}
+      .r-invest{font-size:10pt}
+      .r-body,.r-personal{font-size:10pt;color:#000}
+      ul.r-bullets li{font-size:10pt;color:#000;padding:1pt 0}
     }
   </style>
 </head>
@@ -3413,9 +3522,9 @@
   </div>
   <div class="wrap">
     ${docHtml}
-    <section>
+    <section class="resume">
       <h2>📄 Tailored Resume</h2>
-      <pre id="resume">${esc(content.resume || '')}</pre>
+      <div id="resume" class="r-doc">${resumeHtml}</div>
     </section>
     ${questionsHtml}
     ${checklistHtml}

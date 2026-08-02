@@ -34,7 +34,25 @@ function extractBuildPackageHtml() {
 
 const SAMPLE = {
   title: 'Head of Ops <Acme & Co>',
-  resume: 'JANE DOE\n• Ran a thing & shipped it <fast>\n• Cut spend by 18%',
+  // A structurally representative resume, so the compile guard exercises the
+  // typeset renderer (name / contact / section / role / dates / bullets /
+  // investment label) and not just a couple of loose lines.
+  resume: [
+    'JANE DOE',
+    'Austin, TX | jane@example.com',
+    '',
+    'PROFESSIONAL EXPERIENCE',
+    'Acme Corp | Head of Operations',
+    'Austin, TX | 2021 - Present',
+    '• Ran a thing & shipped it <fast>',
+    '• Cut spend by 18%',
+    '',
+    '• Select Investment Experience',
+    '• $40M Series B in Northwind (robotics): built the model',
+    '',
+    'EDUCATION',
+    'State University | BS Economics',
+  ].join('\n'),
   applicationQuestions: [{ question: 'Why us? <really>', answer: 'Because & so on' }],
   checklist: ['Verify the "title" matches', 'Attach a cover letter'],
   tailoringNotes: 'Emphasized ops; cut the finance section. 100% match on & keywords.',
