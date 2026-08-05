@@ -2,6 +2,7 @@
 // When porting changes from a private instance, re-sanitize any
 // hardcoded name, bio, or background references before committing.
 import { MEMORY_KEYS, MEMORY_PATHS, assembleMemoryBlock } from '../lib/memory.mjs';
+import { ANTI_AI_WRITING_RULES } from '../lib/writingRules.mjs';
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const GITHUB_API = 'https://api.github.com';
@@ -41,9 +42,15 @@ async function callClaude(anthropicApiKey, articleDigest, bulletBank, job, roleT
 7. Personal: 4 lines max. Include any distinctive personal achievements or certifications relevant to the role type, drawn from article-digest.md. Omit anything irrelevant to the target role family.
 8. Length: Strictly 1 page. If content exceeds 1 page, cut the least relevant bullets first based on the job description; never cut bullets from the candidate's current or most recent role.
 9. ATS keywords: Incorporate exact phrases from the JD naturally into bullets -- integrate, do not stuff.
-10. NEVER use double dashes ( -- ) anywhere in the resume. Use semicolons, hyphens, or restructure.
+10. NEVER use double dashes ( -- ) or em dashes ( — ) anywhere in the resume. Use semicolons, colons, commas, hyphens, or restructure.
 11. Never include anything marked sensitive or interview-prep-only.
 12. Select Investment Experience: first output a single label line reading exactly "• Select Investment Experience" — title case, with the bullet glyph, no colon, NOT all caps, and NOT an all-caps section header. Then under it, output each deal as ONE bullet line that merges the deal header and the operating contribution into a single line, in this exact format: "• $[amount] [Series X] in [Company Name] ([brief description]): [operating contribution]". Use specific deals and contributions drawn verbatim from bullet-bank.md or article-digest.md — do not invent examples. One bullet per deal. Do NOT put the deal header on its own line, do NOT put the parenthetical company description on its own line, and do NOT output a separate operating bullet. No double dashes.
+
+WRITING RULES (apply to the resume body, application-question answers, and tailoring notes):
+${ANTI_AI_WRITING_RULES}
+
+TWO EXEMPTIONS to the formatting bans above, because these are machine-parsed output formats: (a) the "Bullet check:" lines in the ATS section must keep their em dash separators exactly as specified below; (b) date ranges may keep their en dash (e.g. "September 2025 – Present"). Everything else obeys the bans.
+Where a WRITING RULE and the RESUME FORMAT RULES above disagree, the RESUME FORMAT RULES win. Neither ever overrides the verbatim Bullet Bank requirement.
 
 CRITICAL ACCURACY RULE: Use bullets verbatim from the Bullet Bank. Do not rewrite, paraphrase, or combine bullets. Do not invent facts, metrics, companies, or credentials not present in the source files.
 

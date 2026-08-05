@@ -6,6 +6,7 @@ import { generateInterviewPrepDoc } from '../scanner/interviewPackage.mjs';
 import { readGithubText, writeGithubFile, assertRepoPrivate, RepoPublicError } from '../lib/github.js';
 import { safeEqual } from '../lib/auth.mjs';
 import { isExtractedTextEmpty, EMPTY_RESUME_ERROR } from '../lib/resumeParse.mjs';
+import { ANTI_AI_WRITING_RULES } from '../lib/writingRules.mjs';
 
 const SONNET_MODEL    = 'claude-sonnet-4-6';
 
@@ -62,12 +63,13 @@ After the closing tag, add 1-2 sentences asking if they want to adjust anything 
 
 TONE: Direct, warm, like a smart colleague who has done 500 interview prep sessions. Not a cheerleader, not robotic. If an answer is vague, say so and ask for specifics. If a metric sounds weak, push for a better one.
 
+WRITING RULES (apply to the draft):
+${ANTI_AI_WRITING_RULES}
+
 RESUME RULES (from the user's profile — apply to the draft):
-- Never use em dashes. Use semicolons, colons, or periods instead.
 - Every bullet starts with a strong action verb.
 - No "co-developed", "co-led" — they led.
 - No "potential" to weaken metrics.
-- Banned words: transformative, accelerate, leverage, seamless, robust, pioneering, holistic.
 - Confident, declarative language.`;
 
 const PREP_INTAKE_SYSTEM = (ctx) => `You are a career coach helping the user prepare for a specific job interview. You have their background, story bank, and the job description below. Your job is to gather context you cannot infer from these materials through exactly 3 focused questions, then signal readiness.

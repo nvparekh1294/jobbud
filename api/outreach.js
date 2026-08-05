@@ -2,6 +2,7 @@
 // When porting changes from a private instance, re-sanitize any
 // hardcoded name, bio, or background references before committing.
 import { safeEqual } from '../lib/auth.mjs';
+import { ANTI_AI_WRITING_RULES } from '../lib/writingRules.mjs';
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const GITHUB_API = 'https://api.github.com';
@@ -262,26 +263,15 @@ Wherever a per-type rule below assumes there is a job or application, ignore tha
 
 Write the way a sharp, busy person writes. The message should read like the user typed it themselves in two minutes. It should not read like it was generated.
 
-VOICE:
-- Direct and specific. Short sentences. Vary the rhythm so it never sounds mechanical.
-- Use contractions: I'm, don't, it's, you're. Active voice. First person.
+${ANTI_AI_WRITING_RULES}
+
+ALSO IN THIS MESSAGE:
+- First person.
 - One specific, real detail about the role or company beats any general claim about fit. If you don't have a real detail, stay plain. Do not invent one.
-- Confident, not eager. Never desperate, never flattering.
+- No resume summary. No bulleted accomplishments.
 
 LENGTH:
 - ${isEmail ? 'Email: under 200 words.' : 'LinkedIn DM: under 100 words.'} Shorter wins. If the point is made, stop. The per-type rules below may set a tighter limit; follow the tighter one.
-
-BANNED WORDS — never use:
-leverage, synergy, innovative, align, foster, showcase, enhance, streamline, elevate, empower, transformative, seamless, robust, dynamic, pivotal, crucial, underscore, highlight.
-
-BANNED PHRASES — never use:
-"serves as", "stands as", "represents a", "plays a role in", "helps to", "aims to", "seeks to", "Furthermore", "Additionally", "Moreover", "That said", "With that in mind", "I hope this message finds you well", "I wanted to reach out", "I am very passionate about", "would love to connect".
-
-BANNED FORMATTING:
-- No em dashes. Use commas, periods, or parentheses.
-- No sentence that announces what the message is about to do ("I'm writing to", "I wanted to introduce myself", "Quick note to").
-- No resume summary. No bulleted accomplishments.
-- Do not use three parallel items. If one thing is the point, say one thing.
 
 ${typeGuidance(outreachType, job.company, isEmail)}
 ${radarModifier}

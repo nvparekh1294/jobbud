@@ -6,6 +6,7 @@
 // Follow scanner/applicationPackage.mjs for OAuth, callClaude, and Google Docs patterns.
 
 import { SONNET_MODEL } from './config.mjs';
+import { ANTI_AI_WRITING_RULES } from '../lib/writingRules.mjs';
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const GOOGLE_DOCS_API   = 'https://docs.googleapis.com/v1/documents';
@@ -288,6 +289,9 @@ ${companyResearch || 'No company research available.'}
 INTAKE CONVERSATION TRANSCRIPT:
 ${transcriptText || '(No intake conversation — generate based on available context.)'}
 
+WRITING RULES (apply to every section below):
+${ANTI_AI_WRITING_RULES}
+
 Write exactly five sections. Start each section with its header on its own line in uppercase, exactly as shown. Nothing else on the header line.
 
 ROLE READ
@@ -325,7 +329,7 @@ If there are truly no gaps relative to the stated JD requirements, write exactly
 Do not write this unless you have checked every explicit JD requirement against her background.
 
 BACKGROUND PITCH
-Write 2 paragraphs maximum in first person. A tailored "walk me through your background" arc for this specific role. Draw on the user's actual experience as described in their background. Land on why this role is the logical next step. Rules: never use em dashes; no co-developed/co-led; no banned words (transformative, accelerate, leverage, seamless, robust, pioneering, holistic); confident declarative language.
+Write 2 paragraphs maximum in first person. A tailored "walk me through your background" arc for this specific role. Draw on the user's actual experience as described in their background. Land on why this role is the logical next step. Rules: follow the WRITING RULES above in full; no co-developed/co-led; confident declarative language.
 
 COMPANY CONTEXT
 Write 3 bullet points maximum of key facts to know and reference in the interview. Draw from the company research above. Be specific — funding stage, product, recent milestones, leadership names. After each bullet point, cite the source in brackets — the publication name, website, or URL where this information was found. Format: [Source: name or URL]. If a specific source cannot be identified, write [Source: company website] or [Source: job description] as appropriate. Never omit a source.`;
