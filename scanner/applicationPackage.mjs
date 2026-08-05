@@ -46,7 +46,8 @@ async function callClaude(anthropicApiKey, articleDigest, bulletBank, job, roleT
 11. Never include anything marked sensitive or interview-prep-only.
 12. Select Investment Experience: first output a single label line reading exactly "• Select Investment Experience" — title case, with the bullet glyph, no colon, NOT all caps, and NOT an all-caps section header. Then under it, output each deal as ONE bullet line that merges the deal header and the operating contribution into a single line, in this exact format: "• $[amount] [Series X] in [Company Name] ([brief description]): [operating contribution]". Use specific deals and contributions drawn verbatim from bullet-bank.md or article-digest.md — do not invent examples. One bullet per deal. Do NOT put the deal header on its own line, do NOT put the parenthetical company description on its own line, and do NOT output a separate operating bullet. No double dashes.
 
-WRITING RULES (apply to the resume body, application-question answers, and tailoring notes):
+WRITING RULES — read the scoping line before applying them:
+The BANNED WORDS, BANNED PHRASES, and BANNED FORMATTING rules below apply everywhere, including the resume body. The VOICE rules below apply only to prose outputs: application-question answers and tailoring notes. Do not carry the conversational VOICE items (contractions, first person) into resume bullets; resume bullets stay in the terse, verb-first resume register defined by the RESUME FORMAT RULES above.
 ${ANTI_AI_WRITING_RULES}
 
 TWO EXEMPTIONS to the formatting bans above, because these are machine-parsed output formats: (a) the "Bullet check:" lines in the ATS section must keep their em dash separators exactly as specified below; (b) date ranges may keep their en dash (e.g. "September 2025 – Present"). Everything else obeys the bans.

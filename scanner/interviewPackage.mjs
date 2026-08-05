@@ -326,7 +326,7 @@ Gap: [what is missing from their background — be direct]
 How to address: [one honest sentence on how to acknowledge or reframe this in the interview]
 
 If there are truly no gaps relative to the stated JD requirements, write exactly: No material gaps identified relative to stated requirements.
-Do not write this unless you have checked every explicit JD requirement against her background.
+Do not write this unless you have checked every explicit JD requirement against their background.
 
 BACKGROUND PITCH
 Write 2 paragraphs maximum in first person. A tailored "walk me through your background" arc for this specific role. Draw on the user's actual experience as described in their background. Land on why this role is the logical next step. Rules: follow the WRITING RULES above in full; no co-developed/co-led; confident declarative language.
