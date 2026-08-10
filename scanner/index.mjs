@@ -24,7 +24,7 @@ import { evaluateJobs, wasScoredOrFiltered } from './evaluate.mjs';
 import { sendDigest } from './notify.mjs';
 import { sendDailyAlert } from './telegram.mjs';
 import { persistJobs } from './persistJobs.mjs';
-import { checkQuota, recordUsage, callsPerRun } from './quota.mjs';
+import { checkQuota, recordUsage, callsPerRun, quotaNotice } from './quota.mjs';
 import { loadConfig } from './config.mjs';
 import { actionKeySource, actionKeyFingerprint } from '../lib/auth.mjs';
 import { isStarterPortalsList, STARTER_LIST_NOTICE } from '../lib/portalsMeta.mjs';
@@ -122,6 +122,12 @@ async function run() {
   const adzunaEstimate = Math.min(config.locations.length * 7, adzunaPerRun);
 
   // ── Quota checks (API sources only) ───────────────────────────────────────
+  //
+  // Anything the quota system does to a source ends up in this list, and the
+  // list ends up in the digest. A scan that quietly dropped a source used to
+  // look exactly like a scan that found nothing, which is how one user went
+  // weeks without noticing Adzuna had stopped running.
+  const quotaNotices = [];
   let jsearchOk = false, adzunaOk = false, serpApiOk = false;
   if (runApi) {
     // Sequential, not Promise.all: each check can write a repaired entry back to
@@ -137,6 +143,9 @@ async function run() {
     // trims its query list to match.
     config.adzunaMaxCallsPerRun = adzunaBudget.allowed;
     adzunaOk = adzunaBudget.allowed > 0;
+
+    if (!jsearchOk) quotaNotices.push(quotaNotice('JSearch', { resetDate: jsearchBudget.resetDate }));
+    if (!adzunaOk) quotaNotices.push(quotaNotice('Adzuna', { resetDate: adzunaBudget.resetDate }));
 
     if (SCAN_MODE === 'full') {
       const serpApiBudget = await checkQuota('serpapi', serpApiEstimate, SERPAPI_MONTHLY_LIMIT);
@@ -246,12 +255,24 @@ async function run() {
       }
     }
 
+    // A source that ran a rotating window did not search everything the user
+    // asked for, and the digest has to say so — otherwise a scan that covered
+    // eight of thirty-five searches reads as the whole web having nothing.
+    if (adzunaStats.window && adzunaStats.window.ran > 0) {
+      quotaNotices.push(quotaNotice('Adzuna', adzunaStats.window));
+    }
+
     apiJobs = fetchResults
       .filter(r => r.status === 'fulfilled')
       .flatMap(r => r.value);
 
     console.log(`Fetched ${apiJobs.length} raw listings across ${sources.length} API source(s)`);
   }
+
+  // Hand the notices to the digest builder, which prints them above the matches.
+  // The same lines go in the log so the Actions run and the email agree.
+  config.quotaNotices = quotaNotices;
+  for (const line of quotaNotices) console.warn(`[index] ${line}`);
 
   const raw = [...portalJobs, ...apiJobs];
   console.log(`${raw.length} total raw jobs (portals: ${portalJobs.length}, API: ${apiJobs.length})`);

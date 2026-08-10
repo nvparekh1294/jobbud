@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildEmail, buildTrackedFingerprintSet, dropTrackedJobs } from '../scanner/notify.mjs';
 import { fingerprint } from '../scanner/dedup.mjs';
+import { quotaNotice } from '../scanner/quota.mjs';
 
 // ── TASK 1: maxJobsPerDigest cap ────────────────────────────────────────────────
 // >20 jobs in → exactly maxJobsPerDigest out, highest scores first, with a
@@ -173,4 +174,55 @@ test('buildEmail: subject count equals total rendered cards across all sections'
   const cardCount = (html.match(/class="card /g) || []).length;
   assert.equal(subjectCount, jobs.length, 'subject counts every job');
   assert.equal(cardCount, subjectCount, 'exactly one card rendered per counted job');
+});
+
+// ── Quota notices ───────────────────────────────────────────────────────────────
+// A digest thinned by a paused API source is indistinguishable from a digest
+// thinned by a quiet week, and the user can only act on one of them. index.mjs
+// puts one line per affected source in config.quotaNotices; the digest shows them.
+test('buildEmail shows a quota notice above the matches, in html and text', () => {
+  const jobs = [{ company: 'A', title: 'Head of Ops', url: 'https://x/a', score: 4.7, _fingerprint: 'a' }];
+  const notice = "Adzuna: paused until September 7 — this month's API allowance is used up.";
+
+  const { html, text } = buildEmail(jobs, { maxJobsPerDigest: 20, quotaNotices: [notice] });
+
+  assert.ok(html.includes('paused until September 7'), 'the html digest carries the line');
+  assert.ok(text.includes(notice), 'so does the plain-text digest');
+  assert.ok(html.indexOf('paused until September 7') < html.indexOf('Head of Ops'),
+    'the notice sits above the matches, where it will be read');
+});
+
+test('buildEmail shows a partial-run notice and can show more than one', () => {
+  const jobs = [{ company: 'A', title: 'Head of Ops', url: 'https://x/a', score: 4.7, _fingerprint: 'a' }];
+  const notices = [
+    "JSearch: paused until September 7 — this month's API allowance is used up.",
+    'Adzuna: searched 8 of 35 role-and-city combinations this scan, rotating through the rest over the next few scans to stay inside the monthly API allowance.',
+  ];
+
+  const { html } = buildEmail(jobs, { maxJobsPerDigest: 20, quotaNotices: notices });
+
+  assert.ok(html.includes('searched 8 of 35'));
+  assert.ok(html.includes('JSearch: paused'));
+});
+
+test('buildEmail adds nothing when no source was skipped or cut short', () => {
+  const jobs = [{ company: 'A', title: 'Head of Ops', url: 'https://x/a', score: 4.7, _fingerprint: 'a' }];
+  const { html } = buildEmail(jobs, { maxJobsPerDigest: 20 });
+  assert.ok(!/class="quota-notice"/.test(html), 'no notice block on a clean run');
+});
+
+// ── The wording itself ──────────────────────────────────────────────────────────
+// Shared with the scan log so the email and the Actions run never disagree.
+test('quotaNotice names the source, the state, and the date it comes back', () => {
+  const paused = quotaNotice('Adzuna', { resetDate: '2026-09-07' });
+  assert.match(paused, /^Adzuna: paused until September 7/);
+  assert.match(paused, /allowance is used up/);
+
+  const partial = quotaNotice('Adzuna', { ran: 8, total: 35 });
+  assert.match(partial, /searched 8 of 35/);
+  assert.doesNotMatch(partial, /paused/, 'a partial run is not a pause');
+});
+
+test('quotaNotice still reads as a sentence when there is no reset date', () => {
+  assert.equal(quotaNotice('Adzuna', {}), "Adzuna: paused — this month's API allowance is used up.");
 });

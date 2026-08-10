@@ -15,6 +15,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import handler, {
   runHealthChecks,
+  checkApiQuota,
   checkGithubToken,
   checkGithubRepo,
   checkDataFile,
@@ -83,6 +84,7 @@ const HEALTHY_ROUTES = [
   ['/user', jsonRes(200, { login: 'nikita' })],
   ['/repos/nikita/jobbud/contents/data/radar.json', contentsRes('{"companies":{}}')],
   ['/repos/nikita/jobbud/contents/data/job-status.json', contentsRes('{"jobs":{}}')],
+  ['/repos/nikita/jobbud/contents/data/api-usage.json', contentsRes('{"adzuna":{"callsThisMonth":143,"monthResetDate":"2026-09-07"}}')],
   ['/repos/nikita/jobbud', jsonRes(200, { private: true, full_name: 'nikita/jobbud' })],
 ];
 
@@ -673,4 +675,39 @@ test('the README advertises the API job sources and cross-refs the SETUP section
   const slugs = [...repoFile('SETUP.md').matchAll(/^#{2,4} (.+)$/gm)].map(m =>
     m[1].toLowerCase().replace(/[^\w\s-]/g, '').trim().replace(/\s/g, '-'));
   assert.ok(slugs.includes(anchor.slice(1)), `SETUP.md has no heading for ${anchor}`);
+});
+
+// ── API quota status ──────────────────────────────────────────────────────────
+//
+// A source paused for quota is invisible from outside: the digest just gets
+// thinner. These numbers are the only place a user can see it from the
+// dashboard, so they have to be there, and they have to be honest about the one
+// figure this page cannot see — the limit, which lives in Actions secrets.
+
+test('the quota check reports each source\'s calls and when the count restarts', async () => {
+  const c = await withFetch(routeFetch(HEALTHY_ROUTES), () => checkApiQuota('ghp_x', 'nikita', 'jobbud'));
+  assert.equal(c.ok, true);
+  assert.equal(c.informational, true, 'usage is a fact, not a failure');
+  assert.match(c.message, /adzuna: 143 calls this month/);
+  assert.match(c.message, /2026-09-07/);
+  assert.match(c.message, /cannot read/, 'it says outright that the limit is not visible from here');
+});
+
+test('the quota check is quiet on a fresh install with no usage file', async () => {
+  const routes = [['/contents/data/api-usage.json', jsonRes(404, {})]];
+  const c = await withFetch(routeFetch(routes), () => checkApiQuota('ghp_x', 'nikita', 'jobbud'));
+  assert.equal(c.ok, true);
+  assert.match(c.message, /No API calls have been counted yet/);
+});
+
+test('a corrupt usage file never turns into a scary failure', async () => {
+  const routes = [['/contents/data/api-usage.json', contentsRes('{not json')]];
+  const c = await withFetch(routeFetch(routes), () => checkApiQuota('ghp_x', 'nikita', 'jobbud'));
+  assert.equal(c.ok, true);
+  assert.match(c.message, /not valid JSON/);
+});
+
+test('the quota check runs as part of a healthy install', async () => {
+  const checks = await withFetch(routeFetch(HEALTHY_ROUTES), () => runHealthChecks(HEALTHY_ENV));
+  assert.ok(byName(checks, 'quota:api'), 'the quota line is part of the setup report');
 });

@@ -130,6 +130,29 @@ export async function checkQuota(source, requestedCalls, monthlyLimit) {
   return budget;
 }
 
+// One plain-English line about a source that did not run in full, shared by the
+// scan log and the digest so the two can never drift apart.
+//
+// A quota pause is otherwise completely invisible from the outside: the digest
+// just gets thinner, and the user has no way to tell "no jobs matched" apart
+// from "half your sources didn't run". This is the sentence that tells them
+// which one it was.
+export function quotaNotice(label, { ran = null, total = null, resetDate = null } = {}) {
+  if (ran !== null && total !== null && ran > 0 && ran < total) {
+    return `${label}: searched ${ran} of ${total} role-and-city combinations this scan, rotating through the rest over the next few scans to stay inside the monthly API allowance.`;
+  }
+  const until = resetDate ? ` until ${friendlyDate(resetDate)}` : '';
+  return `${label}: paused${until} — this month's API allowance is used up.`;
+}
+
+// "2026-09-07" → "September 7". Parsed as UTC (the date is stored as a plain
+// day, not a moment) so the day never slides backwards in a western timezone.
+function friendlyDate(isoDay) {
+  const parsed = new Date(`${isoDay}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return isoDay;
+  return parsed.toLocaleDateString('en-US', { month: 'long', day: 'numeric', timeZone: 'UTC' });
+}
+
 // Hand out the next slice of a query list that is too big to run in one go, and
 // remember where the next run should pick up.
 //

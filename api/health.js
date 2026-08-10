@@ -439,6 +439,60 @@ export async function checkDataFile(token, owner, repo, filePath, emptyDoc, labe
   );
 }
 
+// ── API quota status ──────────────────────────────────────────────────────────
+//
+// The scanner counts the API calls it makes in data/api-usage.json and stops a
+// source once the month's budget is spent. From the outside that pause is
+// invisible: the digest simply gets thinner, and there is nowhere to look. One
+// user's Adzuna was paused for weeks before anyone worked out why the roles had
+// dried up. So the counts get said out loud here.
+//
+// The monthly LIMIT each count is measured against is a scanner setting living
+// in the GitHub Actions vault, which a Vercel function cannot read — so it is
+// not quoted. What this can report honestly is how many calls have been made
+// and when the count starts over. Always informational: a spent month is a fact
+// about usage, not a broken install.
+export async function checkApiQuota(token, owner, repo) {
+  const name = 'quota:api';
+  const fix = 'Nothing to fix. If a source is paused and you know your plan allows more, set its monthly limit (for example ADZUNA_MONTHLY_LIMIT) in your repo\'s Actions secrets — see the "API job sources" step in SETUP.md.';
+
+  let file;
+  try {
+    file = await readGithubFile(token, owner, repo, 'data/api-usage.json');
+  } catch (err) {
+    return check(name, true, `Could not read data/api-usage.json, so this page cannot report how much of your API allowance is used (${err.message}).`, '', true);
+  }
+
+  if (!file.exists) {
+    return check(name, true, 'No API calls have been counted yet — data/api-usage.json appears the first time a scan uses JSearch or Adzuna.', '', true);
+  }
+
+  let usage;
+  try {
+    usage = JSON.parse(file.content);
+  } catch {
+    return check(name, true, 'data/api-usage.json is not valid JSON, so API usage cannot be reported. The next scan rewrites it, which normally fixes this by itself.', '', true);
+  }
+
+  const lines = Object.entries(usage || {}).map(([source, entry]) => {
+    const calls = Number(entry?.callsThisMonth) || 0;
+    const resets = entry?.monthResetDate ? `, counting again from ${entry.monthResetDate}` : '';
+    return `${source}: ${calls} call${calls === 1 ? '' : 's'} this month${resets}`;
+  });
+
+  if (!lines.length) {
+    return check(name, true, 'No API calls have been counted yet — the file exists but no source has run.', '', true);
+  }
+
+  return check(
+    name,
+    true,
+    `API calls the scanner has counted this month — ${lines.join('; ')}. The monthly limit each of these is measured against is a scanner setting in your GitHub Actions secrets, which this page cannot read.`,
+    fix,
+    true,
+  );
+}
+
 // ── The full run ──────────────────────────────────────────────────────────────
 //
 // Ordering is deliberate: environment first, then the token, then repo access,
@@ -465,6 +519,7 @@ export async function runHealthChecks(env = process.env) {
     const [owner, repo] = repoFullName.split('/');
     checks.push(await checkDataFile(token, owner, repo, 'data/radar.json', { companies: {} }, 'Your Radar'));
     checks.push(await checkDataFile(token, owner, repo, 'data/job-status.json', { jobs: {} }, 'Your job pipeline'));
+    checks.push(await checkApiQuota(token, owner, repo));
   }
 
   // Always last, and always informational — see optionalSourcesCheck.

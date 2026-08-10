@@ -181,6 +181,12 @@ export function buildEmail(jobs, config = {}) {
   // never picked. Set by scanner/index.mjs; absent on every other path.
   const starterNotice = config.usingStarterPortals ? STARTER_LIST_NOTICE : '';
 
+  // One line per API source the quota system paused or cut short this scan, set
+  // by scanner/index.mjs. A thin digest because Adzuna is paused looks exactly
+  // like a thin digest because nothing matched, and the difference matters: one
+  // of them the user can do something about.
+  const quotaNotices = Array.isArray(config.quotaNotices) ? config.quotaNotices : [];
+
   // Cap the emailed list at config.maxJobsPerDigest (highest scores first).
   // Everything above the cap still lives in the dashboard; the email notes how
   // many were held back so the digest stays skimmable instead of a 700-row wall.
@@ -273,6 +279,9 @@ export function buildEmail(jobs, config = {}) {
   .btn-disabled { background: #f3f4f6; color: #9ca3af; cursor: default; }
   .footer { padding: 20px 32px; font-size: 12px; color: #9ca3af; }
   .starter-notice { padding: 12px 32px; background: #fffbeb; color: #92400e; font-size: 13px; border-bottom: 1px solid #fde68a; }
+  .quota-notice { padding: 12px 32px; background: #f8fafc; color: #475569; font-size: 13px; border-bottom: 1px solid #e2e8f0; }
+  .quota-notice p { margin: 0 0 4px; }
+  .quota-notice p:last-child { margin-bottom: 0; }
 </style></head>
 <body>
   <div class="header">
@@ -280,6 +289,7 @@ export function buildEmail(jobs, config = {}) {
     <p>${dateStr} · ${jobs.length} new match${jobs.length !== 1 ? 'es' : ''}</p>
   </div>
   ${starterNotice ? `<div class="starter-notice">${esc(starterNotice)}</div>` : ''}
+  ${quotaNotices.length ? `<div class="quota-notice">${quotaNotices.map(n => `<p>${esc(n)}</p>`).join('')}</div>` : ''}
   ${topJobs.length ? `<div class="section"><p class="label">🟢 Apply Now (${topJobs.length})</p>${topJobs.map(j => card(j, 'top')).join('')}</div>` : ''}
   ${reviewJobs.length ? `<div class="section"><p class="label">🟡 Worth a Look (${reviewJobs.length})</p>${reviewJobs.map(j => card(j, 'review')).join('')}</div>` : ''}
   ${radarJobs.length ? `<div class="section"><p class="label">🔵 On the Radar (${radarJobs.length})</p>${radarJobs.map(j => card(j, 'radar')).join('')}</div>` : ''}
@@ -288,7 +298,7 @@ export function buildEmail(jobs, config = {}) {
   <div class="footer">JobBud · Automated job digest</div>
 </body></html>`;
 
-  return { subject, html, text: buildTextDigest(jobs, moreNote, starterNotice) };
+  return { subject, html, text: buildTextDigest(jobs, moreNote, starterNotice, quotaNotices) };
 }
 
 function fundingLine(snapshot) {
@@ -331,9 +341,11 @@ function card(job, type) {
   </div>`;
 }
 
-function buildTextDigest(jobs, moreNote = '', starterNotice = '') {
+function buildTextDigest(jobs, moreNote = '', starterNotice = '', quotaNotices = []) {
   const lines = [`JOBBUD DIGEST — ${new Date().toLocaleString()}\n`, `${jobs.length} new matches\n`, '='.repeat(60)];
   if (starterNotice) lines.push(starterNotice, '');
+  for (const notice of quotaNotices) lines.push(notice);
+  if (quotaNotices.length) lines.push('');
   if (moreNote) lines.push(moreNote, '');
   for (const job of jobs) {
     const jobId = job._fingerprint || '';
