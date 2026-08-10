@@ -125,9 +125,12 @@ holds `get-google-token.mjs`.
   not press Enter yet), then drag the unzipped folder from Finder onto the
   Terminal window — the path types itself — and press Enter.
 - **Windows:** open the unzipped folder in File Explorer, hold **Shift** and
-  right-click on empty space inside it, and choose **Open PowerShell window
-  here**. (On older Windows the item reads "Open command window here"; on Windows
-  11 you may need **Show more options** first.)
+  right-click on empty space inside it, and choose whichever of these your menu
+  offers: **Open in Terminal** (the usual one on Windows 11), **Open PowerShell
+  window here**, or **Open command window here** (older Windows). On Windows 11
+  you may need **Show more options** to see the last two. All of them land you in
+  the right folder — just note which one you picked, because the commands in step
+  5 differ between PowerShell and Command Prompt.
 - **Any system:** you can also type `cd `, paste the folder's full path, and press
   Enter.
 
@@ -198,6 +201,12 @@ layout the same thing lives under **☰ → Google Auth Platform → Branding** 
 
 *What success looks like:* your email address is listed under **Test users**.
 
+Do this **even if you intend to publish the app in step 4**. The Test users list
+only applies while the status is Testing, and the console only shows the panel
+while the status is Testing — so once you publish, you cannot add yourself
+retroactively, and if you ever switch back to Testing you would be locked out
+with nothing on the list.
+
 **3c. Create the OAuth client.**
 
 *Where you are:* menu **☰ → APIs & Services → Credentials** (newer layout:
@@ -256,10 +265,13 @@ contains no credentials of its own.
 
 The command differs by system because each one has its own way of handing values
 to a program. Use the block that matches yours, replacing `your-client-id` and
-`your-client-secret` with the two values from step 3c (keep the quotes on
-Windows). **Everything must happen in the same terminal window** — these values
-live only in that window, they vanish when you close it, and a second window
-cannot see them.
+`your-client-secret` with the two values from step 3c. Copy the punctuation
+exactly as shown: the quotation marks belong to the **PowerShell** lines only.
+Do **not** add quotes in Command Prompt — `set NAME="value"` stores the quote
+characters as part of the value, and Google later rejects the request with
+`Token exchange failed (401): invalid_client`. **Everything must happen in the
+same terminal window** — these values live only in that window, they vanish when
+you close it, and a second window cannot see them.
 
 **Mac / Linux** — one command, typed or pasted as a single block (the `\` at the
 end of a line means "this continues below"):
@@ -286,15 +298,8 @@ set GOOGLE_CLIENT_SECRET=your-client-secret
 node get-google-token.mjs
 ```
 
-> If the script stops with **"GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must both
-> be set in the environment"**, it means those two values did not reach it. The
-> usual cause is using the Mac/Linux block on Windows — the backslashes and the
-> `NAME=value node ...` form are Unix-only and Windows ignores them. Use the
-> PowerShell or cmd block above, in the same window, and run `node
-> get-google-token.mjs` last.
-
 *What success looks like:* the terminal prints "Opening Google's consent screen
-in your browser…" and your browser opens a Google sign-in page. (If no browser
+in your browser..." and your browser opens a Google sign-in page. (If no browser
 window appears, the terminal also prints the full web address — select it, copy
 it, and paste it into your browser yourself.) Sign in **with the account you
 added as a test user**, work through the screens below, and click **Allow**. The
@@ -302,10 +307,41 @@ browser then says "Success! Refresh token minted." and your terminal prints a
 long string under **Your GOOGLE_REFRESH_TOKEN:**.
 
 Copy that string out of the terminal — highlight it with the mouse, then
-`Cmd + C` on Mac, or right-click the selection in PowerShell (right-click copies
-there; `Ctrl + C` would stop the program instead). Paste it somewhere safe for a
-moment; it is the value you enter in step 6, and it is as sensitive as a
-password.
+`Cmd + C` on Mac. In PowerShell, `Ctrl + C` does not copy from the terminal:
+highlight the string and **right-click** the selection instead. Paste it
+somewhere safe for a moment; it is the value you enter in step 6, and it is as
+sensitive as a password.
+
+#### If the terminal stops instead
+
+Match what is on your screen to one of these:
+
+**"GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must both be set in the
+environment"** — the two values never reached the script. Almost always this
+means you were in the same window but ran `node get-google-token.mjs` without the
+two lines above it, or you closed and reopened the terminal in between. Run all
+three lines again, in order, in one window.
+
+**"GOOGLE_CLIENT_ID=your-client-id : The term
+'GOOGLE_CLIENT_ID=your-client-id' is not recognized as the name of a cmdlet"**
+(PowerShell), or **"'GOOGLE_CLIENT_ID' is not recognized as an internal or
+external command"** (Command Prompt) — you used the Mac/Linux block on Windows.
+That `NAME=value node ...` form and the trailing `\` are Unix-only; Windows reads
+the first word as a program name and cannot find it. (Keep going and you will
+hit the must-both-be-set error too.) Use the PowerShell or Command Prompt block
+above instead.
+
+**"Cannot find module ... get-google-token.mjs"** — the command was right, but
+the terminal is not in the repo folder, so there is no such file where it looked.
+Go back to prerequisite 3 above, open a terminal inside the unzipped folder, and
+confirm with `ls` (Mac/Linux) or `dir` (Windows) that `get-google-token.mjs` is
+in the list.
+
+**"Port 4599 is already in use. Close whatever is using it and re-run."** — the
+script listens on that port to catch Google's answer, and something already has
+it. Usually it is an earlier run of this same helper still open in another
+terminal window: close that window (or press `Ctrl + C` in it to stop the
+script), wait a few seconds, and run the command again.
 
 #### Screens you may see while approving
 
@@ -317,19 +353,20 @@ protect people from unknown third-party apps, and there is no third party here.
 Do not submit the app for verification — see step 4.
 
 **"Access blocked: JobBud has not completed the Google verification process"**,
-with **Error 403: access_denied** — this one is a wall, not a warning, and it
-means the account you just signed in with is **not on the Test users list**
-(or the app is still in Testing and you signed in as someone else). Fix it:
+with **Error 403: access_denied** — this one is a wall, not a warning. Which fix
+applies depends on your app's publishing status, so check that first: Google
+Cloud Console, top bar reading **jobbud**, then **APIs & Services → OAuth consent
+screen** (newer layout: **Google Auth Platform → Audience**).
 
-1. Go back to the Google Cloud Console, check the top bar still says **jobbud**.
-2. **APIs & Services → OAuth consent screen → Test users → + Add users** (newer
-   layout: **Audience → Test users → + Add users**).
-3. Add the exact email address you were signing in with, and **Save**.
-4. Run the step 5 command again, and sign in with **that same account**.
-
-If you published the app in step 4 and still get this, you are almost certainly
-signed into a second Google account in that browser — sign out of the others, or
-retry in a private/incognito window.
+- **Publishing status: Testing** — the account you signed in with is not on the
+  **Test users** list. On that same page, **Test users → + Add users**, type the
+  exact email address you were signing in with, **Save**, then run the step 5
+  command again and sign in with **that same account**.
+- **Publishing status: In production** — the Test users list no longer applies
+  and the console hides that panel, so there is nothing to add. This error then
+  means the browser handed Google a different account than you think: sign out of
+  every Google account, or open a private/incognito window, and run step 5 again
+  signing in only with the account whose Drive you are using.
 
 **"No refresh token was returned"** — printed in the terminal, not the browser.
 You have authorized this app before. Remove it at
@@ -360,16 +397,16 @@ The two columns that persist are the ones JobBud actually reads:
   repository secret** for each row (powers prep and application docs generated by
   the scheduled scans).
 
-These are the four name/value pairs to enter — not something to type into a
-terminal. Use the names exactly as written, with no quotes and no spaces around
-the value:
+Both screens ask for a name and a value, one pair at a time. Enter these four —
+nothing here gets typed into a terminal. Use the names exactly as written, with
+no quotes and no spaces around the value:
 
-```
-GOOGLE_CLIENT_ID=...
-GOOGLE_CLIENT_SECRET=...
-GOOGLE_REFRESH_TOKEN=...
-GOOGLE_DRIVE_FOLDER_ID=...   # optional
-```
+| Name (type exactly) | Value to paste |
+|---------------------|----------------|
+| `GOOGLE_CLIENT_ID` | the client ID from step 3c |
+| `GOOGLE_CLIENT_SECRET` | the client secret from step 3c |
+| `GOOGLE_REFRESH_TOKEN` | the long string step 5 printed |
+| `GOOGLE_DRIVE_FOLDER_ID` | optional — a Drive folder ID (see below) |
 
 In Vercel, tick **Production** for each variable as you add it — your live site
 reads Production only, so a variable left on Development alone does nothing for
