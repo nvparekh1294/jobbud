@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildEmail, buildTrackedFingerprintSet, dropTrackedJobs } from '../scanner/notify.mjs';
+import { buildEmail, buildTrackedFingerprintSet, dropTrackedJobs, digestIsWorthSending, sendDigest } from '../scanner/notify.mjs';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { fingerprint } from '../scanner/dedup.mjs';
 import { quotaNotice } from '../scanner/quota.mjs';
 
@@ -225,4 +228,102 @@ test('quotaNotice names the source, the state, and the date it comes back', () =
 
 test('quotaNotice still reads as a sentence when there is no reset date', () => {
   assert.equal(quotaNotice('Adzuna', {}), "Adzuna: paused — this month's API allowance is used up.");
+});
+
+// ── A quota notice is reason enough to send ─────────────────────────────────────
+//
+// The notices were unreachable exactly when they mattered. Three gates in
+// scanner/index.mjs each required jobs — the all-sources-skipped early return,
+// the nothing-survived-pre-filter return, and the digest step's own
+// digestJobs.length > 0 — so a scan with Adzuna paused and zero matches sent
+// nothing, and the user's only signal that a source had gone dark was a digest
+// that never arrived.
+
+test('a scan with nothing to show but something to say is still worth sending', () => {
+  const notice = "Adzuna: paused until September 7 — this month's API allowance is used up.";
+  assert.equal(digestIsWorthSending([], [notice]), true);
+});
+
+test('a scan with neither matches nor notices stays silent', () => {
+  assert.equal(digestIsWorthSending([], []), false);
+  assert.equal(digestIsWorthSending(), false, 'the empty-argument case is the same answer');
+});
+
+test('a no-match digest says so, above the notice that explains why', () => {
+  const notice = "Adzuna: paused until September 7 — this month's API allowance is used up.";
+  const { html, text, subject } = buildEmail([], { maxJobsPerDigest: 20, quotaNotices: [notice] });
+
+  assert.match(subject, /0 new matches/);
+  assert.ok(html.includes('No new matches this scan.'), 'the html body says what happened');
+  assert.ok(text.includes('No new matches this scan.'), 'so does the plain-text body');
+  assert.ok(html.includes('paused until September 7'), 'and the notice explaining why is there too');
+  assert.ok(html.indexOf('No new matches this scan.') < html.indexOf('paused until September 7'),
+    'what happened comes before why');
+});
+
+test('a digest with matches carries no empty-state line', () => {
+  const jobs = [{ company: 'A', title: 'Head of Ops', url: 'https://x/a', score: 4.7, _fingerprint: 'a' }];
+  const { html, text } = buildEmail(jobs, { maxJobsPerDigest: 20 });
+  assert.ok(!html.includes('No new matches this scan.'));
+  assert.ok(!text.includes('No new matches this scan.'));
+});
+
+test('the notice-only email really reaches the sender, notice intact', async () => {
+  const notice = "Adzuna: paused until September 7 — this month's API allowance is used up.";
+  const realFetch = globalThis.fetch;
+  const realLog = console.log;
+  const realWarn = console.warn;
+  let posted = null;
+  globalThis.fetch = async (url, opts) => {
+    posted = JSON.parse(opts.body);
+    return { ok: true, text: async () => '' };
+  };
+  console.log = () => {};
+  console.warn = () => {};
+  try {
+    await sendDigest([], {
+      sendgridApiKey: 'sg-key',
+      recipientEmail: 'user@example.com',
+      maxJobsPerDigest: 20,
+      quotaNotices: [notice],
+    });
+  } finally {
+    globalThis.fetch = realFetch;
+    console.log = realLog;
+    console.warn = realWarn;
+  }
+
+  assert.ok(posted, 'an email was actually sent for a scan with no jobs in it');
+  const bodies = posted.content.map(c => c.value).join('\n');
+  assert.ok(bodies.includes('paused until September 7'), 'the notice survives all the way to SendGrid');
+  assert.ok(bodies.includes('No new matches this scan.'));
+});
+
+// ── The scanner routes every exit through the same decision ────────────────────
+// index.mjs runs its scan on import, so its wiring is asserted against the
+// source text, the way the other scanner-wiring tests here do it.
+
+test('every exit from a scan goes through the one digest decision', () => {
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  const whole = readFileSync(join(__dirname, '..', 'scanner', 'index.mjs'), 'utf8');
+  // The real scan only — runDryRun is a fixture harness with no quota state and
+  // no notices, and its own jobs-only rule there is correct.
+  const src = whole.slice(whole.indexOf('async function run()'));
+  assert.ok(src.length > 0, 'run() moved — this guard needs repointing');
+
+  // Attached before anything can return, and by reference, so a notice pushed
+  // later still reaches the digest builder.
+  const attach = src.indexOf('config.quotaNotices = quotaNotices');
+  assert.ok(attach > -1, 'index no longer attaches the notices to the config');
+  assert.ok(attach < src.indexOf('All sources skipped and no portal jobs'),
+    'the notices must be attached before the first early return');
+
+  // No exit may send (or decline to send) on its own terms.
+  assert.match(src, /async function deliverDigest\(digestJobs\)/);
+  assert.match(src, /digestIsWorthSending\(digestJobs, quotaNotices\)/);
+  const calls = src.match(/await deliverDigest\(/g) || [];
+  assert.equal(calls.length, 4, 'all four scan exits route through deliverDigest');
+  assert.doesNotMatch(src, /if \(digestJobs\.length > 0\)/, 'the jobs-only gate is gone');
+  assert.equal((src.match(/await sendDigest\(/g) || []).length, 1,
+    'sendDigest is called from exactly one place');
 });

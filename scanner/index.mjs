@@ -21,7 +21,7 @@ import { fetchRadar } from './radarSource.mjs';
 import { dedup, markScored } from './dedup.mjs';
 import { preFilter } from './filter.mjs';
 import { evaluateJobs, wasScoredOrFiltered } from './evaluate.mjs';
-import { sendDigest } from './notify.mjs';
+import { sendDigest, digestIsWorthSending } from './notify.mjs';
 import { sendDailyAlert } from './telegram.mjs';
 import { persistJobs } from './persistJobs.mjs';
 import { checkQuota, recordUsage, callsPerRun, quotaNotice } from './quota.mjs';
@@ -120,6 +120,30 @@ async function run() {
   // look exactly like a scan that found nothing, which is how one user went
   // weeks without noticing Adzuna had stopped running.
   const quotaNotices = [];
+
+  // Attached NOW, before the first early return, and by reference — every later
+  // push lands in the same array the digest builder reads. Attaching it after
+  // the fetch block meant a scan that bailed early carried its notices nowhere.
+  config.quotaNotices = quotaNotices;
+
+  // Every exit from this scan goes through here, so a notice can never be
+  // stranded behind a return. A scan with Adzuna paused and no matches used to
+  // send nothing at all — three separate gates each required jobs — which is the
+  // one scan the user most needs to hear about.
+  async function deliverDigest(digestJobs) {
+    for (const line of quotaNotices) console.warn(`[index] ${line}`);
+    if (!digestIsWorthSending(digestJobs, quotaNotices)) {
+      console.log('[index] Nothing to report — no matches and nothing the quota system had to say. No digest sent.');
+      return;
+    }
+    try {
+      await sendDigest(digestJobs, config);
+      console.log(`Digest sent — ${digestJobs.length} match${digestJobs.length === 1 ? '' : 'es'}, ${quotaNotices.length} quota notice${quotaNotices.length === 1 ? '' : 's'}.`);
+    } catch (err) {
+      console.error(`[index] sendDigest failed: ${err.message}`);
+    }
+  }
+
   let jsearchOk = false, adzunaOk = false, serpApiOk = false;
   if (runApi) {
     // Sequential, not Promise.all: each check can write a repaired entry back to
@@ -223,7 +247,8 @@ async function run() {
   if (serpApiOk) sources.push({ name: 'serpapi', fn: () => fetchSerpApi(config), stats: serpApiStats });
 
   if (sources.length === 0 && portalJobs.length === 0) {
-    console.warn('[index] All sources skipped and no portal jobs — nothing to process. Exiting.');
+    console.warn('[index] All sources skipped and no portal jobs — nothing to process.');
+    await deliverDigest([]);
     return;
   }
 
@@ -261,11 +286,6 @@ async function run() {
     console.log(`Fetched ${apiJobs.length} raw listings across ${sources.length} API source(s)`);
   }
 
-  // Hand the notices to the digest builder, which prints them above the matches.
-  // The same lines go in the log so the Actions run and the email agree.
-  config.quotaNotices = quotaNotices;
-  for (const line of quotaNotices) console.warn(`[index] ${line}`);
-
   const raw = [...portalJobs, ...apiJobs];
   console.log(`${raw.length} total raw jobs (portals: ${portalJobs.length}, API: ${apiJobs.length})`);
 
@@ -277,7 +297,8 @@ async function run() {
   console.log(`${filtered.length} jobs passed pre-filter`);
 
   if (filtered.length === 0) {
-    console.log('No new jobs to evaluate. Exiting.');
+    console.log('No new jobs to evaluate.');
+    await deliverDigest([]);
     return;
   }
 
@@ -328,19 +349,10 @@ async function run() {
       }
     }
 
-    // Send digest for jobs above score threshold
-    try {
-      const digestJobs = evaluated.filter(j => j.score !== null && j.score >= config.minScoreToIncludeInDigest);
-      console.log(`${evaluated.filter(j => j.score !== null).length} scored; ${digestJobs.length} at or above threshold (${config.minScoreToIncludeInDigest})`);
-      if (digestJobs.length > 0) {
-        await sendDigest(digestJobs, config);
-        console.log('Digest sent.');
-      } else {
-        console.log(`No jobs at or above score threshold (${config.minScoreToIncludeInDigest}). No digest sent.`);
-      }
-    } catch (err) {
-      console.error(`[index] sendDigest failed: ${err.message}`);
-    }
+    // Send digest for jobs above score threshold (or for a quota notice alone)
+    const digestJobs = evaluated.filter(j => j.score !== null && j.score >= config.minScoreToIncludeInDigest);
+    console.log(`${evaluated.filter(j => j.score !== null).length} scored; ${digestJobs.length} at or above threshold (${config.minScoreToIncludeInDigest})`);
+    await deliverDigest(digestJobs);
 
     // Telegram: daily summary after scan
     try {
@@ -350,7 +362,8 @@ async function run() {
       console.error(`[index] Telegram notify failed: ${err.message}`);
     }
   } else {
-    console.log('[index] No evaluated jobs — skipping persist and digest.');
+    console.log('[index] No evaluated jobs — nothing to persist.');
+    await deliverDigest([]);
   }
 
   console.log('Scan complete.');

@@ -85,6 +85,18 @@ function actionUrl(jobId, status) {
   return `${base}/api/action?jobId=${encodeURIComponent(jobId)}&status=${status}&token=${token}&ts=${ts}`;
 }
 
+// Is there anything worth an email this scan?
+//
+// "Only send when there are jobs" is what made the quota notices useless: the
+// scan that most needs to say "Adzuna is paused" is precisely the scan that
+// found nothing, and that scan sent no email at all. So a notice is reason
+// enough on its own. Nothing else changes — a scan with neither matches nor
+// notices is still silent, so email volume only moves on scans that genuinely
+// have something to report.
+export function digestIsWorthSending(jobs = [], quotaNotices = []) {
+  return jobs.length > 0 || quotaNotices.length > 0;
+}
+
 export async function sendDigest(jobs, config) {
   // Drop jobs already tracked in the dashboard (any non-'new' status, or simply
   // already persisted) so a re-scan never re-emails an "Apply now" for a job the
@@ -187,6 +199,11 @@ export function buildEmail(jobs, config = {}) {
   // of them the user can do something about.
   const quotaNotices = Array.isArray(config.quotaNotices) ? config.quotaNotices : [];
 
+  // A digest can now arrive with no matches at all — that is the whole point of
+  // sending on a notice alone. Without a line saying so it would read as a
+  // broken email, so the body says what happened before the notice explains why.
+  const emptyNotice = jobs.length === 0 ? 'No new matches this scan.' : '';
+
   // Cap the emailed list at config.maxJobsPerDigest (highest scores first).
   // Everything above the cap still lives in the dashboard; the email notes how
   // many were held back so the digest stays skimmable instead of a 700-row wall.
@@ -279,6 +296,8 @@ export function buildEmail(jobs, config = {}) {
   .btn-disabled { background: #f3f4f6; color: #9ca3af; cursor: default; }
   .footer { padding: 20px 32px; font-size: 12px; color: #9ca3af; }
   .starter-notice { padding: 12px 32px; background: #fffbeb; color: #92400e; font-size: 13px; border-bottom: 1px solid #fde68a; }
+  .empty-notice { padding: 16px 32px; color: #475569; font-size: 14px; border-bottom: 1px solid #f0f0f0; }
+  .empty-notice p { margin: 0; }
   .quota-notice { padding: 12px 32px; background: #f8fafc; color: #475569; font-size: 13px; border-bottom: 1px solid #e2e8f0; }
   .quota-notice p { margin: 0 0 4px; }
   .quota-notice p:last-child { margin-bottom: 0; }
@@ -289,6 +308,7 @@ export function buildEmail(jobs, config = {}) {
     <p>${dateStr} · ${jobs.length} new match${jobs.length !== 1 ? 'es' : ''}</p>
   </div>
   ${starterNotice ? `<div class="starter-notice">${esc(starterNotice)}</div>` : ''}
+  ${emptyNotice ? `<div class="empty-notice"><p>${esc(emptyNotice)}</p></div>` : ''}
   ${quotaNotices.length ? `<div class="quota-notice">${quotaNotices.map(n => `<p>${esc(n)}</p>`).join('')}</div>` : ''}
   ${topJobs.length ? `<div class="section"><p class="label">🟢 Apply Now (${topJobs.length})</p>${topJobs.map(j => card(j, 'top')).join('')}</div>` : ''}
   ${reviewJobs.length ? `<div class="section"><p class="label">🟡 Worth a Look (${reviewJobs.length})</p>${reviewJobs.map(j => card(j, 'review')).join('')}</div>` : ''}
@@ -298,7 +318,7 @@ export function buildEmail(jobs, config = {}) {
   <div class="footer">JobBud · Automated job digest</div>
 </body></html>`;
 
-  return { subject, html, text: buildTextDigest(jobs, moreNote, starterNotice, quotaNotices) };
+  return { subject, html, text: buildTextDigest(jobs, moreNote, starterNotice, quotaNotices, emptyNotice) };
 }
 
 function fundingLine(snapshot) {
@@ -341,9 +361,10 @@ function card(job, type) {
   </div>`;
 }
 
-function buildTextDigest(jobs, moreNote = '', starterNotice = '', quotaNotices = []) {
+function buildTextDigest(jobs, moreNote = '', starterNotice = '', quotaNotices = [], emptyNotice = '') {
   const lines = [`JOBBUD DIGEST — ${new Date().toLocaleString()}\n`, `${jobs.length} new matches\n`, '='.repeat(60)];
   if (starterNotice) lines.push(starterNotice, '');
+  if (emptyNotice) lines.push(emptyNotice, '');
   for (const notice of quotaNotices) lines.push(notice);
   if (quotaNotices.length) lines.push('');
   if (moreNote) lines.push(moreNote, '');
