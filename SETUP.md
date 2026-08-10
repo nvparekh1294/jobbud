@@ -129,8 +129,10 @@ holds `get-google-token.mjs`.
   offers: **Open in Terminal** (the usual one on Windows 11), **Open PowerShell
   window here**, or **Open command window here** (older Windows). On Windows 11
   you may need **Show more options** to see the last two. All of them land you in
-  the right folder — just note which one you picked, because the commands in step
-  5 differ between PowerShell and Command Prompt.
+  the right folder. Note which shell you ended up in, because the commands in
+  step 5 differ: if the line you type on starts with `PS C:\...>` you are in
+  **PowerShell**; if it starts with plain `C:\...>` you are in **Command
+  Prompt**.
 - **Any system:** you can also type `cd `, paste the folder's full path, and press
   Enter.
 
@@ -202,10 +204,9 @@ layout the same thing lives under **☰ → Google Auth Platform → Branding** 
 *What success looks like:* your email address is listed under **Test users**.
 
 Do this **even if you intend to publish the app in step 4**. The Test users list
-only applies while the status is Testing, and the console only shows the panel
-while the status is Testing — so once you publish, you cannot add yourself
-retroactively, and if you ever switch back to Testing you would be locked out
-with nothing on the list.
+applies only while the status is Testing, and the console shows the panel only
+while the status is Testing — so once you publish, you cannot add yourself to it
+without switching back first.
 
 **3c. Create the OAuth client.**
 
@@ -268,8 +269,9 @@ to a program. Use the block that matches yours, replacing `your-client-id` and
 `your-client-secret` with the two values from step 3c. Copy the punctuation
 exactly as shown: the quotation marks belong to the **PowerShell** lines only.
 Do **not** add quotes in Command Prompt — `set NAME="value"` stores the quote
-characters as part of the value, and Google later rejects the request with
-`Token exchange failed (401): invalid_client`. **Everything must happen in the
+characters as part of the value, and Google rejects it later with an
+`invalid_client` error, in the browser or the terminal depending on which value
+carries the stray quotes. **Everything must happen in the
 same terminal window** — these values live only in that window, they vanish when
 you close it, and a second window cannot see them.
 
@@ -301,16 +303,17 @@ node get-google-token.mjs
 *What success looks like:* the terminal prints "Opening Google's consent screen
 in your browser..." and your browser opens a Google sign-in page. (If no browser
 window appears, the terminal also prints the full web address — select it, copy
-it, and paste it into your browser yourself.) Sign in **with the account you
-added as a test user**, work through the screens below, and click **Allow**. The
-browser then says "Success! Refresh token minted." and your terminal prints a
-long string under **Your GOOGLE_REFRESH_TOKEN:**.
+it, and paste it into your browser yourself.) Sign in **with the Google account
+you set up in step 3** — the one whose Drive you are using, and the one you added
+under Test users if the app is still in Testing — work through the screens below,
+and click **Allow**. The browser then says "Success! Refresh token minted." and
+your terminal prints a long string under **Your GOOGLE_REFRESH_TOKEN:**.
 
 Copy that string out of the terminal — highlight it with the mouse, then
-`Cmd + C` on Mac. In PowerShell, `Ctrl + C` does not copy from the terminal:
-highlight the string and **right-click** the selection instead. Paste it
-somewhere safe for a moment; it is the value you enter in step 6, and it is as
-sensitive as a password.
+`Cmd + C` on Mac. On Windows, highlight the string and **right-click** the
+selection: that always copies, whereas `Ctrl + C` may or may not, depending on
+which terminal you opened. Paste it somewhere safe for a moment; it is the value
+you enter in step 6, and it is as sensitive as a password.
 
 #### If the terminal stops instead
 
@@ -336,6 +339,14 @@ the terminal is not in the repo folder, so there is no such file where it looked
 Go back to prerequisite 3 above, open a terminal inside the unzipped folder, and
 confirm with `ls` (Mac/Linux) or `dir` (Windows) that `get-google-token.mjs` is
 in the list.
+
+**"Token exchange failed (401): invalid_client"** — Google refused the client ID
+and secret it was handed. On Windows Command Prompt this is usually the stray
+quotation marks described above: `set NAME="value"` keeps the quotes inside the
+value. Re-run the three `set` lines with no quotes. Otherwise, check the two
+values against the client in the console (**Credentials** / **Clients** → your
+`jobbud-helper` client) — a truncated paste or a leading space is enough to
+break it.
 
 **"Port 4599 is already in use. Close whatever is using it and re-run."** — the
 script listens on that port to catch Google's answer, and something already has
@@ -367,6 +378,13 @@ screen** (newer layout: **Google Auth Platform → Audience**).
   means the browser handed Google a different account than you think: sign out of
   every Google account, or open a private/incognito window, and run step 5 again
   signing in only with the account whose Drive you are using.
+
+**"Error 401: invalid_client — The OAuth client was not found"** — the browser
+never even offers you a sign-in, because the client ID it was sent is not one
+Google recognises. Same causes as the terminal's `invalid_client` above: on
+Command Prompt, quotes around the value in the `set` lines; otherwise a
+mistyped or partly-pasted client ID. Close the tab, fix the lines, and run the
+command again.
 
 **"No refresh token was returned"** — printed in the terminal, not the browser.
 You have authorized this app before. Remove it at
