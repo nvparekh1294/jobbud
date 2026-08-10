@@ -89,6 +89,15 @@ Run the included helper on your own machine. It reads the client ID and secret
 from the environment, opens Google's consent screen, and prints a refresh token.
 It stores nothing and contains no credentials of its own.
 
+The helper is the file **`get-google-token.mjs`**, in the top level of your own
+copy of the JobBud repo — the same folder as `README.md`. Run the command from
+inside that folder.
+
+If you set JobBud up with the Deploy button and have never had the code on your
+machine, get a copy first: on GitHub, open your JobBud repo, click the green
+**Code** button and choose **Download ZIP** (unzip it, then `cd` into the
+folder), or clone it with `git clone` if you use Git.
+
 ```bash
 GOOGLE_CLIENT_ID=your-client-id \
 GOOGLE_CLIENT_SECRET=your-client-secret \
