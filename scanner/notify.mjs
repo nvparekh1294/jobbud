@@ -89,12 +89,18 @@ function actionUrl(jobId, status) {
 //
 // "Only send when there are jobs" is what made the quota notices useless: the
 // scan that most needs to say "Adzuna is paused" is precisely the scan that
-// found nothing, and that scan sent no email at all. So a notice is reason
-// enough on its own. Nothing else changes — a scan with neither matches nor
-// notices is still silent, so email volume only moves on scans that genuinely
-// have something to report.
-export function digestIsWorthSending(jobs = [], quotaNotices = []) {
-  return jobs.length > 0 || quotaNotices.length > 0;
+// found nothing, and that scan sent no email at all. So news is reason enough
+// on its own.
+//
+// NEWS, though — not every notice. `sendWorthyNotices` is the pause-class
+// subset: a source the quota system stopped, which the user can act on by
+// raising a limit. The rotation line ("searched 8 of 35 combinations this
+// scan") is routine, and on a big profile it appears on EVERY run, so treating
+// it as news would mail an otherwise-empty digest every quiet week until the
+// user learned to ignore the whole thing. Rotation lines still ride along in
+// any digest that goes out; they just never summon one by themselves.
+export function digestIsWorthSending(jobs = [], sendWorthyNotices = []) {
+  return jobs.length > 0 || sendWorthyNotices.length > 0;
 }
 
 export async function sendDigest(jobs, config) {

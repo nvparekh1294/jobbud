@@ -93,18 +93,23 @@ nice_to_haves: |
 # on the next scan. (Adding them as GitHub Actions secrets does nothing — the
 # workflow passes the scanner a fixed list of variables and its file is frozen.)
 #
-# Leave them out and JobBud uses conservative defaults. Your real Adzuna limit
-# is shown in the Adzuna developer dashboard; the free tier is commonly around
-# 1000 a month, four times what JobBud assumes.
+# Leave them out and JobBud uses conservative defaults: 250 calls a month for
+# Adzuna, 200 for JSearch, 250 for SerpApi. Your real Adzuna limit is shown in
+# the Adzuna developer dashboard; the free tier is commonly around 1000 a month,
+# four times what JobBud assumes. SerpApi's is only spent if you run a full scan
+# yourself (SCAN_MODE=full) — the scheduled scan does not use it.
 #
-# adzuna_monthly_limit: 1000     # default 250
-# jsearch_monthly_limit: 200     # default 200
-# serpapi_monthly_limit: 250     # default 250
+# Uncomment a line and put your own number after the colon. Write nothing else
+# on the line.
+#
+# adzuna_monthly_limit: 1000
+# jsearch_monthly_limit: 200
+# serpapi_monthly_limit: 250
 #
 # Adzuna searches one role in one city at a time, so a big profile is more
 # searches than one run should spend. JobBud runs a slice each scan and rotates
 # through the rest. By default the slice is a fifth of the monthly limit — the
 # API scan runs weekly, and there are about five weeks in a month. Set your own
-# slice size only if you have a reason to:
+# slice size (in calls per scan) only if you have a reason to:
 #
 # adzuna_calls_per_run: 50

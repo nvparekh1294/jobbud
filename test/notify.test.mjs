@@ -270,6 +270,42 @@ test('a scan with neither matches nor notices stays silent', () => {
   assert.equal(digestIsWorthSending(), false, 'the empty-argument case is the same answer');
 });
 
+// News, not noise. A profile bigger than one run's slice rotates on EVERY run,
+// so if the routine rotation line could summon a digest, a quiet week would
+// deliver an otherwise-empty "no new matches" email every single scan — which
+// is how a user learns to stop opening the digest at all. Only the pause-class
+// notices, the ones the user can act on, are worth an email by themselves.
+test('a routine rotation line never summons a digest of its own', () => {
+  const rotation = quotaNotice('Adzuna', { ran: 50, total: 80 });
+  const pause = quotaNotice('Adzuna', { resetDate: '2026-09-07' });
+
+  // index.mjs passes the pause-class subset, so a rotation-only scan arrives here
+  // with an empty list.
+  assert.equal(digestIsWorthSending([], []), false, 'rotation alone sends nothing');
+  assert.equal(digestIsWorthSending([], [pause]), true, 'a pause still does');
+
+  // But the rotation line still rides along in a digest that goes out anyway.
+  const jobs = [{ company: 'A', title: 'Head of Ops', url: 'https://x/a', score: 4.7, _fingerprint: 'a' }];
+  const { html } = buildEmail(jobs, { maxJobsPerDigest: 20, quotaNotices: [rotation] });
+  assert.ok(html.includes('searched 50 of 80'));
+});
+
+test('index sends on the pause-class notices only, and shows all of them', () => {
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  const whole = readFileSync(join(__dirname, '..', 'scanner', 'index.mjs'), 'utf8');
+  const src = whole.slice(whole.indexOf('async function run()'));
+
+  // The digest gets every line; the send decision gets only the pause list.
+  assert.match(src, /config\.quotaNotices = quotaNotices/);
+  assert.match(src, /digestIsWorthSending\(digestJobs, pauseNotices\)/);
+
+  // The rotation notice is the one push that must NOT be pause-class.
+  const rotation = src.slice(src.indexOf('adzunaStats.window && adzunaStats.window.ran > 0'));
+  const body = rotation.slice(0, rotation.indexOf('\n    }'));
+  assert.ok(body.includes('quotaNotices.push('), 'the rotation line still reaches the digest');
+  assert.ok(!body.includes('notePause('), 'but it must never be able to summon one');
+});
+
 test('a no-match digest says so, above the notice that explains why', () => {
   const notice = "Adzuna: paused until September 7 — this month's API allowance is used up.";
   const { html, text, subject } = buildEmail([], { maxJobsPerDigest: 20, quotaNotices: [notice] });
@@ -341,7 +377,7 @@ test('every exit from a scan goes through the one digest decision', () => {
 
   // No exit may send (or decline to send) on its own terms.
   assert.match(src, /async function deliverDigest\(digestJobs\)/);
-  assert.match(src, /digestIsWorthSending\(digestJobs, quotaNotices\)/);
+  assert.match(src, /digestIsWorthSending\(digestJobs, pauseNotices\)/);
   const calls = src.match(/await deliverDigest\(/g) || [];
   assert.equal(calls.length, 4, 'all four scan exits route through deliverDigest');
   assert.doesNotMatch(src, /if \(digestJobs\.length > 0\)/, 'the jobs-only gate is gone');

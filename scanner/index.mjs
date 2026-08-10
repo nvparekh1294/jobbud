@@ -125,18 +125,28 @@ async function run() {
   // weeks without noticing Adzuna had stopped running.
   const quotaNotices = [];
 
+  // The pause-class subset: sources the quota system STOPPED. Those are worth
+  // an email on their own, because the user can do something about them. The
+  // rotation line is not — a profile bigger than one run's slice rotates on
+  // every single run, so mailing an empty digest for it would put a "no new
+  // matches" email in the inbox every quiet week and teach the user to ignore
+  // the digest entirely. Both lists hold the same strings; only this one
+  // decides whether an otherwise-empty scan gets sent.
+  const pauseNotices = [];
+  const notePause = (line) => { quotaNotices.push(line); pauseNotices.push(line); };
+
   // Attached NOW, before the first early return, and by reference — every later
   // push lands in the same array the digest builder reads. Attaching it after
   // the fetch block meant a scan that bailed early carried its notices nowhere.
   config.quotaNotices = quotaNotices;
 
   // Every exit from this scan goes through here, so a notice can never be
-  // stranded behind a return. A scan with Adzuna paused and no matches used to
-  // send nothing at all — three separate gates each required jobs — which is the
-  // one scan the user most needs to hear about.
+  // stranded behind a return. A scan with a source paused and no matches used
+  // to send nothing at all — three separate gates each required jobs — which is
+  // the one scan the user most needs to hear about.
   async function deliverDigest(digestJobs) {
     for (const line of quotaNotices) console.warn(`[index] ${line}`);
-    if (!digestIsWorthSending(digestJobs, quotaNotices)) {
+    if (!digestIsWorthSending(digestJobs, pauseNotices)) {
       console.log('[index] Nothing to report — no matches and nothing the quota system had to say. No digest sent.');
       return;
     }
@@ -159,7 +169,7 @@ async function run() {
     jsearchOk = jsearchBudget.allowed >= jsearchEstimate;
     // remaining/needed lets the notice tell "the month is spent" apart from
     // "there is some left, just not a scan's worth" — two different sentences.
-    if (!jsearchOk) quotaNotices.push(quotaNotice('JSearch', {
+    if (!jsearchOk) notePause(quotaNotice('JSearch', {
       resetDate: jsearchBudget.resetDate,
       remaining: jsearchBudget.allowed,
       needed: jsearchEstimate,
@@ -177,7 +187,7 @@ async function run() {
       config.adzunaMaxCallsPerRun = adzunaBudget.allowed;
       adzunaOk = adzunaBudget.allowed > 0;
 
-      if (!adzunaOk) quotaNotices.push(quotaNotice('Adzuna', { resetDate: adzunaBudget.resetDate }));
+      if (!adzunaOk) notePause(quotaNotice('Adzuna', { resetDate: adzunaBudget.resetDate }));
     } else {
       console.warn('[index] Adzuna has no searches to build from this profile (no target roles, or no location in a country it covers) — skipping it without touching quota.');
     }
@@ -294,6 +304,10 @@ async function run() {
     // A source that ran a rotating window did not search everything the user
     // asked for, and the digest has to say so — otherwise a scan that covered
     // eight of thirty-five searches reads as the whole web having nothing.
+    //
+    // quotaNotices, NOT notePause: rotation is the normal state of a big
+    // profile, so this line appears on every run and must never be the reason
+    // an otherwise-empty digest is sent. It rides along when one goes out.
     if (adzunaStats.window && adzunaStats.window.ran > 0) {
       quotaNotices.push(quotaNotice('Adzuna', adzunaStats.window));
     }

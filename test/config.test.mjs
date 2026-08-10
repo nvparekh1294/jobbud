@@ -1,5 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseProfileYml, parseLocations, numericSetting, loadConfig } from '../scanner/config.mjs';
 
 // ── parseProfileYml ───────────────────────────────────────────────────────────
@@ -126,4 +129,59 @@ test('loadConfig hands the scanner the resolved budgets', async () => {
   assert.equal(config.jsearchMonthlyLimit, 200);
   assert.equal(config.serpapiMonthlyLimit, 250);
   assert.equal(config.adzunaCallsPerRun, null, 'no opinion means quota.mjs works the slice out from the cadence');
+});
+
+// ── The example file has to survive being uncommented ─────────────────────────
+//
+// parseProfileYml keeps everything after the colon, comment and all — this
+// file's own "name: Jane Smith  # Your full name" depends on that. For a number
+// it is fatal and silent: "1000  # default 250" is NaN, so a user who
+// uncommented the documented line got the built-in default while looking
+// straight at the figure they had set. The example no longer annotates those
+// lines, and numericSetting no longer trips over an annotation either.
+
+test('the settings lines in profile.yml.example parse to the numbers they show', () => {
+  const example = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), '..', 'config', 'profile.yml.example'), 'utf8');
+
+  const keys = {
+    adzuna_monthly_limit: 'ADZUNA_MONTHLY_LIMIT',
+    jsearch_monthly_limit: 'JSEARCH_MONTHLY_LIMIT',
+    serpapi_monthly_limit: 'SERPAPI_MONTHLY_LIMIT',
+    adzuna_calls_per_run: 'ADZUNA_CALLS_PER_RUN',
+  };
+
+  // Uncomment them exactly as a user would: strip the leading "# ".
+  const uncommented = example.split('\n')
+    .filter(line => Object.keys(keys).some(k => line.includes(`${k}:`)))
+    .map(line => line.replace(/^#\s?/, ''));
+  assert.equal(uncommented.length, 4, 'the example no longer documents all four settings');
+
+  const profile = parseProfileYml(uncommented.join('\n'));
+  for (const [key, envName] of Object.entries(keys)) {
+    const value = numericSetting(profile, key, envName, null);
+    assert.ok(Number.isFinite(value) && value > 0,
+      `uncommenting "${key}" from config/profile.yml.example yields ${JSON.stringify(profile[key])}, which resolves to ${value} — the user's number is being thrown away`);
+  }
+  assert.equal(numericSetting(profile, 'adzuna_monthly_limit', 'ADZUNA_MONTHLY_LIMIT', 250), 1000,
+    'and it is the number printed in the file, not the default');
+});
+
+test('a number a user annotated with their own note still counts', () => {
+  const profile = parseProfileYml('adzuna_monthly_limit: 1000     # checked on the dashboard 8 Aug');
+  assert.equal(profile.adzuna_monthly_limit, '1000     # checked on the dashboard 8 Aug',
+    'the parser keeps the comment, as the rest of this file relies on');
+  assert.equal(numericSetting(profile, 'adzuna_monthly_limit', 'ADZUNA_MONTHLY_LIMIT', 250), 1000,
+    'but the setting is still the number');
+});
+
+test('a comment with no number in front of it is not a setting', () => {
+  const warn = console.warn;
+  console.warn = () => {};
+  try {
+    const profile = parseProfileYml('adzuna_monthly_limit: # not sure yet');
+    assert.equal(numericSetting(profile, 'adzuna_monthly_limit', 'ADZUNA_MONTHLY_LIMIT', 250), 250);
+  } finally {
+    console.warn = warn;
+  }
 });

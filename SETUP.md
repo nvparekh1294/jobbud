@@ -198,7 +198,7 @@ arrive. Add whichever lines you need to `config/profile.yml` in your repo:
 |---------|--------------|
 | `adzuna_monthly_limit: 1000` | Adzuna calls JobBud will make per month (default 250) |
 | `jsearch_monthly_limit: 200` | JSearch calls per month (default 200) |
-| `serpapi_monthly_limit: 250` | SerpApi calls per month (default 250) |
+| `serpapi_monthly_limit: 250` | SerpApi calls per month (default 250) — only used if you run a full scan yourself (`SCAN_MODE=full`); the scheduled scan never touches SerpApi |
 | `adzuna_calls_per_run: 50` | Adzuna searches in a single scan (default: a fifth of the monthly limit) |
 
 `config/profile.yml.example` has the same block, commented out, if you would

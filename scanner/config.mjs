@@ -149,16 +149,29 @@ export function parseLocations(yaml) {
 // Order: env → profile.yml → built-in default. A non-numeric or non-positive
 // value falls through to the next source rather than turning a budget off by
 // accident, and says so.
+// A number out of a YAML scalar, tolerating a trailing comment.
+//
+// parseProfileYml keeps everything after the colon, comment and all — this
+// file's own example writes "name: Jane Smith  # Your full name" and expects
+// it. For prose that is harmless; for a number it is fatal and silent:
+// "1000  # default 250" is NaN, and NaN falls back to the built-in default
+// while the user is looking at the figure they set. Anyone annotating their own
+// settings deserves better than a limit that silently ignores them.
+function toNumber(value) {
+  if (typeof value !== 'string') return Number(value);
+  return Number(value.split('#')[0].trim());
+}
+
 export function numericSetting(profile, key, envName, fallback) {
   const raw = process.env[envName];
-  const fromEnv = Number(raw);
+  const fromEnv = toNumber(raw);
   if (Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv;
   if (raw !== undefined && raw !== '') {
     console.warn(`[config] ${envName}="${raw}" is not a positive number — ignoring it`);
   }
 
   const declared = profile?.[key];
-  const fromProfile = Number(declared);
+  const fromProfile = toNumber(declared);
   if (Number.isFinite(fromProfile) && fromProfile > 0) return fromProfile;
   if (declared !== undefined && declared !== null && declared !== '') {
     console.warn(`[config] ${key} in config/profile.yml is "${declared}", which is not a positive number — ignoring it`);
