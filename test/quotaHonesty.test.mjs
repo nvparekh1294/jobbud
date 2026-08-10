@@ -86,8 +86,9 @@ test('a source that builds no queries reports zero attempts', async () => {
 test('index records the actual attempt count, not the estimate', () => {
   assert.match(indexSrc, /await recordUsage\(name, stats\.attempts\)/);
   assert.doesNotMatch(indexSrc, /recordUsage\(sources\[i\]\.name, sources\[i\]\.estimate\)/);
-  // Estimates survive only for the pre-flight projection.
-  assert.match(indexSrc, /checkQuota\('jsearch', jsearchEstimate, 200\)/);
+  // Estimates survive only for the pre-flight projection. (The limit used to be
+  // the literal 200; it is now the JSEARCH_MONTHLY_LIMIT env override.)
+  assert.match(indexSrc, /checkQuota\('jsearch', jsearchEstimate, JSEARCH_MONTHLY_LIMIT\)/);
 });
 
 test('index records usage for a source whose fetch rejected too', () => {

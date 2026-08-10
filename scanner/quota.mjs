@@ -17,34 +17,77 @@ async function saveUsage(usage) {
   await fs.writeFile(USAGE_PATH, JSON.stringify(usage, null, 2));
 }
 
-function resetIfNeeded(entry, source) {
-  if (!entry.monthResetDate) return entry;
+// One month on from `from`, as the plain YYYY-MM-DD string this file has always
+// stored.
+function oneMonthOn(from) {
+  const next = new Date(from);
+  next.setMonth(next.getMonth() + 1);
+  return next.toISOString().slice(0, 10);
+}
+
+// Bring an entry up to date before anything reads its counter. Returns the SAME
+// object when nothing needed doing, so callers can tell whether there is
+// anything to write back.
+//
+// THE BUG THIS REPAIRS. New entries were created with `monthResetDate: null`,
+// nothing anywhere set it, and the reset check returned immediately on a null
+// date — so `callsThisMonth` was never a month's worth of calls, it was a
+// LIFETIME total that only ever grew. The first time it crossed the limit the
+// source was skipped, and then it was skipped on every run after that, forever.
+// A real user's log: "adzuna: would exceed monthly limit — 235 used + ~28
+// estimated = 263 > 250", every run, with no Adzuna jobs in any digest.
+//
+// So an entry with no reset date is not a new entry: it is a lifetime count that
+// cannot be converted into a monthly one. The honest repair is to start its
+// month now, drop the number that never meant what it claimed, and say why in
+// the log — otherwise the user sees a counter jump to zero with no explanation.
+function refreshEntry(entry, source) {
+  if (!entry) {
+    // A source's first ever run. The month starts today; without this the entry
+    // would be written with a null date and inherit the lifetime-counter bug.
+    return { callsThisMonth: 0, monthResetDate: oneMonthOn(new Date()), lastScan: null };
+  }
+
+  if (!entry.monthResetDate) {
+    const migrated = {
+      ...entry,
+      callsThisMonth: 0,
+      monthResetDate: oneMonthOn(new Date()),
+      exhausted: false,
+    };
+    console.log(`[quota] ${source}: this entry had no monthly reset date, so its ${entry.callsThisMonth || 0} recorded calls were a lifetime total rather than a monthly one — starting a fresh month now (next reset: ${migrated.monthResetDate})`);
+    return migrated;
+  }
+
   if (new Date() >= new Date(entry.monthResetDate)) {
-    const nextReset = new Date(entry.monthResetDate);
-    nextReset.setMonth(nextReset.getMonth() + 1);
     const reset = {
       ...entry,
       callsThisMonth: 0,
-      monthResetDate: nextReset.toISOString().slice(0, 10),
+      monthResetDate: oneMonthOn(entry.monthResetDate),
       exhausted: false,
     };
     console.log(`[quota] ${source}: monthly counter reset (next reset: ${reset.monthResetDate})`);
     return reset;
   }
+
   return entry;
 }
 
 export async function checkQuota(source, estimatedCalls, monthlyLimit) {
   const usage = await loadUsage();
-  let entry = usage[source] || { callsThisMonth: 0, monthResetDate: null, lastScan: null };
+  const stored = usage[source];
+  const entry = refreshEntry(stored, source);
 
-  entry = resetIfNeeded(entry, source);
+  // A reset or a migration has to survive a run that then skips this source —
+  // otherwise a stuck user is "repaired" in the log and still stuck on disk,
+  // because only a source that actually runs reaches recordUsage.
+  if (entry !== stored) {
+    usage[source] = entry;
+    await saveUsage(usage);
+  }
 
   if (entry.exhausted) {
     console.warn(`[quota] ${source}: marked exhausted until ${entry.monthResetDate} — skipping`);
-    // Save the reset if it happened
-    usage[source] = entry;
-    await saveUsage(usage);
     return false;
   }
 
@@ -60,9 +103,8 @@ export async function checkQuota(source, estimatedCalls, monthlyLimit) {
 
 export async function recordUsage(source, callsMade) {
   const usage = await loadUsage();
-  let entry = usage[source] || { callsThisMonth: 0, monthResetDate: null, lastScan: null };
+  const entry = { ...refreshEntry(usage[source], source) };
 
-  entry = resetIfNeeded(entry, source);
   entry.callsThisMonth = (entry.callsThisMonth || 0) + callsMade;
   entry.lastScan = new Date().toISOString();
 

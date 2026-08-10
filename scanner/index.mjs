@@ -45,6 +45,24 @@ const runApi = SCAN_SOURCES !== 'portals';
 // companies are scanned alongside portals.yml and share the same pipeline.
 const RADAR_CADENCE = (process.env.RADAR_CADENCE || 'all').toLowerCase();
 
+// Monthly API budgets, one per source. The defaults are the figures these were
+// hardcoded to, but none of them is a fact: every provider sets its own
+// allowance per account and Adzuna does not publish its free tier at all, so a
+// number baked into the code is a guess that silently throttles anyone whose
+// real plan is bigger. Each is overridable — the provider's developer dashboard
+// shows the true figure. A non-numeric or non-positive value falls back to the
+// default rather than turning the budget off by accident.
+function monthlyLimit(envName, fallback) {
+  const raw = Number(process.env[envName]);
+  if (Number.isFinite(raw) && raw > 0) return raw;
+  if (process.env[envName]) console.warn(`[index] ${envName}="${process.env[envName]}" is not a positive number — using the default of ${fallback}`);
+  return fallback;
+}
+
+const ADZUNA_MONTHLY_LIMIT = monthlyLimit('ADZUNA_MONTHLY_LIMIT', 250);
+const JSEARCH_MONTHLY_LIMIT = monthlyLimit('JSEARCH_MONTHLY_LIMIT', 200);
+const SERPAPI_MONTHLY_LIMIT = monthlyLimit('SERPAPI_MONTHLY_LIMIT', 250);
+
 async function runDryRun(config) {
   console.log('[dry-run] ── DRY RUN MODE ── loading fixtures, skipping all API calls');
 
@@ -99,12 +117,12 @@ async function run() {
   let jsearchOk = false, adzunaOk = false, serpApiOk = false;
   if (runApi) {
     [jsearchOk, adzunaOk] = await Promise.all([
-      checkQuota('jsearch', jsearchEstimate, 200),
-      checkQuota('adzuna', adzunaEstimate, 250),
+      checkQuota('jsearch', jsearchEstimate, JSEARCH_MONTHLY_LIMIT),
+      checkQuota('adzuna', adzunaEstimate, ADZUNA_MONTHLY_LIMIT),
     ]);
 
     if (SCAN_MODE === 'full') {
-      serpApiOk = await checkQuota('serpapi', serpApiEstimate, 250);
+      serpApiOk = await checkQuota('serpapi', serpApiEstimate, SERPAPI_MONTHLY_LIMIT);
       if (serpApiOk && config.serpApiKey) {
         try {
           const remaining = await checkSerpApiBalance(config.serpApiKey);

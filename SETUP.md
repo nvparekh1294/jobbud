@@ -169,6 +169,26 @@ Watch List**.
 Each service sets its own pricing, usually with a small free tier. Check the
 current plan on the site before you rely on it — the scan makes real API calls.
 
+### Telling JobBud how big your allowance is
+
+JobBud keeps its own count of the calls it makes each month and stops a source
+before it runs past the limit. It cannot ask the provider what your limit is, so
+it assumes a conservative one: 250 calls a month for Adzuna, 200 for JSearch,
+250 for SerpApi. **Your real Adzuna limit is shown in the Adzuna developer
+dashboard** — the free tier is commonly around 1,000 calls a month, four times
+what JobBud assumes. If yours is higher than the assumption, say so and JobBud
+will use the room:
+
+| Setting | What it does |
+|---------|--------------|
+| `ADZUNA_MONTHLY_LIMIT` | Adzuna calls JobBud will make per month (default 250) |
+| `JSEARCH_MONTHLY_LIMIT` | JSearch calls per month (default 200) |
+| `SERPAPI_MONTHLY_LIMIT` | SerpApi calls per month (default 250) |
+
+These are settings, not secrets — nothing breaks if you leave them alone, and
+setting one higher than your real plan just means the provider starts refusing
+calls before JobBud does.
+
 ### Where the keys go
 
 **Your repo → Settings → Secrets and variables → Actions → New repository
