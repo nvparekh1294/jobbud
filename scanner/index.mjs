@@ -45,24 +45,6 @@ const runApi = SCAN_SOURCES !== 'portals';
 // companies are scanned alongside portals.yml and share the same pipeline.
 const RADAR_CADENCE = (process.env.RADAR_CADENCE || 'all').toLowerCase();
 
-// Monthly API budgets, one per source. The defaults are the figures these were
-// hardcoded to, but none of them is a fact: every provider sets its own
-// allowance per account and Adzuna does not publish its free tier at all, so a
-// number baked into the code is a guess that silently throttles anyone whose
-// real plan is bigger. Each is overridable — the provider's developer dashboard
-// shows the true figure. A non-numeric or non-positive value falls back to the
-// default rather than turning the budget off by accident.
-function monthlyLimit(envName, fallback) {
-  const raw = Number(process.env[envName]);
-  if (Number.isFinite(raw) && raw > 0) return raw;
-  if (process.env[envName]) console.warn(`[index] ${envName}="${process.env[envName]}" is not a positive number — using the default of ${fallback}`);
-  return fallback;
-}
-
-const ADZUNA_MONTHLY_LIMIT = monthlyLimit('ADZUNA_MONTHLY_LIMIT', 250);
-const JSEARCH_MONTHLY_LIMIT = monthlyLimit('JSEARCH_MONTHLY_LIMIT', 200);
-const SERPAPI_MONTHLY_LIMIT = monthlyLimit('SERPAPI_MONTHLY_LIMIT', 250);
-
 async function runDryRun(config) {
   console.log('[dry-run] ── DRY RUN MODE ── loading fixtures, skipping all API calls');
 
@@ -105,6 +87,16 @@ async function run() {
     return;
   }
 
+  // ── Monthly API budgets ───────────────────────────────────────────────────
+  // Resolved by loadConfig from config/profile.yml, with a process.env override
+  // for local runs. They deliberately do NOT come straight from process.env
+  // here: the scheduled workflow passes a fixed env block and its file is
+  // frozen, so an Actions secret would never arrive. See numericSetting in
+  // config.mjs.
+  const ADZUNA_MONTHLY_LIMIT = config.adzunaMonthlyLimit;
+  const JSEARCH_MONTHLY_LIMIT = config.jsearchMonthlyLimit;
+  const SERPAPI_MONTHLY_LIMIT = config.serpapiMonthlyLimit;
+
   // ── Quota estimates (based on query builder counts in each source) ────────
   // jsearch: 4 roleGroups × locations + 2 remote = ~22 calls
   // adzuna: 7 searchTerms × locations = ~35 calls
@@ -118,7 +110,7 @@ async function run() {
   // rotates through the list across runs so every search still gets made. The
   // projection has to use the CAPPED number, otherwise a list that will never
   // run in one go blocks the source on every single run.
-  const adzunaPerRun = callsPerRun(ADZUNA_MONTHLY_LIMIT, process.env.ADZUNA_CALLS_PER_RUN);
+  const adzunaPerRun = callsPerRun(ADZUNA_MONTHLY_LIMIT, config.adzunaCallsPerRun);
   const adzunaEstimate = Math.min(config.locations.length * 7, adzunaPerRun);
 
   // ── Quota checks (API sources only) ───────────────────────────────────────

@@ -188,23 +188,35 @@ dashboard** — the free tier is commonly around 1,000 calls a month, four times
 what JobBud assumes. If yours is higher than the assumption, say so and JobBud
 will use the room:
 
-| Setting | What it does |
-|---------|--------------|
-| `ADZUNA_MONTHLY_LIMIT` | Adzuna calls JobBud will make per month (default 250) |
-| `JSEARCH_MONTHLY_LIMIT` | JSearch calls per month (default 200) |
-| `SERPAPI_MONTHLY_LIMIT` | SerpApi calls per month (default 250) |
+**These go in `config/profile.yml`, not in Actions secrets.** They are settings,
+not secrets, and profile.yml is the only place the scanner can actually read
+them from: the scheduled workflow hands the scanner a fixed list of variables
+and the workflow file is frozen, so a limit added to Actions secrets would never
+arrive. Add whichever lines you need to `config/profile.yml` in your repo:
 
-These are settings, not secrets — nothing breaks if you leave them alone, and
-setting one higher than your real plan just means the provider starts refusing
-calls before JobBud does.
+| Setting in `config/profile.yml` | What it does |
+|---------|--------------|
+| `adzuna_monthly_limit: 1000` | Adzuna calls JobBud will make per month (default 250) |
+| `jsearch_monthly_limit: 200` | JSearch calls per month (default 200) |
+| `serpapi_monthly_limit: 250` | SerpApi calls per month (default 250) |
+| `adzuna_calls_per_run: 50` | Adzuna searches in a single scan (default: a fifth of the monthly limit) |
+
+`config/profile.yml.example` has the same block, commented out, if you would
+rather copy it. Nothing breaks if you leave them alone, and setting one higher
+than your real plan just means the provider starts refusing calls before JobBud
+does. (If you run the scanner on your own machine, the environment variables
+`ADZUNA_MONTHLY_LIMIT`, `JSEARCH_MONTHLY_LIMIT`, `SERPAPI_MONTHLY_LIMIT` and
+`ADZUNA_CALLS_PER_RUN` override the profile for that one local run. They have no
+effect on the scheduled scan.)
 
 Adzuna searches one target role in one location at a time, so a profile with
-five cities and seven roles is 35 searches — far more than a month's budget can
-afford every run. Rather than skip Adzuna on those runs, JobBud runs a slice
-each time and moves through the list, so every search still gets made, just
-over several runs. The scan log says which slice ran and how many runs a full
-pass takes. `ADZUNA_CALLS_PER_RUN` sets the slice size if you want a different
-one; by default it is a thirty-first of your monthly limit.
+five cities and seven roles is 35 searches. If that is more than one scan's
+share of the month, JobBud runs a slice and moves through the list rather than
+skipping Adzuna outright, so every search still gets made over the following
+scans. The scan log says which slice ran and how many runs a full pass takes.
+The default slice is a fifth of your monthly limit, because the API scan runs
+weekly and there are about five weeks in a month — at the 250 default that is 50
+searches a scan, enough for most profiles to cover their whole list every week.
 
 ### Where the keys go
 

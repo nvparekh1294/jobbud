@@ -73,10 +73,24 @@ function refreshEntry(entry, source) {
   return entry;
 }
 
-// How many calls a single run may spend against a monthly budget. A run a day
-// is the cadence these sources are built for, so a thirty-first of the month's
-// allowance still fits in the longest month. Callers pass their own override
-// (an env value) when the user has picked a figure.
+// How many calls a single run may spend against a monthly budget.
+//
+// THE DIVISOR IS THE SCAN CADENCE, and the cadence that actually ships is
+// WEEKLY: .github/workflows/weekly-api-scan.yml (cron '0 6 * * 1') is the only
+// workflow that runs the API sources. Five is roughly the number of weeks in a
+// month, so a weekly user gets their whole query list searched every single
+// week and still lands inside the monthly allowance. Dividing by 31 — a daily
+// cadence that no workflow actually runs — cut a weekly user to about a fifth
+// of one run's list, meaning each role-and-city pair was searched once every
+// five weeks while ~86% of the month's budget went unspent.
+//
+// It stays a hard per-run ceiling, so a burst of manual "Run workflow" presses
+// cannot spend the month in an afternoon: checkQuota still clamps every run
+// against what the month has left, and a run that no longer fits is trimmed
+// rather than skipped.
+//
+// Callers pass their own override (profile.yml's adzuna_calls_per_run, or the
+// matching env var locally) when the user has picked a figure.
 //
 // Generic on purpose: jsearch and serpapi do not budget per run yet — their
 // query lists are small enough to fit whole — and wiring them up later is one
@@ -84,7 +98,7 @@ function refreshEntry(entry, source) {
 export function callsPerRun(monthlyLimit, override) {
   const chosen = Number(override);
   if (Number.isFinite(chosen) && chosen > 0) return Math.floor(chosen);
-  return Math.max(1, Math.floor(monthlyLimit / 31));
+  return Math.max(1, Math.floor(monthlyLimit / 5));
 }
 
 // What a source may spend this run: never more than it asked for, never more

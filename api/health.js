@@ -447,14 +447,14 @@ export async function checkDataFile(token, owner, repo, filePath, emptyDoc, labe
 // user's Adzuna was paused for weeks before anyone worked out why the roles had
 // dried up. So the counts get said out loud here.
 //
-// The monthly LIMIT each count is measured against is a scanner setting living
-// in the GitHub Actions vault, which a Vercel function cannot read — so it is
-// not quoted. What this can report honestly is how many calls have been made
-// and when the count starts over. Always informational: a spent month is a fact
+// The monthly LIMIT each count is measured against is a scanner setting in the
+// user's config/profile.yml, which this page does not read — so it is not
+// quoted. What this can report honestly is how many calls have been made and
+// when the count starts over. Always informational: a spent month is a fact
 // about usage, not a broken install.
 export async function checkApiQuota(token, owner, repo) {
   const name = 'quota:api';
-  const fix = 'Nothing to fix. If a source is paused and you know your plan allows more, set its monthly limit (for example ADZUNA_MONTHLY_LIMIT) in your repo\'s Actions secrets — see the "API job sources" step in SETUP.md.';
+  const fix = 'Nothing to fix. If a source is paused and you know your plan allows more, raise its monthly limit (for example adzuna_monthly_limit: 1000) in your repo\'s config/profile.yml — see the "API job sources" step in SETUP.md. It does not belong in Actions secrets; the scheduled workflow would not pass it through.';
 
   let file;
   try {
@@ -487,7 +487,7 @@ export async function checkApiQuota(token, owner, repo) {
   return check(
     name,
     true,
-    `API calls the scanner has counted this month — ${lines.join('; ')}. The monthly limit each of these is measured against is a scanner setting in your GitHub Actions secrets, which this page cannot read.`,
+    `API calls the scanner has counted this month — ${lines.join('; ')}. The monthly limit each of these is measured against is a setting in your config/profile.yml, which this page does not read.`,
     fix,
     true,
   );

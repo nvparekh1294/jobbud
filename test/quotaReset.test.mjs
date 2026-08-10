@@ -155,16 +155,22 @@ test('a genuinely spent month hands back only what is left', async () => {
 // the month and skipped the source when it did not fit, so a heavy list meant
 // no Adzuna at all. Now a run takes a slice and the slice moves.
 
-test('the default per-run cap is a thirty-first of the month, never zero', () => {
-  assert.equal(callsPerRun(250), 8, '250/31 = 8 calls a run, so 31 daily runs fit');
-  assert.equal(callsPerRun(1000), 32);
-  assert.equal(callsPerRun(10), 1, 'a tiny budget still gets one call a run, not none');
+// The divisor is the scan cadence, and the cadence that ships is WEEKLY —
+// weekly-api-scan.yml is the only workflow that runs the API sources. Dividing
+// by 31 assumed a daily scan nobody runs: it held a weekly user to ~8 searches a
+// week (each role-and-city pair once every five weeks) while ~86% of the monthly
+// budget went unspent. Five ≈ weeks in a month.
+test('the default per-run cap is a fifth of the month — one week of a weekly scan', () => {
+  assert.equal(callsPerRun(250), 50, '250/5 = 50 a run, so five weekly runs fit the month');
+  assert.equal(callsPerRun(1000), 200);
+  assert.equal(callsPerRun(10), 2);
+  assert.equal(callsPerRun(3), 1, 'a tiny budget still gets one call a run, not none');
 });
 
 test('an explicit per-run cap overrides the default, and nonsense does not', () => {
   assert.equal(callsPerRun(250, '12'), 12);
-  assert.equal(callsPerRun(250, 'lots'), 8, 'an unparseable override falls back to the default');
-  assert.equal(callsPerRun(250, '0'), 8, 'zero would silently disable the source');
+  assert.equal(callsPerRun(250, 'lots'), 50, 'an unparseable override falls back to the default');
+  assert.equal(callsPerRun(250, '0'), 50, 'zero would silently disable the source');
 });
 
 test('the window rotates and covers every query over a full rotation', async () => {
@@ -216,15 +222,17 @@ test('the cursor advances even when the run that planned it never finishes', asy
 // ── The pre-flight projection uses the capped estimate ───────────────────────
 
 test('a capped run is not blocked by a query list too big for the month', async () => {
-  // 35 searches against 250/month never fits as one block — the old projection
-  // (35 + used > 250 on a stale counter) is what took Adzuna offline. One run's
-  // worth is 8, and 8 fits.
+  // The old projection checked the whole 35-search list against the month, and
+  // on a stale lifetime counter (35 + 200 > 250) that took Adzuna offline every
+  // run. The projection is now one run's worth: at the weekly cadence a 35-item
+  // list is under the 50-call slice, so the whole list runs and still fits.
   writeUsage({ adzuna: { callsThisMonth: 200, monthResetDate: monthsFromToday(1) } });
 
   const perRun = callsPerRun(250);
   const budget = await checkQuota('adzuna', Math.min(35, perRun), 250);
 
-  assert.equal(budget.allowed, 8, 'the run goes ahead with a full window');
+  assert.equal(perRun, 50);
+  assert.equal(budget.allowed, 35, 'the run goes ahead with the whole list');
 });
 
 test('when less than a run fits, the run is trimmed rather than skipped', async () => {

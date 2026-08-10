@@ -645,6 +645,36 @@ test('every secret SETUP.md tells users to create is passed through by a workflo
   }
 });
 
+// The quota SETTINGS are a different question from the API KEYS above, and they
+// have the opposite answer. Keys go in Actions secrets because a workflow passes
+// them through; the monthly limits do not, because the workflow hands the
+// scanner a fixed env block and its file is frozen. SETUP.md told users to add
+// them as Actions secrets, where they would have sat doing nothing forever, so
+// the doc is guarded here against sliding back.
+test('SETUP.md sends the quota settings to config/profile.yml, not to Actions secrets', () => {
+  const setup = repoFile('SETUP.md');
+  const start = setup.indexOf('### Telling JobBud how big your allowance is');
+  assert.ok(start > -1, 'the allowance section moved — this guard needs repointing');
+  const end = setup.indexOf('### Where the keys go');
+  assert.ok(end > start, 'the allowance section no longer precedes the keys section');
+  const body = setup.slice(start, end);
+
+  assert.match(body, /config\/profile\.yml/, 'the section must name the file the scanner actually reads');
+  for (const key of ['adzuna_monthly_limit', 'jsearch_monthly_limit', 'serpapi_monthly_limit', 'adzuna_calls_per_run']) {
+    assert.ok(body.includes(key), `SETUP.md does not name ${key} as a profile.yml setting`);
+  }
+  // The env names may still appear as a local-run aside, but never as something
+  // to add to a repo secret.
+  assert.doesNotMatch(body, /Secrets and variables/, 'the allowance section must not point at the Actions secrets vault');
+  assert.doesNotMatch(body, /`[A-Z_]*MONTHLY_LIMIT`[^\n]*secret/i);
+
+  // And the same names must be discoverable where users are told to write them.
+  const example = repoFile('config', 'profile.yml.example');
+  for (const key of ['adzuna_monthly_limit', 'adzuna_calls_per_run']) {
+    assert.ok(example.includes(key), `config/profile.yml.example does not mention ${key}`);
+  }
+});
+
 test('SETUP.md quotes the real skip lines the scanner logs, so the symptom is searchable', () => {
   const setup = repoFile('SETUP.md');
   const sources = readdirSync(join(__dirname, '..', 'scanner', 'sources'))
@@ -682,7 +712,7 @@ test('the README advertises the API job sources and cross-refs the SETUP section
 // A source paused for quota is invisible from outside: the digest just gets
 // thinner. These numbers are the only place a user can see it from the
 // dashboard, so they have to be there, and they have to be honest about the one
-// figure this page cannot see — the limit, which lives in Actions secrets.
+// figure this page does not read — the limit, which lives in config/profile.yml.
 
 test('the quota check reports each source\'s calls and when the count restarts', async () => {
   const c = await withFetch(routeFetch(HEALTHY_ROUTES), () => checkApiQuota('ghp_x', 'nikita', 'jobbud'));
@@ -690,7 +720,19 @@ test('the quota check reports each source\'s calls and when the count restarts',
   assert.equal(c.informational, true, 'usage is a fact, not a failure');
   assert.match(c.message, /adzuna: 143 calls this month/);
   assert.match(c.message, /2026-09-07/);
-  assert.match(c.message, /cannot read/, 'it says outright that the limit is not visible from here');
+  assert.match(c.message, /config\/profile\.yml/, 'it names where the limit is set');
+  assert.match(c.message, /does not read/, 'it says outright that the limit is not visible from here');
+});
+
+// The fix text is a set of instructions the user will follow literally, so it
+// must not send them to a vault the scanner cannot read from. ADZUNA_MONTHLY_LIMIT
+// as an Actions secret was exactly that: the weekly workflow passes a fixed env
+// block and its file is frozen, so the secret would have sat there doing nothing.
+test('the quota fix text sends the limit to profile.yml, not to Actions secrets', async () => {
+  const c = await withFetch(routeFetch(HEALTHY_ROUTES), () => checkApiQuota('ghp_x', 'nikita', 'jobbud'));
+  assert.match(c.fix, /config\/profile\.yml/);
+  assert.match(c.fix, /adzuna_monthly_limit/);
+  assert.doesNotMatch(c.fix, /set its monthly limit[^.]*Actions secrets/);
 });
 
 test('the quota check is quiet on a fresh install with no usage file', async () => {
