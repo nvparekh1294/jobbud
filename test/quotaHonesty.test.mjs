@@ -19,7 +19,7 @@ import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fetchAdzuna, adzunaStats } from '../scanner/sources/adzuna.mjs';
+import { fetchAdzuna, adzunaStats, adzunaQueryCount } from '../scanner/sources/adzuna.mjs';
 import { recordUsage } from '../scanner/quota.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -104,9 +104,47 @@ test('index records usage for a source whose fetch rejected too', () => {
 // against the month, and a list that can never fit in one run blocked the source
 // on every run. index must project one RUN's worth and hand the source that cap.
 test('index projects the capped per-run estimate for adzuna', () => {
-  assert.match(indexSrc, /const adzunaEstimate = Math\.min\(config\.locations\.length \* 7, adzunaPerRun\)/);
+  // The list size is the source's real count, not a guess. `locations × 7`
+  // hardcoded one profile's role count into everyone's budget.
+  assert.match(indexSrc, /const adzunaWanted = adzunaQueryCount\(config\)/);
+  assert.match(indexSrc, /const adzunaEstimate = Math\.min\(adzunaWanted, adzunaPerRun\)/);
+  assert.doesNotMatch(indexSrc, /config\.locations\.length \* 7/);
   assert.match(indexSrc, /config\.adzunaMaxCallsPerRun = adzunaBudget\.allowed/);
   assert.match(indexSrc, /adzunaOk = adzunaBudget\.allowed > 0/);
+});
+
+test('adzunaQueryCount counts what the source will actually ask for', () => {
+  assert.equal(adzunaQueryCount(CONFIG), 1, 'one role in one supported city');
+
+  const threeRolesTwoCities = {
+    ...CONFIG,
+    requiredTitleKeywords: ['pm', 'chief of staff', 'bizops'],
+    locations: [{ city: 'Austin', country: 'US' }, { city: 'London', country: 'UK' }],
+  };
+  assert.equal(adzunaQueryCount(threeRolesTwoCities), 6, 'aliases like US/UK count as searchable');
+
+  assert.equal(adzunaQueryCount({ ...CONFIG, locations: [{ city: 'Berlin', country: 'DE' }] }), 0,
+    'a country Adzuna is not wired up for adds no searches');
+  assert.equal(adzunaQueryCount({ ...CONFIG, requiredTitleKeywords: [] }), 0);
+});
+
+// Counting the list must not narrate it — buildQueries already warns about every
+// skipped location, and a second copy of those lines per run is just noise.
+test('counting the adzuna list is silent', () => {
+  const said = [];
+  console.warn = (...a) => said.push(a.join(' '));
+  adzunaQueryCount({ ...CONFIG, locations: [{ city: 'Berlin', country: 'DE' }] });
+  assert.deepEqual(said, []);
+});
+
+// A profile with nothing for Adzuna to search is a configuration problem, not a
+// quota one, and must not be reported to the user as "your allowance is spent".
+test('index does not spend a quota check, or blame quota, when adzuna has nothing to search', () => {
+  assert.match(indexSrc, /if \(adzunaWanted > 0\) \{/);
+  const guarded = indexSrc.slice(indexSrc.indexOf('if (adzunaWanted > 0) {'));
+  const body = guarded.slice(0, guarded.indexOf('\n    } else {'));
+  assert.ok(body.includes("checkQuota('adzuna'"), 'the adzuna quota check sits inside the guard');
+  assert.ok(body.includes("quotaNotice('Adzuna'"), 'and so does the notice it produces');
 });
 
 test('index shouts when every query of a source failed', () => {

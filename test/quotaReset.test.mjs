@@ -14,6 +14,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { checkQuota, recordUsage, callsPerRun, takeQueryWindow } from '../scanner/quota.mjs';
 import { fetchAdzuna, adzunaStats } from '../scanner/sources/adzuna.mjs';
 
@@ -319,4 +321,67 @@ test('no cap set leaves the source exactly as it was', async () => {
   assert.equal(adzunaStats.attempts, 35, 'every search runs when nobody set a budget');
   assert.equal(adzunaStats.window, null, 'nothing to tell the user about');
   assert.equal(fs.existsSync(usageFile()), false, 'and no quota state is touched');
+});
+
+// ── An empty window divides by nothing ───────────────────────────────────────
+
+test('a window over an empty list hands back nothing and leaves the cursor alone', async () => {
+  writeUsage({ adzuna: { callsThisMonth: 4, monthResetDate: monthsFromToday(1), queryCursor: 6 } });
+
+  // start % 0 is NaN and ceil(0/0) is NaN: the old code wrote NaN into the
+  // cursor, and a NaN cursor restarts the rotation from the beginning forever.
+  const empty = await takeQueryWindow('adzuna', 0, 8);
+  assert.deepEqual(empty, { start: 0, count: 0, runsPerRotation: 0 });
+
+  const noAllowance = await takeQueryWindow('adzuna', 35, 0);
+  assert.deepEqual(noAllowance, { start: 0, count: 0, runsPerRotation: 0 });
+
+  assert.equal(readUsage().adzuna.queryCursor, 6, 'the rotation resumes where it was');
+});
+
+// ── The month is a month, in every timezone ──────────────────────────────────
+//
+// oneMonthOn parsed the stored day as UTC midnight and then advanced it with the
+// LOCAL-time setMonth. Under TZ=America/New_York that turned '2026-03-01' into
+// '2026-03-28' — a 27-day "month" that reset the counter early and handed the
+// user back an allowance they had not earned. Actions runners are UTC so
+// production never saw it; anyone scanning from their own machine did.
+//
+// Run in a child process because TZ has to be set before the process starts to
+// be worth trusting.
+
+const quotaModuleUrl = pathToFileURL(path.join(realCwd, 'scanner', 'quota.mjs')).href;
+
+function rolloverUnder(tz, storedResetDate) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jobbud-quota-tz-'));
+  fs.mkdirSync(path.join(dir, 'data'));
+  fs.writeFileSync(path.join(dir, 'data', 'api-usage.json'), JSON.stringify({
+    adzuna: { callsThisMonth: 40, monthResetDate: storedResetDate },
+  }));
+
+  execFileSync(process.execPath, ['--input-type=module', '-e', `
+    console.log = () => {}; console.warn = () => {};
+    const { checkQuota } = await import(${JSON.stringify(quotaModuleUrl)});
+    await checkQuota('adzuna', 1, 250);
+  `], { cwd: dir, env: { ...process.env, TZ: tz }, stdio: 'pipe' });
+
+  return JSON.parse(fs.readFileSync(path.join(dir, 'data', 'api-usage.json'), 'utf8')).adzuna;
+}
+
+test('a rollover advances a whole month west of UTC, not 27 days', () => {
+  const local = rolloverUnder('America/New_York', '2026-03-01');
+  assert.equal(local.monthResetDate, '2026-04-01');
+  assert.equal(local.callsThisMonth, 0, 'and the counter still starts over');
+
+  const utc = rolloverUnder('UTC', '2026-03-01');
+  assert.equal(utc.monthResetDate, '2026-04-01', 'the CI runner and the laptop agree');
+});
+
+test('a month-end reset date lands in the next month, not the one after it', () => {
+  // Jan 31 + 1 month has no 31st to land on. setMonth rolled it into March 3rd,
+  // skipping February; the last day of the target month is the honest answer.
+  assert.equal(rolloverUnder('UTC', '2026-01-31').monthResetDate, '2026-02-28');
+  assert.equal(rolloverUnder('America/New_York', '2026-01-31').monthResetDate, '2026-02-28');
+  assert.equal(rolloverUnder('UTC', '2024-01-31').monthResetDate, '2024-02-29', 'February gets its leap day');
+  assert.equal(rolloverUnder('UTC', '2026-05-31').monthResetDate, '2026-06-30');
 });

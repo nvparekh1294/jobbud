@@ -14,7 +14,7 @@ try {
 } catch { /* .env not present — fine in CI */ }
 
 import { fetchJSearch, jsearchStats } from './sources/jsearch.mjs';
-import { fetchAdzuna, adzunaStats } from './sources/adzuna.mjs';
+import { fetchAdzuna, adzunaStats, adzunaQueryCount } from './sources/adzuna.mjs';
 import { fetchSerpApi, checkSerpApiBalance, serpApiStats } from './sources/serpapi.mjs';
 import { fetchPortals } from './portalScanner.mjs';
 import { fetchRadar } from './radarSource.mjs';
@@ -99,19 +99,23 @@ async function run() {
 
   // ── Quota estimates (based on query builder counts in each source) ────────
   // jsearch: 4 roleGroups × locations + 2 remote = ~22 calls
-  // adzuna: 7 searchTerms × locations = ~35 calls
   // serpapi: 4 roleGroups × locations + 2 remote = ~22 calls
   const jsearchEstimate = config.locations.length * 4 + (config.includeRemote ? 2 : 0);
   const serpApiEstimate = config.locations.length * 4 + (config.includeRemote ? 2 : 0);
 
-  // Adzuna is the one source whose full list cannot run every time: locations ×
-  // target roles is ~35 searches, which daily is four times the whole monthly
-  // budget. So it asks for a run's worth, not the list's worth — and the source
-  // rotates through the list across runs so every search still gets made. The
-  // projection has to use the CAPPED number, otherwise a list that will never
-  // run in one go blocks the source on every single run.
+  // Adzuna is the one source whose full list may not fit in a single run: it
+  // searches one role in one city at a time, so the list is roles × searchable
+  // locations. That count comes from the source itself rather than a guess —
+  // `locations × 7` hardcoded one profile's role count, over-budgeting anyone
+  // with fewer roles and under-budgeting anyone with more, and the cap and the
+  // rotation are both sized from it.
+  //
+  // The projection asks for a RUN's worth, not the list's worth: a list that
+  // will never fit in one go must not block the source on every single run. The
+  // source rotates through the rest across later runs, so every search is made.
+  const adzunaWanted = adzunaQueryCount(config);
   const adzunaPerRun = callsPerRun(ADZUNA_MONTHLY_LIMIT, config.adzunaCallsPerRun);
-  const adzunaEstimate = Math.min(config.locations.length * 7, adzunaPerRun);
+  const adzunaEstimate = Math.min(adzunaWanted, adzunaPerRun);
 
   // ── Quota checks (API sources only) ───────────────────────────────────────
   //
@@ -149,19 +153,34 @@ async function run() {
     // Sequential, not Promise.all: each check can write a repaired entry back to
     // the single api-usage.json, and two concurrent writes would drop one of them.
     const jsearchBudget = await checkQuota('jsearch', jsearchEstimate, JSEARCH_MONTHLY_LIMIT);
-    const adzunaBudget = await checkQuota('adzuna', adzunaEstimate, ADZUNA_MONTHLY_LIMIT);
 
     // JSearch keeps its all-or-nothing rule: its query list is small enough to
     // fit whole, so a partial allowance means the month really is nearly spent.
     jsearchOk = jsearchBudget.allowed >= jsearchEstimate;
+    // remaining/needed lets the notice tell "the month is spent" apart from
+    // "there is some left, just not a scan's worth" — two different sentences.
+    if (!jsearchOk) quotaNotices.push(quotaNotice('JSearch', {
+      resetDate: jsearchBudget.resetDate,
+      remaining: jsearchBudget.allowed,
+      needed: jsearchEstimate,
+    }));
 
-    // Adzuna runs whatever fits, down to nothing. The source reads this cap and
-    // trims its query list to match.
-    config.adzunaMaxCallsPerRun = adzunaBudget.allowed;
-    adzunaOk = adzunaBudget.allowed > 0;
+    // A profile with nothing for Adzuna to search — no target roles, or no
+    // location in a country it covers — is not a quota problem and must not be
+    // reported as one. Checking quota for zero calls would also log a bogus
+    // "monthly limit reached". The source explains the real reason itself.
+    if (adzunaWanted > 0) {
+      const adzunaBudget = await checkQuota('adzuna', adzunaEstimate, ADZUNA_MONTHLY_LIMIT);
 
-    if (!jsearchOk) quotaNotices.push(quotaNotice('JSearch', { resetDate: jsearchBudget.resetDate }));
-    if (!adzunaOk) quotaNotices.push(quotaNotice('Adzuna', { resetDate: adzunaBudget.resetDate }));
+      // Adzuna runs whatever fits, down to nothing. The source reads this cap
+      // and trims its query list to match.
+      config.adzunaMaxCallsPerRun = adzunaBudget.allowed;
+      adzunaOk = adzunaBudget.allowed > 0;
+
+      if (!adzunaOk) quotaNotices.push(quotaNotice('Adzuna', { resetDate: adzunaBudget.resetDate }));
+    } else {
+      console.warn('[index] Adzuna has no searches to build from this profile (no target roles, or no location in a country it covers) — skipping it without touching quota.');
+    }
 
     if (SCAN_MODE === 'full') {
       const serpApiBudget = await checkQuota('serpapi', serpApiEstimate, SERPAPI_MONTHLY_LIMIT);

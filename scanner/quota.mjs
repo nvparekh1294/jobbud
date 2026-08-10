@@ -17,12 +17,30 @@ async function saveUsage(usage) {
   await fs.writeFile(USAGE_PATH, JSON.stringify(usage, null, 2));
 }
 
-// One month on from `from`, as the plain YYYY-MM-DD string this file has always
-// stored.
+// One month on from `from` (a Date, or the plain YYYY-MM-DD string this file
+// stores), as the same plain YYYY-MM-DD string.
+//
+// Entirely in UTC, both halves. It used to parse '2026-03-01' as UTC midnight
+// and then advance it with the LOCAL-time setMonth, so under TZ=America/New_York
+// the stored date came back 2026-03-28: a "month" of 27 days that reset the
+// counter early. Actions runners are UTC, so production was fine and anyone
+// running a scan on their own machine was not. friendlyDate below has always
+// parsed as UTC for the same reason.
+//
+// And a month is not a fixed number of days: setMonth on January 31st lands on
+// March 3rd, skipping February entirely. Clamp to the last day of the target
+// month instead, so the reset date always falls in the month it should.
 function oneMonthOn(from) {
-  const next = new Date(from);
-  next.setMonth(next.getMonth() + 1);
-  return next.toISOString().slice(0, 10);
+  const isoDay = typeof from === 'string' ? from : new Date(from).toISOString().slice(0, 10);
+  const base = new Date(`${isoDay}T00:00:00Z`);
+  if (Number.isNaN(base.getTime())) return new Date().toISOString().slice(0, 10);
+
+  const year = base.getUTCFullYear();
+  const month = base.getUTCMonth();
+  // Day 0 of the month after the target = the target month's last day.
+  const lastDayOfTarget = new Date(Date.UTC(year, month + 2, 0)).getUTCDate();
+  const day = Math.min(base.getUTCDate(), lastDayOfTarget);
+  return new Date(Date.UTC(year, month + 1, day)).toISOString().slice(0, 10);
 }
 
 // Bring an entry up to date before anything reads its counter. Returns the SAME
@@ -151,10 +169,20 @@ export async function checkQuota(source, requestedCalls, monthlyLimit) {
 // just gets thinner, and the user has no way to tell "no jobs matched" apart
 // from "half your sources didn't run". This is the sentence that tells them
 // which one it was.
-export function quotaNotice(label, { ran = null, total = null, resetDate = null } = {}) {
+export function quotaNotice(label, { ran = null, total = null, resetDate = null, remaining = null, needed = null } = {}) {
   if (ran !== null && total !== null && ran > 0 && ran < total) {
     return `${label}: searched ${ran} of ${total} role-and-city combinations this scan, rotating through the rest over the next few scans to stay inside the monthly API allowance.`;
   }
+
+  // Some allowance left, just not a whole scan's worth. Saying "used up" here
+  // was simply untrue — a source with 6 of the 22 calls it needs has not spent
+  // the month, and a user who checks the provider's dashboard against that
+  // sentence finds it does not match.
+  if (Number.isFinite(remaining) && remaining > 0 && Number.isFinite(needed) && remaining < needed) {
+    const back = resetDate ? ` — resumes ${friendlyDate(resetDate)}` : '';
+    return `${label}: paused — only ${remaining} of the ~${needed} API calls a full scan needs are left this month${back}.`;
+  }
+
   const until = resetDate ? ` until ${friendlyDate(resetDate)}` : '';
   return `${label}: paused${until} — this month's API allowance is used up.`;
 }
@@ -176,6 +204,15 @@ function friendlyDate(isoDay) {
 // starve every other combination. `queryCursor` living in the usage entry means
 // deleting it is harmless — the rotation simply restarts at the beginning.
 export async function takeQueryWindow(source, totalQueries, maxThisRun) {
+  // Nothing to hand out. `start % 0` is NaN and ceil(0/0) is NaN, so an empty
+  // list used to poison the cursor with NaN and hand the caller a nonsense
+  // window; a zero allowance would divide by zero the same way. Return an empty
+  // window and leave the stored cursor exactly where it was, so the rotation
+  // resumes unharmed once there is something to run.
+  if (!(totalQueries > 0) || !(maxThisRun > 0)) {
+    return { start: 0, count: 0, runsPerRotation: 0 };
+  }
+
   const usage = await loadUsage();
   const entry = { ...refreshEntry(usage[source], source) };
 

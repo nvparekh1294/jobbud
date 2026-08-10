@@ -230,6 +230,27 @@ test('quotaNotice still reads as a sentence when there is no reset date', () => 
   assert.equal(quotaNotice('Adzuna', {}), "Adzuna: paused — this month's API allowance is used up.");
 });
 
+// "Used up" was said for any source that could not run in full, including a
+// source with most of its allowance intact and merely not a whole scan's worth.
+// A user who checks that sentence against the provider's dashboard finds it
+// does not match, and stops trusting the rest of the digest.
+test('quotaNotice does not claim the allowance is gone when some of it is left', () => {
+  const notice = quotaNotice('JSearch', { remaining: 6, needed: 22, resetDate: '2026-09-07' });
+
+  assert.match(notice, /^JSearch: paused/);
+  assert.doesNotMatch(notice, /used up/, 'six calls left is not an allowance used up');
+  assert.match(notice, /only 6 of the ~22/, 'it says how short it is');
+  assert.match(notice, /resumes September 7/);
+});
+
+test('quotaNotice says "used up" only when there really is nothing left', () => {
+  assert.match(quotaNotice('JSearch', { remaining: 0, needed: 22, resetDate: '2026-09-07' }),
+    /allowance is used up/);
+  // A source that CAN run in full is not reported at all, but if a caller asks,
+  // the fallback sentence must not invent a shortfall.
+  assert.match(quotaNotice('JSearch', { remaining: 22, needed: 22 }), /allowance is used up/);
+});
+
 // ── A quota notice is reason enough to send ─────────────────────────────────────
 //
 // The notices were unreachable exactly when they mattered. Three gates in

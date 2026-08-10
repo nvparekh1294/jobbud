@@ -83,6 +83,48 @@ async function applyRunBudget(queries, maxCalls) {
   return Array.from({ length: count }, (_, i) => queries[(start + i) % queries.length]);
 }
 
+// The configured locations Adzuna can actually search: those whose country is
+// one of the markets wired up above. Shared by the query builder and the
+// per-run count so the estimate and the real list can never disagree.
+//
+// `warn` is off by default: counting the list must be silent, or every run
+// would print the skip warnings twice.
+function searchableLocations(config, { warn = false } = {}) {
+  const supported = Object.keys(BASE_URLS).join('/');
+  const kept = [];
+  // Whether any location was actually dropped for its country. Without this we
+  // cannot tell "your countries are unsupported" apart from "you listed no
+  // locations at all", and the warning in buildQueries would confidently give
+  // the wrong diagnosis for the second case.
+  let skippedForCountry = false;
+
+  for (const location of config?.locations || []) {
+    // "US", "USA" and " us " all mean the same market; only the ISO code is a
+    // key in BASE_URLS. An unsupported country is a real answer to "why did I
+    // get nothing?", so it is said out loud rather than skipped in silence.
+    const country = normalizeCountry(location.country);
+    if (!BASE_URLS[country]) {
+      skippedForCountry = true;
+      if (warn) console.warn(`[adzuna] Skipping ${location.city}: country "${location.country}" is not one Adzuna is wired up for here (supported: ${supported}). Fix target_locations in config/profile.yml.`);
+      continue;
+    }
+    kept.push({ ...location, country });
+  }
+
+  return { kept, skippedForCountry };
+}
+
+// How many searches this profile asks Adzuna for, without building or sending
+// any of them. index.mjs needs the real figure BEFORE the source runs, to size
+// the per-run slice and the pre-flight quota projection against. It used to
+// guess `locations × 7` — seven being a role count from one person's profile —
+// which over-budgeted anyone with fewer roles and under-budgeted anyone with
+// more. The real list is roles × searchable locations, counted here from the
+// same two functions that build it.
+export function adzunaQueryCount(config) {
+  return resolveTargetRoles(config).length * searchableLocations(config).kept.length;
+}
+
 function buildQueries(config) {
   // Adzuna's `what` param treats spaces as AND, so each target role is sent as its
   // own single-term query (no OR-grouping). Terms come from the user's profile.
@@ -94,28 +136,14 @@ function buildQueries(config) {
 
   const queries = [];
   const supported = Object.keys(BASE_URLS).join('/');
-  // Whether any location was actually dropped for its country. Without this we
-  // cannot tell "your countries are unsupported" apart from "you listed no
-  // locations at all", and the warning below would confidently give the wrong
-  // diagnosis for the second case.
-  let skippedForCountry = false;
+  const { kept, skippedForCountry } = searchableLocations(config, { warn: true });
 
-  for (const location of config.locations || []) {
-    // "US", "USA" and " us " all mean the same market; only the ISO code is a
-    // key in BASE_URLS. An unsupported country is a real answer to "why did I
-    // get nothing?", so it is said out loud rather than skipped in silence.
-    const country = normalizeCountry(location.country);
-    if (!BASE_URLS[country]) {
-      skippedForCountry = true;
-      console.warn(`[adzuna] Skipping ${location.city}: country "${location.country}" is not one Adzuna is wired up for here (supported: ${supported}). Fix target_locations in config/profile.yml.`);
-      continue;
-    }
-
+  for (const location of kept) {
     for (const term of searchTerms) {
       queries.push({
         what: term,
         where: location.city,
-        country,
+        country: location.country,
         distanceKm: Math.round((location.radiusMiles || 20) * 1.6),
       });
     }
