@@ -189,6 +189,14 @@ These are settings, not secrets — nothing breaks if you leave them alone, and
 setting one higher than your real plan just means the provider starts refusing
 calls before JobBud does.
 
+Adzuna searches one target role in one location at a time, so a profile with
+five cities and seven roles is 35 searches — far more than a month's budget can
+afford every run. Rather than skip Adzuna on those runs, JobBud runs a slice
+each time and moves through the list, so every search still gets made, just
+over several runs. The scan log says which slice ran and how many runs a full
+pass takes. `ADZUNA_CALLS_PER_RUN` sets the slice size if you want a different
+one; by default it is a thirty-first of your monthly limit.
+
 ### Where the keys go
 
 **Your repo → Settings → Secrets and variables → Actions → New repository

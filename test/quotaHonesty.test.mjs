@@ -100,6 +100,15 @@ test('index records usage for a source whose fetch rejected too', () => {
     'recordUsage must run before the rejected branch, for every source');
 });
 
+// The projection that took Adzuna offline: the whole 35-search list was checked
+// against the month, and a list that can never fit in one run blocked the source
+// on every run. index must project one RUN's worth and hand the source that cap.
+test('index projects the capped per-run estimate for adzuna', () => {
+  assert.match(indexSrc, /const adzunaEstimate = Math\.min\(config\.locations\.length \* 7, adzunaPerRun\)/);
+  assert.match(indexSrc, /config\.adzunaMaxCallsPerRun = adzunaBudget\.allowed/);
+  assert.match(indexSrc, /adzunaOk = adzunaBudget\.allowed > 0/);
+});
+
 test('index shouts when every query of a source failed', () => {
   assert.match(indexSrc, /stats\.queries > 0 && stats\.failures === stats\.queries/);
   const line = indexSrc.slice(indexSrc.indexOf('stats.failures === stats.queries'));

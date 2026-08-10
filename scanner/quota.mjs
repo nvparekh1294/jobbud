@@ -73,7 +73,30 @@ function refreshEntry(entry, source) {
   return entry;
 }
 
-export async function checkQuota(source, estimatedCalls, monthlyLimit) {
+// How many calls a single run may spend against a monthly budget. A run a day
+// is the cadence these sources are built for, so a thirty-first of the month's
+// allowance still fits in the longest month. Callers pass their own override
+// (an env value) when the user has picked a figure.
+//
+// Generic on purpose: jsearch and serpapi do not budget per run yet — their
+// query lists are small enough to fit whole — and wiring them up later is one
+// call each rather than a second copy of this arithmetic.
+export function callsPerRun(monthlyLimit, override) {
+  const chosen = Number(override);
+  if (Number.isFinite(chosen) && chosen > 0) return Math.floor(chosen);
+  return Math.max(1, Math.floor(monthlyLimit / 31));
+}
+
+// What a source may spend this run: never more than it asked for, never more
+// than the month has left.
+//
+// This returns a NUMBER of allowed calls rather than a yes/no because
+// all-or-nothing was itself part of the bug. A source whose full query list did
+// not fit was skipped entirely, so a list one call too big produced no jobs at
+// all instead of nearly a full run's worth. A caller that genuinely needs its
+// whole list can still insist on it by comparing `allowed` against what it
+// asked for; a caller that can run part of its list now runs part of it.
+export async function checkQuota(source, requestedCalls, monthlyLimit) {
   const usage = await loadUsage();
   const stored = usage[source];
   const entry = refreshEntry(stored, source);
@@ -86,19 +109,48 @@ export async function checkQuota(source, estimatedCalls, monthlyLimit) {
     await saveUsage(usage);
   }
 
+  const used = entry.callsThisMonth || 0;
+  const budget = { allowed: 0, used, limit: monthlyLimit, resetDate: entry.monthResetDate };
+
   if (entry.exhausted) {
     console.warn(`[quota] ${source}: marked exhausted until ${entry.monthResetDate} — skipping`);
-    return false;
+    return budget;
   }
 
-  const projected = (entry.callsThisMonth || 0) + estimatedCalls;
-  if (projected > monthlyLimit) {
-    console.warn(`[quota] ${source}: would exceed monthly limit — ${entry.callsThisMonth} used + ~${estimatedCalls} estimated = ${projected} > ${monthlyLimit}`);
-    return false;
+  budget.allowed = Math.max(0, Math.min(requestedCalls, monthlyLimit - used));
+
+  if (budget.allowed === 0) {
+    console.warn(`[quota] ${source}: monthly limit reached — ${used}/${monthlyLimit} used, nothing left until ${entry.monthResetDate}`);
+  } else if (budget.allowed < requestedCalls) {
+    console.warn(`[quota] ${source}: only ${budget.allowed} of ~${requestedCalls} calls fit in what is left of the month (${used}/${monthlyLimit} used, resets ${entry.monthResetDate})`);
+  } else {
+    console.log(`[quota] ${source}: ${used}/${monthlyLimit} used this month, adding ~${requestedCalls} → OK`);
   }
 
-  console.log(`[quota] ${source}: ${entry.callsThisMonth}/${monthlyLimit} used this month, adding ~${estimatedCalls} → OK`);
-  return true;
+  return budget;
+}
+
+// Hand out the next slice of a query list that is too big to run in one go, and
+// remember where the next run should pick up.
+//
+// The cursor is advanced HERE, when the window is planned, not after the
+// queries have run. A run that dies halfway still moves the window on, so one
+// query combination that reliably fails cannot pin the rotation in place and
+// starve every other combination. `queryCursor` living in the usage entry means
+// deleting it is harmless — the rotation simply restarts at the beginning.
+export async function takeQueryWindow(source, totalQueries, maxThisRun) {
+  const usage = await loadUsage();
+  const entry = { ...refreshEntry(usage[source], source) };
+
+  const cursor = Number(entry.queryCursor);
+  const start = Number.isInteger(cursor) && cursor >= 0 ? cursor % totalQueries : 0;
+  const count = Math.min(maxThisRun, totalQueries);
+
+  entry.queryCursor = (start + count) % totalQueries;
+  usage[source] = entry;
+  await saveUsage(usage);
+
+  return { start, count, runsPerRotation: Math.ceil(totalQueries / count) };
 }
 
 export async function recordUsage(source, callsMade) {

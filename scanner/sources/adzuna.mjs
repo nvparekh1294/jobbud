@@ -1,4 +1,5 @@
 import { resolveTargetRoles, normalizeCountry } from './queryHelpers.mjs';
+import { takeQueryWindow } from '../quota.mjs';
 
 const BASE_URLS = {
   us: 'https://api.adzuna.com/v1/api/jobs/us/search',
@@ -10,13 +11,17 @@ const BASE_URLS = {
 // went over the wire rather than a pre-computed estimate. attempts = HTTP
 // requests made (they count against the quota even when they fail);
 // queries/failures = searches tried and how many came back empty-handed.
-export const adzunaStats = { attempts: 0, queries: 0, failures: 0, lastError: null };
+// `window` is null on a run that searched everything it wanted to; when the run
+// was trimmed to fit the monthly budget it carries what was run out of what was
+// asked for, which index.mjs turns into the line the user reads.
+export const adzunaStats = { attempts: 0, queries: 0, failures: 0, lastError: null, window: null };
 
 function resetAdzunaRun() {
   adzunaStats.attempts = 0;
   adzunaStats.queries = 0;
   adzunaStats.failures = 0;
   adzunaStats.lastError = null;
+  adzunaStats.window = null;
 }
 
 export async function fetchAdzuna(config) {
@@ -29,7 +34,7 @@ export async function fetchAdzuna(config) {
 
   console.log(`[adzuna] App ID prefix: ${config.adzunaAppId.slice(0, 4)}...`);
 
-  const queries = buildQueries(config);
+  const queries = await applyRunBudget(buildQueries(config), config.adzunaMaxCallsPerRun);
   const results = [];
 
   for (const query of queries) {
@@ -46,6 +51,36 @@ export async function fetchAdzuna(config) {
   }
 
   return results.map(normalizeAdzuna);
+}
+
+// Trim the run to the calls it is allowed to make, and rotate which searches
+// those are.
+//
+// A typical profile asks for locations × target roles ≈ 28-35 searches. Run
+// daily that is ~1,000 Adzuna calls a month against a budget of 250, so the
+// whole list can never keep running — and the old answer was to skip Adzuna
+// entirely on any run that did not fit, which is how "too many searches" became
+// "no jobs from Adzuna at all". Running a window instead means every search
+// still gets made, just spread across several runs.
+//
+// No cap set (a dry run, a direct caller, a test) leaves the list untouched, so
+// nothing outside a budgeted scan changes behavior or writes quota state.
+async function applyRunBudget(queries, maxCalls) {
+  if (!queries.length || !Number.isFinite(maxCalls) || maxCalls >= queries.length) return queries;
+
+  if (maxCalls <= 0) {
+    adzunaStats.window = { ran: 0, total: queries.length, runsPerRotation: null };
+    console.warn(`[adzuna] No monthly budget left for Adzuna this run — all ${queries.length} searches skipped.`);
+    return [];
+  }
+
+  const { start, count, runsPerRotation } = await takeQueryWindow('adzuna', queries.length, maxCalls);
+  adzunaStats.window = { ran: count, total: queries.length, runsPerRotation };
+  console.log(`[adzuna] Running ${count} of ${queries.length} searches this run (positions ${start + 1}-${start + count} in the rotation) — a full pass over every search takes ${runsPerRotation} runs.`);
+
+  // Wraps: the last window of a rotation runs the tail of the list and then the
+  // head, so no search is ever stranded at the end.
+  return Array.from({ length: count }, (_, i) => queries[(start + i) % queries.length]);
 }
 
 function buildQueries(config) {

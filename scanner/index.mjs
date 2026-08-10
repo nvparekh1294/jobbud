@@ -24,7 +24,7 @@ import { evaluateJobs, wasScoredOrFiltered } from './evaluate.mjs';
 import { sendDigest } from './notify.mjs';
 import { sendDailyAlert } from './telegram.mjs';
 import { persistJobs } from './persistJobs.mjs';
-import { checkQuota, recordUsage } from './quota.mjs';
+import { checkQuota, recordUsage, callsPerRun } from './quota.mjs';
 import { loadConfig } from './config.mjs';
 import { actionKeySource, actionKeyFingerprint } from '../lib/auth.mjs';
 import { isStarterPortalsList, STARTER_LIST_NOTICE } from '../lib/portalsMeta.mjs';
@@ -110,19 +110,37 @@ async function run() {
   // adzuna: 7 searchTerms × locations = ~35 calls
   // serpapi: 4 roleGroups × locations + 2 remote = ~22 calls
   const jsearchEstimate = config.locations.length * 4 + (config.includeRemote ? 2 : 0);
-  const adzunaEstimate = config.locations.length * 7;
   const serpApiEstimate = config.locations.length * 4 + (config.includeRemote ? 2 : 0);
+
+  // Adzuna is the one source whose full list cannot run every time: locations ×
+  // target roles is ~35 searches, which daily is four times the whole monthly
+  // budget. So it asks for a run's worth, not the list's worth — and the source
+  // rotates through the list across runs so every search still gets made. The
+  // projection has to use the CAPPED number, otherwise a list that will never
+  // run in one go blocks the source on every single run.
+  const adzunaPerRun = callsPerRun(ADZUNA_MONTHLY_LIMIT, process.env.ADZUNA_CALLS_PER_RUN);
+  const adzunaEstimate = Math.min(config.locations.length * 7, adzunaPerRun);
 
   // ── Quota checks (API sources only) ───────────────────────────────────────
   let jsearchOk = false, adzunaOk = false, serpApiOk = false;
   if (runApi) {
-    [jsearchOk, adzunaOk] = await Promise.all([
-      checkQuota('jsearch', jsearchEstimate, JSEARCH_MONTHLY_LIMIT),
-      checkQuota('adzuna', adzunaEstimate, ADZUNA_MONTHLY_LIMIT),
-    ]);
+    // Sequential, not Promise.all: each check can write a repaired entry back to
+    // the single api-usage.json, and two concurrent writes would drop one of them.
+    const jsearchBudget = await checkQuota('jsearch', jsearchEstimate, JSEARCH_MONTHLY_LIMIT);
+    const adzunaBudget = await checkQuota('adzuna', adzunaEstimate, ADZUNA_MONTHLY_LIMIT);
+
+    // JSearch keeps its all-or-nothing rule: its query list is small enough to
+    // fit whole, so a partial allowance means the month really is nearly spent.
+    jsearchOk = jsearchBudget.allowed >= jsearchEstimate;
+
+    // Adzuna runs whatever fits, down to nothing. The source reads this cap and
+    // trims its query list to match.
+    config.adzunaMaxCallsPerRun = adzunaBudget.allowed;
+    adzunaOk = adzunaBudget.allowed > 0;
 
     if (SCAN_MODE === 'full') {
-      serpApiOk = await checkQuota('serpapi', serpApiEstimate, SERPAPI_MONTHLY_LIMIT);
+      const serpApiBudget = await checkQuota('serpapi', serpApiEstimate, SERPAPI_MONTHLY_LIMIT);
+      serpApiOk = serpApiBudget.allowed >= serpApiEstimate;
       if (serpApiOk && config.serpApiKey) {
         try {
           const remaining = await checkSerpApiBalance(config.serpApiKey);
