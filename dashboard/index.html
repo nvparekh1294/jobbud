@@ -1562,6 +1562,7 @@
 
         <!-- Step: input -->
         <div id="onboarding-step-input">
+          <div id="onboarding-checking-note" style="display:none;font-size:13px;color:var(--muted);margin-bottom:16px">Checking your profile…</div>
           <div id="onboarding-refresh-note" style="display:none;font-size:13px;color:var(--muted);margin-bottom:16px">Updating your profile? Upload your existing files and answer a few questions about what's changed for the best results.</div>
           <div style="font-size:13px;color:var(--muted);margin-bottom:16px" id="onboarding-input-default-note">How would you like to provide your background?</div>
           <div class="onboarding-cards">
@@ -1862,6 +1863,7 @@
   let onboardingExistingFiles = null;
   let onboardingChangeNotes = '';
   let onboardingGenerationInProgress = false;
+  let onboardingProfileProbe = null; // in-flight get-assets lookup for existing profile files | null
   // Coach tab — mock interview state
   let mockQuestions = [];
   let mockCurrentIndex = 0;
@@ -5619,16 +5621,63 @@
     onboardingExistingFiles = null;
     onboardingChangeNotes = '';
 
-    // Show/hide refresh UI elements
-    const refreshNote = document.getElementById('onboarding-refresh-note');
-    const defaultNote = document.getElementById('onboarding-input-default-note');
-    const existingCard = document.getElementById('onboarding-card-existing');
-    if (refreshNote) refreshNote.style.display = isRefresh ? '' : 'none';
-    if (defaultNote) defaultNote.style.display = isRefresh ? 'none' : '';
-    if (existingCard) existingCard.style.display = isRefresh ? '' : 'none';
-
+    onboardingRenderInputNotes({ checking: true });
     switchOnboardingStep('input');
     switchCoachView('onboarding');
+
+    // Auto-detect refresh mode. Whichever button opened onboarding, a repo that
+    // already holds profile files means this is an UPDATE, not a first-time
+    // setup — so we look them up and route the user into the short "what's
+    // changed" flow instead of the 4-6 question new-user conversation.
+    onboardingProfileProbe = onboardingProbeExistingProfile();
+  }
+
+  // Show/hide the refresh UI elements. While the repo probe is in flight neither
+  // note is right yet, so we show a brief checking line instead.
+  function onboardingRenderInputNotes({ checking = false } = {}) {
+    const checkingNote = document.getElementById('onboarding-checking-note');
+    const refreshNote  = document.getElementById('onboarding-refresh-note');
+    const defaultNote  = document.getElementById('onboarding-input-default-note');
+    const existingCard = document.getElementById('onboarding-card-existing');
+    if (checkingNote) checkingNote.style.display = checking ? '' : 'none';
+    if (refreshNote)  refreshNote.style.display  = (!checking && onboardingIsRefresh) ? '' : 'none';
+    if (defaultNote)  defaultNote.style.display  = (!checking && !onboardingIsRefresh) ? '' : 'none';
+    if (existingCard) existingCard.style.display = onboardingIsRefresh ? '' : 'none';
+  }
+
+  // Read the profile files already in the repo (get-assets). Any non-empty file
+  // means this user is refreshing, so we populate onboardingExistingFiles in the
+  // same shape onboardingExistingFilesReady uses and flip into refresh mode.
+  // Fails SOFT: on any error we leave onboardingExistingFiles null, which is
+  // exactly the pre-existing first-time behaviour.
+  async function onboardingProbeExistingProfile() {
+    const pw = sessionStorage.getItem('co_pw') || '';
+    try {
+      const res = await fetch('/api/coach?action=get-assets', { headers: { 'X-Dashboard-Password': pw } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const d = await res.json();
+      const found = {
+        claudeMd: (d.claudeMd || '').trim() ? d.claudeMd : null,
+        cvMd: (d.cvMd || '').trim() ? d.cvMd : null,
+        bulletBankMd: (d.bulletBankMd || '').trim() ? d.bulletBankMd : null,
+        articleDigestMd: (d.articleDigestMd || '').trim() ? d.articleDigestMd : null,
+        profileYml: (d.profileYml || '').trim() ? d.profileYml : null,
+      };
+      if (!Object.values(found).some(v => v)) return; // brand-new user — leave the flow untouched
+      onboardingExistingFiles = found;
+      onboardingIsRefresh = true;
+    } catch (err) {
+      console.warn('[onboarding] could not read existing profile — treating as first-time setup:', err);
+    } finally {
+      onboardingRenderInputNotes();
+    }
+  }
+
+  // Await the in-flight probe so a fast upload/paste never races the lookup and
+  // lands a returning user in the first-time conversation.
+  async function onboardingProfileProbeSettled() {
+    if (!onboardingProfileProbe) return;
+    try { await onboardingProfileProbe; } catch (err) { /* probe already fails soft */ }
   }
 
   function onboardingLoadExistingFiles(e) {
@@ -5681,6 +5730,15 @@
     if (onboardingExistingFiles?.cvMd) {
       onboardingResumeText = onboardingExistingFiles.cvMd;
     }
+    onboardingChangeNotes = '';
+    switchOnboardingStep('refresh-notes');
+  }
+
+  // Enter the refresh flow from a NEW resume (upload or paste). Unlike
+  // onboardingContinueFromExisting this must not touch onboardingResumeText —
+  // the freshly parsed resume is the whole point of the update, and generation
+  // sends it alongside existingFiles on the sequential path.
+  function onboardingGoToRefreshNotes() {
     onboardingChangeNotes = '';
     switchOnboardingStep('refresh-notes');
   }
@@ -5768,8 +5826,18 @@
         }
         onboardingResumeText = data.text || '';
         statusEl.className = 'onboarding-file-status ok';
-        statusEl.textContent = `Parsed successfully (${onboardingResumeText.length.toLocaleString()} characters). Starting conversation…`;
-        setTimeout(() => onboardingStartConversation(), 800);
+        // Returning user: skip the first-time conversation entirely and ask only
+        // what's changed. Generation then runs the sequential update path with
+        // BOTH this new resume text and the existing files from the repo.
+        await onboardingProfileProbeSettled();
+        const parsed = `Parsed successfully (${onboardingResumeText.length.toLocaleString()} characters).`;
+        if (onboardingExistingFiles) {
+          statusEl.textContent = `${parsed} We found your existing profile — just tell us what's changed…`;
+          setTimeout(() => onboardingGoToRefreshNotes(), 800);
+        } else {
+          statusEl.textContent = `${parsed} Starting conversation…`;
+          setTimeout(() => onboardingStartConversation(), 800);
+        }
       } catch (err) {
         statusEl.className = 'onboarding-file-status err';
         statusEl.textContent = 'Could not parse file. Try pasting your resume instead.';
@@ -5778,7 +5846,7 @@
     reader.readAsDataURL(file);
   }
 
-  function onboardingSubmitPaste() {
+  async function onboardingSubmitPaste() {
     const text = (document.getElementById('onboarding-paste-input').value || '').trim();
     if (!text) {
       showToast('Please paste your resume text first.');
@@ -5786,11 +5854,23 @@
     }
     switchCoachView('onboarding');
     onboardingResumeText = text;
+    // Same routing as the upload path: existing profile means "what's changed",
+    // not the full first-time conversation.
+    await onboardingProfileProbeSettled();
+    if (onboardingExistingFiles) {
+      onboardingGoToRefreshNotes();
+      return;
+    }
     onboardingStartConversation();
   }
 
-  function onboardingSkip() {
+  // "Answer questions instead" — there is no resume to diff, so this always uses
+  // the conversation. With existing files loaded it is the SHORT 2-3 question
+  // refresh conversation (see onboardingBuildSystemPrompt), so we still wait for
+  // the probe before opening it.
+  async function onboardingSkip() {
     onboardingResumeText = '';
+    await onboardingProfileProbeSettled();
     onboardingStartConversation();
   }
 
