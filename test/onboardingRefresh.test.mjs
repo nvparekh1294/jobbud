@@ -68,6 +68,7 @@ function makeSandbox(fetchImpl) {
 
   const factory = new Function('document', 'sessionStorage', 'fetch', 'console', `
     let onboardingExistingFiles = null;
+    let onboardingFoundRepoProfile = false;
     let onboardingIsRefresh = false;
     let onboardingProfileProbe = null;
     let onboardingResult = null;
@@ -78,11 +79,15 @@ function makeSandbox(fetchImpl) {
       // Mirrors what startOnboarding does on entry.
       enterOnboarding: async (isRefresh) => {
         onboardingIsRefresh = !!isRefresh;
+        onboardingFoundRepoProfile = false;
+        onboardingExistingFiles = null;
         onboardingRenderInputNotes({ checking: true });
         onboardingProfileProbe = onboardingProbeExistingProfile();
         await onboardingProfileProbeSettled();
         return { existingFiles: onboardingExistingFiles, isRefresh: onboardingIsRefresh };
       },
+      // Stands in for the manual "existing files" card landing mid-probe.
+      setManualFiles: (files) => { onboardingExistingFiles = files; },
       hasUnsaved: (result, saved, downloaded) => {
         onboardingResult = result;
         onboardingSaved = saved;
@@ -144,6 +149,27 @@ test('a non-OK get-assets response falls back to the first-time flow', async () 
   const { api } = makeSandbox(async () => ({ ok: false, status: 500, json: async () => ({}) }));
   const state = await api.enterOnboarding(false);
   assert.equal(state.existingFiles, null);
+});
+
+test('a slow probe never overwrites a manual existing-files upload', async () => {
+  // The manual card is the documented override (used when the repo fetch fails
+  // or the user wants different files). A probe that resolves late must lose.
+  let release;
+  const gate = new Promise(r => { release = r; });
+  const { api, els } = makeSandbox(async () => {
+    await gate;
+    return { ok: true, json: async () => ({ ...EMPTY_ASSETS, claudeMd: '# From the repo' }) };
+  });
+  const entering = api.enterOnboarding(true);
+  api.setManualFiles({
+    claudeMd: '# Hand uploaded', cvMd: null, bulletBankMd: null,
+    articleDigestMd: null, profileYml: null,
+  });
+  release();
+  const state = await entering;
+  assert.equal(state.existingFiles.claudeMd, '# Hand uploaded');
+  // ...and we must not tell the user we "found" a profile they uploaded themselves.
+  assert.ok(!visibleNotes(els).includes('onboarding-found-note'));
 });
 
 test('manual refresh mode on an empty repo does not claim a profile was found', async () => {
@@ -212,10 +238,21 @@ test('no onboarding copy describes bullet-bank.md as optional', () => {
   // Applications are written from bullet-bank.md (scanner/applicationPackage.mjs
   // reads it first, cv.md only as a fallback), so calling it optional teaches the
   // user to commit cv.md alone and silently keep applying off the old resume.
-  const optionalLines = html
-    .split('\n')
-    .filter(l => /optional/i.test(l) && /bullet.?bank/i.test(l));
-  assert.deepEqual(optionalLines, [], `bullet-bank.md still described as optional:\n${optionalLines.join('\n')}`);
+  //
+  // A same-line check is too weak: the original offender was "One optional step:"
+  // on its own line directly ABOVE the bullet-bank paragraph, which reads as one
+  // sentence but hides from a line-by-line grep. Slide a window over the file so
+  // "optional" near a bullet-bank mention is caught however it is wrapped.
+  const WINDOW = 3;
+  const lines = html.split('\n');
+  const hits = [];
+  for (let i = 0; i < lines.length; i++) {
+    const block = lines.slice(i, i + WINDOW).join(' ');
+    if (/optional/i.test(block) && /bullet.?bank/i.test(block)) {
+      hits.push(`line ${i + 1}: ${block.replace(/\s+/g, ' ').trim().slice(0, 180)}`);
+    }
+  }
+  assert.deepEqual(hits, [], `bullet-bank.md still described as optional:\n${hits.join('\n')}`);
 });
 
 test('the download step says all five files must be committed together', () => {
@@ -235,4 +272,34 @@ test('Done warns before discarding, and beforeunload covers the same condition',
   assert.match(html, /onboardingGenerationInProgress \|\| onboardingHasUnsavedFiles\(\)/);
   assert.match(html, /onclick="onboardingDiscardAnyway\(\)"/);
   assert.match(html, /onclick="onboardingSaveFromConfirm\(\)"/);
+});
+
+test('Exit runs the same unsaved-files guard as Done', () => {
+  // Exit is rendered on every step including download. Leaving it bare discarded
+  // generated files silently and left onboardingResult set, so the beforeunload
+  // prompt then fired for the rest of the session with no way to clear it.
+  const exit = extractFunction(html, 'exitOnboarding');
+  assert.match(exit, /onboardingDone\(\)/);
+  assert.doesNotMatch(exit, /switchCoachView/);
+});
+
+test('startOnboarding clears the refresh-notes inputs from a previous run', () => {
+  // Stale textarea content is invisible (the resume pane starts collapsed) but
+  // onboardingStartGenerateFromNotes prefers it over the freshly parsed resume.
+  const start = extractFunction(html, 'startOnboarding');
+  assert.match(start, /getElementById\('onboarding-change-notes'\)/);
+  assert.match(start, /getElementById\('onboarding-refresh-resume-input'\)/);
+  assert.match(start, /getElementById\('onboarding-resume-paste-pane'\)/);
+  assert.equal((start.match(/\.value = '';/g) || []).length, 2, 'both textareas cleared');
+});
+
+test('every generation failure returns the refresh user to refresh-notes', () => {
+  const seq = extractFunction(html, 'onboardingGenerateSequential');
+  // No bare fallback left: the refresh path never opened a conversation, so
+  // landing there strands the change notes on a screen the user has not seen.
+  assert.doesNotMatch(seq, /switchOnboardingStep\('conversation'\)/);
+  const fallbacks = (seq.match(/switchOnboardingStep\(onboardingGenFallbackStep\(\)\)/g) || []).length;
+  assert.equal(fallbacks, 6, 'four per-file errors + the empty-bullet-bank guard + the outer catch');
+  const helper = extractFunction(html, 'onboardingGenFallbackStep');
+  assert.match(helper, /onboardingExistingFiles \? 'refresh-notes' : 'conversation'/);
 });

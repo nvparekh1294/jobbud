@@ -1692,7 +1692,7 @@
         <div id="onboarding-step-bulletbank" style="display:none">
           <div class="onboarding-bulletbank-panel">
             <h3>Your profile is ready.</h3>
-            <p>One optional step:</p>
+            <p>One more step, if you want it:</p>
             <p>JobBud writes your applications from bullet-bank.md, and you already have a generated one. If you apply to very different role types (e.g. operations, finance, corporate development), this step lets you tag specific bullets for specific roles so each application packet is more precisely tailored.</p>
             <p class="note">This takes an additional 15–20 minutes to set up properly. You can always do this later from the Coach tab.</p>
             <div style="display:flex;gap:10px;flex-wrap:wrap">
@@ -1877,6 +1877,7 @@
   let onboardingChangeNotes = '';
   let onboardingGenerationInProgress = false;
   let onboardingProfileProbe = null; // in-flight get-assets lookup for existing profile files | null
+  let onboardingFoundRepoProfile = false; // the probe (not a manual upload) found a profile in the repo
   let onboardingSaved = false;       // onboardingResult was committed to the repo
   let onboardingDownloaded = {};     // onboardingResult key -> true once downloaded
   // Coach tab — mock interview state
@@ -5639,10 +5640,23 @@
     onboardingResult = null;
     onboardingLoading = false;
     onboardingExistingFiles = null;
+    onboardingFoundRepoProfile = false;
     onboardingChangeNotes = '';
     onboardingSaved = false;
     onboardingDownloaded = {};
     onboardingHideDiscardConfirm();
+
+    // Reset the refresh-notes inputs too. They are plain DOM textareas, so a
+    // second run in the same session inherits the first run's text — and because
+    // the resume pane starts collapsed, a leftover pasted resume is invisible
+    // while onboardingStartGenerateFromNotes silently prefers it over the resume
+    // the user just uploaded.
+    const notesEl = document.getElementById('onboarding-change-notes');
+    if (notesEl) notesEl.value = '';
+    const refreshResumeEl = document.getElementById('onboarding-refresh-resume-input');
+    if (refreshResumeEl) refreshResumeEl.value = '';
+    const resumePane = document.getElementById('onboarding-resume-paste-pane');
+    if (resumePane) resumePane.style.display = 'none';
 
     onboardingRenderInputNotes({ checking: true });
     switchOnboardingStep('input');
@@ -5657,15 +5671,16 @@
 
   // Show/hide the refresh UI elements. Exactly one note is shown: the checking
   // line while the repo probe is in flight, then "we found your profile" if the
-  // probe actually found files, the manual-refresh line if the user opened
-  // refresh mode without a profile in the repo, otherwise the default prompt.
+  // probe actually found files IN THE REPO (not if the user hand-uploaded them —
+  // that would misdescribe their own upload), the manual-refresh line if the user
+  // opened refresh mode without a profile in the repo, otherwise the default prompt.
   function onboardingRenderInputNotes({ checking = false } = {}) {
     const checkingNote = document.getElementById('onboarding-checking-note');
     const foundNote    = document.getElementById('onboarding-found-note');
     const refreshNote  = document.getElementById('onboarding-refresh-note');
     const defaultNote  = document.getElementById('onboarding-input-default-note');
     const existingCard = document.getElementById('onboarding-card-existing');
-    const found = !checking && !!onboardingExistingFiles;
+    const found = !checking && onboardingFoundRepoProfile;
     if (checkingNote) checkingNote.style.display = checking ? '' : 'none';
     if (foundNote)    foundNote.style.display    = found ? '' : 'none';
     if (refreshNote)  refreshNote.style.display  = (!checking && !found && onboardingIsRefresh) ? '' : 'none';
@@ -5692,7 +5707,11 @@
         profileYml: (d.profileYml || '').trim() ? d.profileYml : null,
       };
       if (!Object.values(found).some(v => v)) return; // brand-new user — leave the flow untouched
+      // The manual "existing files" card is the OVERRIDE, so a slow probe must
+      // never overwrite an upload the user made while it was in flight.
+      if (onboardingExistingFiles) return;
       onboardingExistingFiles = found;
+      onboardingFoundRepoProfile = true;
       onboardingIsRefresh = true;
     } catch (err) {
       console.warn('[onboarding] could not read existing profile — treating as first-time setup:', err);
@@ -5788,8 +5807,12 @@
     onboardingGenerateSequential();
   }
 
+  // Exit is rendered on every step, including download — so it has to run the
+  // same unsaved-files guard as "Done". Leaving bare here discarded generated
+  // files with no warning AND left onboardingResult set, which kept the
+  // beforeunload prompt firing for the rest of the session with no way to clear it.
   function exitOnboarding() {
-    switchCoachView('library');
+    onboardingDone();
   }
 
   function switchOnboardingStep(step) {
@@ -6109,6 +6132,13 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
     }
   }
 
+  // Where to send the user when a generation step fails. The refresh path never
+  // opened a conversation, so falling back to it dumps them on a blank chat
+  // screen and strands the change notes they just wrote.
+  function onboardingGenFallbackStep() {
+    return onboardingExistingFiles ? 'refresh-notes' : 'conversation';
+  }
+
   async function onboardingGenerateSequential() {
     // Show per-file rows, hide spinner
     const spinner = document.getElementById('onboarding-generating-spinner');
@@ -6146,7 +6176,7 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
         body: JSON.stringify(body),
       });
       const d1 = await r1.json();
-      if (d1.error) { showToast(`CLAUDE.md: ${d1.error}`); switchOnboardingStep('conversation'); return; }
+      if (d1.error) { showToast(`CLAUDE.md: ${d1.error}`); switchOnboardingStep(onboardingGenFallbackStep()); return; }
       const claudeMd = d1.claudeMd || '';
       setStatus('gen-status-claude', '✓');
 
@@ -6157,7 +6187,7 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
         body: JSON.stringify(body),
       });
       const d2 = await r2.json();
-      if (d2.error) { showToast(`cv.md: ${d2.error}`); switchOnboardingStep('conversation'); return; }
+      if (d2.error) { showToast(`cv.md: ${d2.error}`); switchOnboardingStep(onboardingGenFallbackStep()); return; }
       const cvMd = d2.cvMd || '';
       setStatus('gen-status-cv', '✓');
 
@@ -6168,7 +6198,7 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
         body: JSON.stringify(body),
       });
       const d3 = await r3.json();
-      if (d3.error) { showToast(`bullet-bank.md: ${d3.error}`); switchOnboardingStep('conversation'); return; }
+      if (d3.error) { showToast(`bullet-bank.md: ${d3.error}`); switchOnboardingStep(onboardingGenFallbackStep()); return; }
       const bulletBankMd = d3.bulletBankMd || '';
       // Applications are built from bullet-bank.md, so an empty one here would
       // quietly leave every future application on the old resume. Never skip it
@@ -6176,7 +6206,7 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
       if (!bulletBankMd.trim()) {
         setStatus('gen-status-bulletbank', '⚠️');
         showToast('bullet-bank.md came back empty — please try again.');
-        switchOnboardingStep(onboardingExistingFiles ? 'refresh-notes' : 'conversation');
+        switchOnboardingStep(onboardingGenFallbackStep());
         return;
       }
       setStatus('gen-status-bulletbank', '✓');
@@ -6188,7 +6218,7 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
         body: JSON.stringify({ ...body, claudeMd }),
       });
       const d4 = await r4.json();
-      if (d4.error) { showToast(`article-digest.md: ${d4.error}`); switchOnboardingStep('conversation'); return; }
+      if (d4.error) { showToast(`article-digest.md: ${d4.error}`); switchOnboardingStep(onboardingGenFallbackStep()); return; }
       const articleDigestMd = d4.articleDigestMd || '';
       setStatus('gen-status-digest', '✓');
 
@@ -6218,7 +6248,7 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
       switchOnboardingStep('download');
     } catch (err) {
       showToast('Generation failed. Please try again.');
-      switchOnboardingStep('conversation');
+      switchOnboardingStep(onboardingGenFallbackStep());
     } finally {
       onboardingGenerationInProgress = false;
     }
