@@ -1563,6 +1563,7 @@
         <!-- Step: input -->
         <div id="onboarding-step-input">
           <div id="onboarding-checking-note" style="display:none;font-size:13px;color:var(--muted);margin-bottom:16px">Checking your profile…</div>
+          <div id="onboarding-found-note" style="display:none;font-size:13px;color:var(--muted);margin-bottom:16px">We found your existing profile — we'll just ask what's changed. Upload or paste an updated resume, or skip straight to the questions. All five files get updated together.</div>
           <div id="onboarding-refresh-note" style="display:none;font-size:13px;color:var(--muted);margin-bottom:16px">Updating your profile? Upload your existing files and answer a few questions about what's changed for the best results.</div>
           <div style="font-size:13px;color:var(--muted);margin-bottom:16px" id="onboarding-input-default-note">How would you like to provide your background?</div>
           <div class="onboarding-cards">
@@ -1692,7 +1693,7 @@
           <div class="onboarding-bulletbank-panel">
             <h3>Your profile is ready.</h3>
             <p>One optional step:</p>
-            <p>JobBud uses your resume as the default source for application bullets. If you apply to very different role types (e.g. operations, finance, corporate development), a bullet-bank lets you tag specific bullets for specific roles so each application packet is precisely tailored.</p>
+            <p>JobBud writes your applications from bullet-bank.md, and you already have a generated one. If you apply to very different role types (e.g. operations, finance, corporate development), this step lets you tag specific bullets for specific roles so each application packet is more precisely tailored.</p>
             <p class="note">This takes an additional 15–20 minutes to set up properly. You can always do this later from the Coach tab.</p>
             <div style="display:flex;gap:10px;flex-wrap:wrap">
               <button class="coach-new-btn" onclick="switchOnboardingStep('bulletbankchat')">Build Bullet-Bank Now</button>
@@ -1724,7 +1725,8 @@
             <button class="onboarding-dl-btn" id="onboarding-dl-profile" onclick="onboardingDownload('config/profile.yml', 'profileYml')">⬇ Download config/profile.yml</button>
             <div class="onboarding-instruction-box">
               Download all five files. Add CLAUDE.md, cv.md, bullet-bank.md, and article-digest.md to the root of your JobBud repo. Add config/profile.yml to the config/ folder. Commit all five — your scanner and application generator will use them automatically.<br><br>
-              <strong>Priority order:</strong> CLAUDE.md and cv.md are required. bullet-bank.md, article-digest.md, and config/profile.yml are optional but significantly improve output quality — add them when you can.<br><br>
+              <strong>Updating an existing profile? Commit all five.</strong> Your applications are written from <strong>bullet-bank.md</strong>, not cv.md — committing cv.md on its own leaves every future application running on your old resume.<br><br>
+              <strong>Setting up for the first time?</strong> CLAUDE.md, cv.md, and bullet-bank.md are the three the scanner and application generator read on every job. article-digest.md and config/profile.yml sharpen the output — add them when you can.<br><br>
               <strong>article-digest.md</strong> is a starter file — enrich it over time by adding role context, proof points, and tailoring guidance specific to your background.
             </div>
             <div class="onboarding-instruction-box" style="margin-top:14px">
@@ -5653,15 +5655,20 @@
     onboardingProfileProbe = onboardingProbeExistingProfile();
   }
 
-  // Show/hide the refresh UI elements. While the repo probe is in flight neither
-  // note is right yet, so we show a brief checking line instead.
+  // Show/hide the refresh UI elements. Exactly one note is shown: the checking
+  // line while the repo probe is in flight, then "we found your profile" if the
+  // probe actually found files, the manual-refresh line if the user opened
+  // refresh mode without a profile in the repo, otherwise the default prompt.
   function onboardingRenderInputNotes({ checking = false } = {}) {
     const checkingNote = document.getElementById('onboarding-checking-note');
+    const foundNote    = document.getElementById('onboarding-found-note');
     const refreshNote  = document.getElementById('onboarding-refresh-note');
     const defaultNote  = document.getElementById('onboarding-input-default-note');
     const existingCard = document.getElementById('onboarding-card-existing');
+    const found = !checking && !!onboardingExistingFiles;
     if (checkingNote) checkingNote.style.display = checking ? '' : 'none';
-    if (refreshNote)  refreshNote.style.display  = (!checking && onboardingIsRefresh) ? '' : 'none';
+    if (foundNote)    foundNote.style.display    = found ? '' : 'none';
+    if (refreshNote)  refreshNote.style.display  = (!checking && !found && onboardingIsRefresh) ? '' : 'none';
     if (defaultNote)  defaultNote.style.display  = (!checking && !onboardingIsRefresh) ? '' : 'none';
     if (existingCard) existingCard.style.display = onboardingIsRefresh ? '' : 'none';
   }
