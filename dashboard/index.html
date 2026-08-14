@@ -1734,6 +1734,17 @@
               <button class="draft-save-btn" id="onboarding-save-repo-btn" onclick="onboardingSaveToRepo()">Save to my repo</button>
               <button class="draft-save-btn" onclick="onboardingDone()">Done — Go to Dashboard</button>
             </div>
+            <!-- Inline discard confirmation — shown when "Done" is clicked with
+                 generated files that were never saved or downloaded. -->
+            <div id="onboarding-discard-confirm" style="display:none;margin-top:14px">
+              <div class="story-delete-confirm" style="flex-direction:column;align-items:flex-start">
+                <span>These files aren't saved anywhere yet. Your repo still has your <strong>old</strong> profile, so your applications keep using it. Leaving now discards everything just generated.</span>
+                <div style="display:flex;gap:8px;flex-wrap:wrap">
+                  <button class="story-delete-confirm-btn no" id="onboarding-confirm-save-btn" onclick="onboardingSaveFromConfirm()">Save to my repo</button>
+                  <button class="story-delete-confirm-btn yes" onclick="onboardingDiscardAnyway()">Discard anyway</button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1864,6 +1875,8 @@
   let onboardingChangeNotes = '';
   let onboardingGenerationInProgress = false;
   let onboardingProfileProbe = null; // in-flight get-assets lookup for existing profile files | null
+  let onboardingSaved = false;       // onboardingResult was committed to the repo
+  let onboardingDownloaded = {};     // onboardingResult key -> true once downloaded
   // Coach tab — mock interview state
   let mockQuestions = [];
   let mockCurrentIndex = 0;
@@ -1979,8 +1992,13 @@
 
   document.getElementById('refresh-btn').addEventListener('click', () => { loadData(); loadRadar(); });
 
+  // Warn on close for a generation in flight, and for generated files that have
+  // not been saved to the repo or downloaded — closing the tab loses them.
+  // Predicate-gated rather than add/removeEventListener so both conditions share
+  // one handler; onboardingHasUnsavedFiles() goes false the moment the files are
+  // saved, fully downloaded, or explicitly discarded.
   window.addEventListener('beforeunload', function(e) {
-    if (onboardingGenerationInProgress) {
+    if (onboardingGenerationInProgress || onboardingHasUnsavedFiles()) {
       e.preventDefault();
       e.returnValue = '';
     }
@@ -5620,6 +5638,9 @@
     onboardingLoading = false;
     onboardingExistingFiles = null;
     onboardingChangeNotes = '';
+    onboardingSaved = false;
+    onboardingDownloaded = {};
+    onboardingHideDiscardConfirm();
 
     onboardingRenderInputNotes({ checking: true });
     switchOnboardingStep('input');
@@ -6142,6 +6163,15 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
       const d3 = await r3.json();
       if (d3.error) { showToast(`bullet-bank.md: ${d3.error}`); switchOnboardingStep('conversation'); return; }
       const bulletBankMd = d3.bulletBankMd || '';
+      // Applications are built from bullet-bank.md, so an empty one here would
+      // quietly leave every future application on the old resume. Never skip it
+      // silently — surface it and send the user back to try again.
+      if (!bulletBankMd.trim()) {
+        setStatus('gen-status-bulletbank', '⚠️');
+        showToast('bullet-bank.md came back empty — please try again.');
+        switchOnboardingStep(onboardingExistingFiles ? 'refresh-notes' : 'conversation');
+        return;
+      }
       setStatus('gen-status-bulletbank', '✓');
 
       // Step 4 — article-digest.md (passes claudeMd for context)
@@ -6203,6 +6233,30 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+    // Downloading every generated file is the other way to not lose them, so it
+    // counts toward "saved" for the discard warning below.
+    onboardingDownloaded[key] = true;
+    if (!onboardingHasUnsavedFiles()) onboardingHideDiscardConfirm();
+  }
+
+  // Generated files that exist but have been neither committed to the repo nor
+  // fully downloaded. Leaving now would throw them away and leave applications
+  // running off the OLD profile (they are built from bullet-bank.md).
+  function onboardingHasUnsavedFiles() {
+    if (!onboardingResult || onboardingSaved) return false;
+    const keys = Object.keys(onboardingResult).filter(k => onboardingResult[k]);
+    if (!keys.length) return false;
+    return !keys.every(k => onboardingDownloaded[k]);
+  }
+
+  function onboardingShowDiscardConfirm() {
+    const el = document.getElementById('onboarding-discard-confirm');
+    if (el) el.style.display = '';
+  }
+
+  function onboardingHideDiscardConfirm() {
+    const el = document.getElementById('onboarding-discard-confirm');
+    if (el) el.style.display = 'none';
   }
 
   // Save the generated files straight to the user's repo. The server refuses if
@@ -6224,6 +6278,8 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
       });
       const d = await r.json();
       if (r.ok && d.success) {
+        onboardingSaved = true;
+        onboardingHideDiscardConfirm();
         showToast(`Saved to your repo: ${(d.saved || []).join(', ')}`);
       } else {
         showToast(d.error || 'Could not save to your repo. Use the download buttons instead.');
@@ -6235,7 +6291,29 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
     }
   }
 
+  // "Done" must never silently discard generated files — before this, leaving
+  // here threw away the new profile while the repo kept serving the old one.
   function onboardingDone() {
+    if (onboardingHasUnsavedFiles()) {
+      onboardingShowDiscardConfirm();
+      return;
+    }
+    onboardingLeaveOnboarding();
+  }
+
+  // "Save to my repo" from inside the warning: once the save lands, leaving is safe.
+  async function onboardingSaveFromConfirm() {
+    await onboardingSaveToRepo();
+    if (onboardingSaved) onboardingLeaveOnboarding();
+  }
+
+  function onboardingDiscardAnyway() {
+    onboardingResult = null; // deliberate discard — nothing left to warn about
+    onboardingLeaveOnboarding();
+  }
+
+  function onboardingLeaveOnboarding() {
+    onboardingHideDiscardConfirm();
     switchCoachView('library');
     loadStories();
   }
