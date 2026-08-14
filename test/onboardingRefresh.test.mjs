@@ -74,6 +74,7 @@ function makeSandbox(fetchImpl) {
     let onboardingResult = null;
     let onboardingSaved = false;
     let onboardingDownloaded = {};
+    let onboardingAbandoned = false;
     ${body}
     return {
       // Mirrors what startOnboarding does on entry.
@@ -88,10 +89,11 @@ function makeSandbox(fetchImpl) {
       },
       // Stands in for the manual "existing files" card landing mid-probe.
       setManualFiles: (files) => { onboardingExistingFiles = files; },
-      hasUnsaved: (result, saved, downloaded) => {
+      hasUnsaved: (result, saved, downloaded, abandoned = false) => {
         onboardingResult = result;
         onboardingSaved = saved;
         onboardingDownloaded = downloaded;
+        onboardingAbandoned = abandoned;
         return onboardingHasUnsavedFiles();
       },
     };
@@ -198,6 +200,10 @@ test('unsaved-files guard tracks save, download, and discard', async () => {
     false,
     'every non-empty file downloaded — an empty profileYml must not block this',
   );
+  // A generation still in flight when the user leaves will assign
+  // onboardingResult afterwards; without the abandon flag that silently re-arms
+  // the beforeunload prompt for the rest of the session.
+  assert.equal(api.hasUnsaved(GENERATED, false, {}, true), false, 'explicitly abandoned');
 });
 
 // ── Wiring that cannot be exercised from the extracted helpers ────────────────
@@ -268,7 +274,7 @@ test('the input step tells a returning user we already found their profile', () 
 test('Done warns before discarding, and beforeunload covers the same condition', () => {
   const done = extractFunction(html, 'onboardingDone');
   assert.match(done, /onboardingHasUnsavedFiles\(\)/);
-  assert.match(done, /onboardingShowDiscardConfirm\(\)/);
+  assert.match(done, /onboardingShowDiscardConfirm\('unsaved'\)/);
   assert.match(html, /onboardingGenerationInProgress \|\| onboardingHasUnsavedFiles\(\)/);
   assert.match(html, /onclick="onboardingDiscardAnyway\(\)"/);
   assert.match(html, /onclick="onboardingSaveFromConfirm\(\)"/);
@@ -281,6 +287,47 @@ test('Exit runs the same unsaved-files guard as Done', () => {
   const exit = extractFunction(html, 'exitOnboarding');
   assert.match(exit, /onboardingDone\(\)/);
   assert.doesNotMatch(exit, /switchCoachView/);
+});
+
+test('leaving mid-generation warns instead of silently losing the profile', () => {
+  // onboardingResult is still null while generating, so the unsaved check alone
+  // waves the user out — and the run lands ~90s later on a hidden view.
+  const done = extractFunction(html, 'onboardingDone');
+  assert.match(done, /if \(onboardingGenerationInProgress\) \{[\s\S]*onboardingShowDiscardConfirm\('generating'\)/);
+  // The generating branch must come first, or the unsaved check short-circuits it.
+  assert.ok(
+    done.indexOf('onboardingGenerationInProgress') < done.indexOf('onboardingHasUnsavedFiles'),
+    'generation check must precede the unsaved-files check',
+  );
+  // Leaving anyway disarms the prompt so a late-landing result cannot re-arm it.
+  assert.match(extractFunction(html, 'onboardingDiscardAnyway'), /onboardingAbandoned = true/);
+  assert.match(extractFunction(html, 'onboardingHasUnsavedFiles'), /if \(onboardingAbandoned\) return false;/);
+  assert.match(extractFunction(html, 'startOnboarding'), /onboardingAbandoned = false;/);
+});
+
+test('the leave confirmation renders outside the step panels', () => {
+  // Exit is on every step, so a confirm nested inside onboarding-step-download
+  // would be invisible when it fires during generating.
+  const stepDownloadIdx = html.indexOf('id="onboarding-step-download"');
+  const confirmIdx = html.indexOf('id="onboarding-discard-confirm"');
+  const viewEndIdx = html.indexOf('id="view-memory"');
+  assert.ok(stepDownloadIdx > 0 && confirmIdx > stepDownloadIdx && confirmIdx < viewEndIdx);
+  // The download step closes before the confirm block starts.
+  const between = html.slice(stepDownloadIdx, confirmIdx);
+  assert.match(between, /Done — Go to Dashboard/);
+  // Mode-specific copy and controls.
+  assert.match(html, /id="onboarding-discard-confirm-msg"/);
+  assert.match(html, /id="onboarding-confirm-stay-btn"/);
+  const show = extractFunction(html, 'onboardingShowDiscardConfirm');
+  assert.match(show, /Your profile is still generating — leaving now will lose it\./);
+  assert.match(show, /generating \? 'Leave anyway' : 'Discard anyway'/);
+});
+
+test('generation failure returns a conversation user to their conversation', () => {
+  const helper = extractFunction(html, 'onboardingGenFallbackStep');
+  assert.match(helper, /onboardingTranscript\.some\(m => m\.content !== '__init__'\)/);
+  assert.match(helper, /return 'conversation';/);
+  assert.match(helper, /onboardingExistingFiles \? 'refresh-notes' : 'conversation'/);
 });
 
 test('startOnboarding clears the refresh-notes inputs from a previous run', () => {
