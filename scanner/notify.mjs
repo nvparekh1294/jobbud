@@ -2,6 +2,7 @@ import { esc, safeUrl } from './html.mjs';
 import { readGithubFile } from '../lib/github.js';
 import { signActionToken } from '../lib/auth.mjs';
 import { fingerprint } from './dedup.mjs';
+import { STARTER_LIST_NOTICE } from '../lib/portalsMeta.mjs';
 
 // Build the set of dedup fingerprints the owner has ENGAGED with in
 // data/job-status.json, so the digest never re-emails a job already in flight —
@@ -82,6 +83,24 @@ function actionUrl(jobId, status) {
   const ts = Math.floor(Date.now() / 1000);
   const token = signActionToken(jobId, status, ts);
   return `${base}/api/action?jobId=${encodeURIComponent(jobId)}&status=${status}&token=${token}&ts=${ts}`;
+}
+
+// Is there anything worth an email this scan?
+//
+// "Only send when there are jobs" is what made the quota notices useless: the
+// scan that most needs to say "Adzuna is paused" is precisely the scan that
+// found nothing, and that scan sent no email at all. So news is reason enough
+// on its own.
+//
+// NEWS, though — not every notice. `sendWorthyNotices` is the pause-class
+// subset: a source the quota system stopped, which the user can act on by
+// raising a limit. The rotation line ("searched 8 of 35 combinations this
+// scan") is routine, and on a big profile it appears on EVERY run, so treating
+// it as news would mail an otherwise-empty digest every quiet week until the
+// user learned to ignore the whole thing. Rotation lines still ride along in
+// any digest that goes out; they just never summon one by themselves.
+export function digestIsWorthSending(jobs = [], sendWorthyNotices = []) {
+  return jobs.length > 0 || sendWorthyNotices.length > 0;
 }
 
 export async function sendDigest(jobs, config) {
@@ -174,6 +193,23 @@ export function buildEmail(jobs, config = {}) {
 
   jobs = dedupByTitle(jobs);
 
+  // One line at the top of the digest when the scan ran on the example company
+  // list that ships with the repo. Someone who skipped onboarding's companies
+  // step otherwise has no way to tell why the matches are at companies they
+  // never picked. Set by scanner/index.mjs; absent on every other path.
+  const starterNotice = config.usingStarterPortals ? STARTER_LIST_NOTICE : '';
+
+  // One line per API source the quota system paused or cut short this scan, set
+  // by scanner/index.mjs. A thin digest because Adzuna is paused looks exactly
+  // like a thin digest because nothing matched, and the difference matters: one
+  // of them the user can do something about.
+  const quotaNotices = Array.isArray(config.quotaNotices) ? config.quotaNotices : [];
+
+  // A digest can now arrive with no matches at all — that is the whole point of
+  // sending on a notice alone. Without a line saying so it would read as a
+  // broken email, so the body says what happened before the notice explains why.
+  const emptyNotice = jobs.length === 0 ? 'No new matches this scan.' : '';
+
   // Cap the emailed list at config.maxJobsPerDigest (highest scores first).
   // Everything above the cap still lives in the dashboard; the email notes how
   // many were held back so the digest stays skimmable instead of a 700-row wall.
@@ -265,12 +301,21 @@ export function buildEmail(jobs, config = {}) {
   .btn-reject { background: #fef2f2; color: #dc2626; }
   .btn-disabled { background: #f3f4f6; color: #9ca3af; cursor: default; }
   .footer { padding: 20px 32px; font-size: 12px; color: #9ca3af; }
+  .starter-notice { padding: 12px 32px; background: #fffbeb; color: #92400e; font-size: 13px; border-bottom: 1px solid #fde68a; }
+  .empty-notice { padding: 16px 32px; color: #475569; font-size: 14px; border-bottom: 1px solid #f0f0f0; }
+  .empty-notice p { margin: 0; }
+  .quota-notice { padding: 12px 32px; background: #f8fafc; color: #475569; font-size: 13px; border-bottom: 1px solid #e2e8f0; }
+  .quota-notice p { margin: 0 0 4px; }
+  .quota-notice p:last-child { margin-bottom: 0; }
 </style></head>
 <body>
   <div class="header">
     <h1>JobBud Digest</h1>
     <p>${dateStr} · ${jobs.length} new match${jobs.length !== 1 ? 'es' : ''}</p>
   </div>
+  ${starterNotice ? `<div class="starter-notice">${esc(starterNotice)}</div>` : ''}
+  ${emptyNotice ? `<div class="empty-notice"><p>${esc(emptyNotice)}</p></div>` : ''}
+  ${quotaNotices.length ? `<div class="quota-notice">${quotaNotices.map(n => `<p>${esc(n)}</p>`).join('')}</div>` : ''}
   ${topJobs.length ? `<div class="section"><p class="label">🟢 Apply Now (${topJobs.length})</p>${topJobs.map(j => card(j, 'top')).join('')}</div>` : ''}
   ${reviewJobs.length ? `<div class="section"><p class="label">🟡 Worth a Look (${reviewJobs.length})</p>${reviewJobs.map(j => card(j, 'review')).join('')}</div>` : ''}
   ${radarJobs.length ? `<div class="section"><p class="label">🔵 On the Radar (${radarJobs.length})</p>${radarJobs.map(j => card(j, 'radar')).join('')}</div>` : ''}
@@ -279,7 +324,7 @@ export function buildEmail(jobs, config = {}) {
   <div class="footer">JobBud · Automated job digest</div>
 </body></html>`;
 
-  return { subject, html, text: buildTextDigest(jobs, moreNote) };
+  return { subject, html, text: buildTextDigest(jobs, moreNote, starterNotice, quotaNotices, emptyNotice) };
 }
 
 function fundingLine(snapshot) {
@@ -322,8 +367,12 @@ function card(job, type) {
   </div>`;
 }
 
-function buildTextDigest(jobs, moreNote = '') {
+function buildTextDigest(jobs, moreNote = '', starterNotice = '', quotaNotices = [], emptyNotice = '') {
   const lines = [`JOBBUD DIGEST — ${new Date().toLocaleString()}\n`, `${jobs.length} new matches\n`, '='.repeat(60)];
+  if (starterNotice) lines.push(starterNotice, '');
+  if (emptyNotice) lines.push(emptyNotice, '');
+  for (const notice of quotaNotices) lines.push(notice);
+  if (quotaNotices.length) lines.push('');
   if (moreNote) lines.push(moreNote, '');
   for (const job of jobs) {
     const jobId = job._fingerprint || '';

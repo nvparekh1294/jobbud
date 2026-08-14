@@ -11,7 +11,7 @@
 // clone of the repo (e.g. ~/linkedin-research) gets it on `git pull`, and the
 // LinkedIn research agent reads it instead of asking the user to fill placeholders.
 
-import { readGithubFile, writeGithubFile } from '../lib/github.js';
+import { readGithubFile, writeGithubFile, normalizeJsonDoc } from '../lib/github.js';
 
 // This function does a heavy read (job-status.json is now ~2MB and served via the
 // slow Contents API download_url path) followed by a 6-request Git Data API write.
@@ -24,6 +24,12 @@ export const maxDuration = 60;
 
 // roleTypes → human-readable function for the research agent. Mirrors the mapping
 // the dashboard used to apply client-side before the JSON moved server-side.
+//
+// KNOWN HARDCODED LEFTOVER: these five keys are the original author's role types.
+// Role types are now the user's own, parsed from their bullet-bank.md tag legend
+// (lib/bulletBank.mjs), so for everyone else this map simply misses and
+// researchFunction() returns '' — a degraded hint to the research agent, not a
+// break. Fixing it properly belongs with the LinkedIn research feature, not here.
 const RESEARCH_FUNCTION_MAP = {
   'ops':        'Strategy & Operations / Business Operations',
   'corpdev':    'Corporate Development',
@@ -48,7 +54,8 @@ function researchSlug(company) {
 async function getJobStatus(githubToken, owner, repo) {
   const { exists, content } = await readGithubFile(githubToken, owner, repo, 'data/job-status.json');
   if (!exists) throw new Error('GitHub GET job-status.json failed: not found (404)');
-  return JSON.parse(content);
+  // The committed seed is the array `[]`; normalize it to the { jobs: {} } model.
+  return normalizeJsonDoc(JSON.parse(content), { jobs: {} });
 }
 
 // ── Handler ──────────────────────────────────────────────────────────────────
@@ -97,7 +104,9 @@ export default async function handler(req, res) {
       'linkedin-research/current_job.json',
       JSON.stringify(payload, null, 2) + '\n',
       `chore: queue LinkedIn research for ${payload.company} [skip ci]`,
-      { logTag: 'queue-linkedin-research' },
+      // Re-queueing research for the same job writes a byte-identical payload.
+      // That is a legitimate idempotent action, not lost data — accept the no-op.
+      { logTag: 'queue-linkedin-research', allowNoop: true },
     );
 
     console.log(`[queue-linkedin-research] wrote current_job.json for ${payload.company} (${commitSha})`);

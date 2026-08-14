@@ -17,52 +17,220 @@ async function saveUsage(usage) {
   await fs.writeFile(USAGE_PATH, JSON.stringify(usage, null, 2));
 }
 
-function resetIfNeeded(entry, source) {
-  if (!entry.monthResetDate) return entry;
+// One month on from `from` (a Date, or the plain YYYY-MM-DD string this file
+// stores), as the same plain YYYY-MM-DD string.
+//
+// Entirely in UTC, both halves. It used to parse '2026-03-01' as UTC midnight
+// and then advance it with the LOCAL-time setMonth, so under TZ=America/New_York
+// the stored date came back 2026-03-28: a "month" of 27 days that reset the
+// counter early. Actions runners are UTC, so production was fine and anyone
+// running a scan on their own machine was not. friendlyDate below has always
+// parsed as UTC for the same reason.
+//
+// And a month is not a fixed number of days: setMonth on January 31st lands on
+// March 3rd, skipping February entirely. Clamp to the last day of the target
+// month instead, so the reset date always falls in the month it should.
+function oneMonthOn(from) {
+  const isoDay = typeof from === 'string' ? from : new Date(from).toISOString().slice(0, 10);
+  const base = new Date(`${isoDay}T00:00:00Z`);
+  if (Number.isNaN(base.getTime())) return new Date().toISOString().slice(0, 10);
+
+  const year = base.getUTCFullYear();
+  const month = base.getUTCMonth();
+  // Day 0 of the month after the target = the target month's last day.
+  const lastDayOfTarget = new Date(Date.UTC(year, month + 2, 0)).getUTCDate();
+  const day = Math.min(base.getUTCDate(), lastDayOfTarget);
+  return new Date(Date.UTC(year, month + 1, day)).toISOString().slice(0, 10);
+}
+
+// Bring an entry up to date before anything reads its counter. Returns the SAME
+// object when nothing needed doing, so callers can tell whether there is
+// anything to write back.
+//
+// THE BUG THIS REPAIRS. New entries were created with `monthResetDate: null`,
+// nothing anywhere set it, and the reset check returned immediately on a null
+// date — so `callsThisMonth` was never a month's worth of calls, it was a
+// LIFETIME total that only ever grew. The first time it crossed the limit the
+// source was skipped, and then it was skipped on every run after that, forever.
+// A real user's log: "adzuna: would exceed monthly limit — 235 used + ~28
+// estimated = 263 > 250", every run, with no Adzuna jobs in any digest.
+//
+// So an entry with no reset date is not a new entry: it is a lifetime count that
+// cannot be converted into a monthly one. The honest repair is to start its
+// month now, drop the number that never meant what it claimed, and say why in
+// the log — otherwise the user sees a counter jump to zero with no explanation.
+function refreshEntry(entry, source) {
+  if (!entry) {
+    // A source's first ever run. The month starts today; without this the entry
+    // would be written with a null date and inherit the lifetime-counter bug.
+    return { callsThisMonth: 0, monthResetDate: oneMonthOn(new Date()), lastScan: null };
+  }
+
+  if (!entry.monthResetDate) {
+    const migrated = {
+      ...entry,
+      callsThisMonth: 0,
+      monthResetDate: oneMonthOn(new Date()),
+      exhausted: false,
+    };
+    console.log(`[quota] ${source}: this entry had no monthly reset date, so its ${entry.callsThisMonth || 0} recorded calls were a lifetime total rather than a monthly one — starting a fresh month now (next reset: ${migrated.monthResetDate})`);
+    return migrated;
+  }
+
   if (new Date() >= new Date(entry.monthResetDate)) {
-    const nextReset = new Date(entry.monthResetDate);
-    nextReset.setMonth(nextReset.getMonth() + 1);
     const reset = {
       ...entry,
       callsThisMonth: 0,
-      monthResetDate: nextReset.toISOString().slice(0, 10),
+      monthResetDate: oneMonthOn(entry.monthResetDate),
       exhausted: false,
     };
     console.log(`[quota] ${source}: monthly counter reset (next reset: ${reset.monthResetDate})`);
     return reset;
   }
+
   return entry;
 }
 
-export async function checkQuota(source, estimatedCalls, monthlyLimit) {
-  const usage = await loadUsage();
-  let entry = usage[source] || { callsThisMonth: 0, monthResetDate: null, lastScan: null };
+// How many calls a single run may spend against a monthly budget.
+//
+// THE DIVISOR IS THE SCAN CADENCE, and the cadence that actually ships is
+// WEEKLY: .github/workflows/weekly-api-scan.yml (cron '0 6 * * 1') is the only
+// workflow that runs the API sources. Five is roughly the number of weeks in a
+// month, so a weekly user gets their whole query list searched every single
+// week and still lands inside the monthly allowance. Dividing by 31 — a daily
+// cadence that no workflow actually runs — cut a weekly user to about a fifth
+// of one run's list, meaning each role-and-city pair was searched once every
+// five weeks while ~86% of the month's budget went unspent.
+//
+// It stays a hard per-run ceiling, so a burst of manual "Run workflow" presses
+// cannot spend the month in an afternoon: checkQuota still clamps every run
+// against what the month has left, and a run that no longer fits is trimmed
+// rather than skipped.
+//
+// Callers pass their own override (profile.yml's adzuna_calls_per_run, or the
+// matching env var locally) when the user has picked a figure.
+//
+// Generic on purpose: jsearch and serpapi do not budget per run yet — their
+// query lists are small enough to fit whole — and wiring them up later is one
+// call each rather than a second copy of this arithmetic.
+export function callsPerRun(monthlyLimit, override) {
+  const chosen = Number(override);
+  if (Number.isFinite(chosen) && chosen > 0) return Math.floor(chosen);
+  return Math.max(1, Math.floor(monthlyLimit / 5));
+}
 
-  entry = resetIfNeeded(entry, source);
+// What a source may spend this run: never more than it asked for, never more
+// than the month has left.
+//
+// This returns a NUMBER of allowed calls rather than a yes/no because
+// all-or-nothing was itself part of the bug. A source whose full query list did
+// not fit was skipped entirely, so a list one call too big produced no jobs at
+// all instead of nearly a full run's worth. A caller that genuinely needs its
+// whole list can still insist on it by comparing `allowed` against what it
+// asked for; a caller that can run part of its list now runs part of it.
+export async function checkQuota(source, requestedCalls, monthlyLimit) {
+  const usage = await loadUsage();
+  const stored = usage[source];
+  const entry = refreshEntry(stored, source);
+
+  // A reset or a migration has to survive a run that then skips this source —
+  // otherwise a stuck user is "repaired" in the log and still stuck on disk,
+  // because only a source that actually runs reaches recordUsage.
+  if (entry !== stored) {
+    usage[source] = entry;
+    await saveUsage(usage);
+  }
+
+  const used = entry.callsThisMonth || 0;
+  const budget = { allowed: 0, used, limit: monthlyLimit, resetDate: entry.monthResetDate };
 
   if (entry.exhausted) {
     console.warn(`[quota] ${source}: marked exhausted until ${entry.monthResetDate} — skipping`);
-    // Save the reset if it happened
-    usage[source] = entry;
-    await saveUsage(usage);
-    return false;
+    return budget;
   }
 
-  const projected = (entry.callsThisMonth || 0) + estimatedCalls;
-  if (projected > monthlyLimit) {
-    console.warn(`[quota] ${source}: would exceed monthly limit — ${entry.callsThisMonth} used + ~${estimatedCalls} estimated = ${projected} > ${monthlyLimit}`);
-    return false;
+  budget.allowed = Math.max(0, Math.min(requestedCalls, monthlyLimit - used));
+
+  if (budget.allowed === 0) {
+    console.warn(`[quota] ${source}: monthly limit reached — ${used}/${monthlyLimit} used, nothing left until ${entry.monthResetDate}`);
+  } else if (budget.allowed < requestedCalls) {
+    console.warn(`[quota] ${source}: only ${budget.allowed} of ~${requestedCalls} calls fit in what is left of the month (${used}/${monthlyLimit} used, resets ${entry.monthResetDate})`);
+  } else {
+    console.log(`[quota] ${source}: ${used}/${monthlyLimit} used this month, adding ~${requestedCalls} → OK`);
   }
 
-  console.log(`[quota] ${source}: ${entry.callsThisMonth}/${monthlyLimit} used this month, adding ~${estimatedCalls} → OK`);
-  return true;
+  return budget;
+}
+
+// One plain-English line about a source that did not run in full, shared by the
+// scan log and the digest so the two can never drift apart.
+//
+// A quota pause is otherwise completely invisible from the outside: the digest
+// just gets thinner, and the user has no way to tell "no jobs matched" apart
+// from "half your sources didn't run". This is the sentence that tells them
+// which one it was.
+export function quotaNotice(label, { ran = null, total = null, resetDate = null, remaining = null, needed = null } = {}) {
+  if (ran !== null && total !== null && ran > 0 && ran < total) {
+    return `${label}: searched ${ran} of ${total} role-and-city combinations this scan, rotating through the rest over the next few scans to stay inside the monthly API allowance.`;
+  }
+
+  // Some allowance left, just not a whole scan's worth. Saying "used up" here
+  // was simply untrue — a source with 6 of the 22 calls it needs has not spent
+  // the month, and a user who checks the provider's dashboard against that
+  // sentence finds it does not match.
+  if (Number.isFinite(remaining) && remaining > 0 && Number.isFinite(needed) && remaining < needed) {
+    const back = resetDate ? ` — resumes ${friendlyDate(resetDate)}` : '';
+    return `${label}: paused — only ${remaining} of the ~${needed} API calls a full scan needs are left this month${back}.`;
+  }
+
+  const until = resetDate ? ` until ${friendlyDate(resetDate)}` : '';
+  return `${label}: paused${until} — this month's API allowance is used up.`;
+}
+
+// "2026-09-07" → "September 7". Parsed as UTC (the date is stored as a plain
+// day, not a moment) so the day never slides backwards in a western timezone.
+function friendlyDate(isoDay) {
+  const parsed = new Date(`${isoDay}T00:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return isoDay;
+  return parsed.toLocaleDateString('en-US', { month: 'long', day: 'numeric', timeZone: 'UTC' });
+}
+
+// Hand out the next slice of a query list that is too big to run in one go, and
+// remember where the next run should pick up.
+//
+// The cursor is advanced HERE, when the window is planned, not after the
+// queries have run. A run that dies halfway still moves the window on, so one
+// query combination that reliably fails cannot pin the rotation in place and
+// starve every other combination. `queryCursor` living in the usage entry means
+// deleting it is harmless — the rotation simply restarts at the beginning.
+export async function takeQueryWindow(source, totalQueries, maxThisRun) {
+  // Nothing to hand out. `start % 0` is NaN and ceil(0/0) is NaN, so an empty
+  // list used to poison the cursor with NaN and hand the caller a nonsense
+  // window; a zero allowance would divide by zero the same way. Return an empty
+  // window and leave the stored cursor exactly where it was, so the rotation
+  // resumes unharmed once there is something to run.
+  if (!(totalQueries > 0) || !(maxThisRun > 0)) {
+    return { start: 0, count: 0, runsPerRotation: 0 };
+  }
+
+  const usage = await loadUsage();
+  const entry = { ...refreshEntry(usage[source], source) };
+
+  const cursor = Number(entry.queryCursor);
+  const start = Number.isInteger(cursor) && cursor >= 0 ? cursor % totalQueries : 0;
+  const count = Math.min(maxThisRun, totalQueries);
+
+  entry.queryCursor = (start + count) % totalQueries;
+  usage[source] = entry;
+  await saveUsage(usage);
+
+  return { start, count, runsPerRotation: Math.ceil(totalQueries / count) };
 }
 
 export async function recordUsage(source, callsMade) {
   const usage = await loadUsage();
-  let entry = usage[source] || { callsThisMonth: 0, monthResetDate: null, lastScan: null };
+  const entry = { ...refreshEntry(usage[source], source) };
 
-  entry = resetIfNeeded(entry, source);
   entry.callsThisMonth = (entry.callsThisMonth || 0) + callsMade;
   entry.lastScan = new Date().toISOString();
 

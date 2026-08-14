@@ -3,12 +3,22 @@
 // hardcoded name, bio, or background references before committing.
 import { MEMORY_KEYS, MEMORY_PATHS, assembleMemoryBlock } from '../lib/memory.mjs';
 import { ANTI_AI_WRITING_RULES } from '../lib/writingRules.mjs';
+import {
+  splitBulletBank,
+  quarantineAiSuggestedLines,
+  BULLET_LINE_RE,
+  AI_SUGGESTED_TAG,
+} from '../lib/bulletBank.mjs';
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const GITHUB_API = 'https://api.github.com';
 const GOOGLE_DOCS_API = 'https://docs.googleapis.com/v1/documents';
 const GOOGLE_DRIVE_API = 'https://www.googleapis.com/drive/v3/files';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
+
+// Shown in tailoringNotes when cv.md is absent, so the user is never left assuming
+// the resume is in their own words when there is nothing on file to check against.
+export const NO_RESUME_NOTE = "Heads up: no resume is on file, so some of this resume's wording is AI-drafted rather than your own — upload your resume in onboarding to lock it to your real language.";
 
 async function readFileFromRepo(githubToken, owner, repo, filePath) {
   const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/contents/${filePath}`, {
@@ -22,11 +32,347 @@ async function readFileFromRepo(githubToken, owner, repo, filePath) {
   return Buffer.from(data.content, 'base64').toString('utf8');
 }
 
-async function callClaude(anthropicApiKey, articleDigest, bulletBank, job, roleTypes, additionalGuidance, memoryBlock = '') {
-  const roleTypeStr = roleTypes && roleTypes.length ? roleTypes.join(', ') : 'ops';
+// Build the CANDIDATE SOURCE blocks the model may draw resume bullets from, plus
+// the advisory blocks it may only suggest from.
+//
+// Two mechanisms protect the user's own resume language here, and they are
+// deliberately structural rather than a plea in the prompt:
+//
+//  1. SPLIT — lib/bulletBank.mjs cuts the bank's "Suggested Additions" section
+//     off the body before the body is handed over as the verbatim source. An
+//     [ai-suggested] bullet is therefore never sitting inside the text the model
+//     is told to copy from; it arrives in a separate, explicitly advisory block.
+//
+//  2. PROVENANCE — banks generated before the verbatim redesign are full of
+//     AI-rewritten bullets with no [ai-suggested] flag, and those users must get
+//     the new behaviour without re-onboarding. cv.md is the enabler: it is
+//     generated at onboarding under "preserve all bullet points verbatim, format
+//     only", so it holds the user's real resume language. When cv.md exists we
+//     ship it alongside the bank and require every resume-body bullet to be
+//     traceable to cv.md's own wording. A bank bullet that is not traceable is
+//     treated exactly like an [ai-suggested] one: advisory only.
+//
+// When cv.md is absent there is nothing to check provenance against, so we fall
+// back to the old behaviour and make the package say so out loud in the
+// tailoring notes rather than quietly presenting AI phrasing as the user's.
+export function buildBulletSourceBlocks(bulletBank, cvMd) {
+  const { body, suggestions } = splitBulletBank(bulletBank || '');
 
-  const bulletBankIntro = `\nBULLET BANK: The following file contains every possible resume bullet tagged with role types and priorities. You MUST use bullets from this file verbatim -- do not rewrite, paraphrase, or combine any bullet.\n\n`;
-  const bulletSelectionRules = `\n\nBULLET SELECTION RULES:\n1. Only select bullets tagged for the role types specified in the Role Type field in the job context\n2. For each theme, use only the [primary] tagged bullet. Use [alt] only if the JD specifically emphasizes that angle. Use [optional] only if the JD explicitly calls for that skill\n3. Never include two bullets on the same theme -- pick one per theme and discard the rest. Exception: for themes marked [allow-2], you may include up to 2 bullets if both are tagged for the selected role types AND they convey genuinely different information. Never include 2 bullets that overlap in meaning.\n4. Use every selected bullet verbatim -- do not change a single word\n5. Select 4-6 bullets per role section, prioritizing themes whose keywords appear in the job description\n6. Include Select Investment Experience section only if investing or corpdev is selected\n7. Use the Personal section version tagged for the primary role type -- investing version for investing roles, standard version for all others`;
+  // Second gate. The heading split is the primary mechanism, but a heading is
+  // exactly the thing a model feels free to reword; the [ai-suggested] tag is
+  // the thing the prompt is most emphatic about. So any tagged line still
+  // sitting in the body — because its heading was phrased in a way the split
+  // did not recognise — is moved out here regardless of headings.
+  const { kept: bankBody, moved } = quarantineAiSuggestedLines(body);
+  const suggestionsText = [suggestions, moved].filter(s => s && s.trim()).join('\n\n').trim();
+  const hasSuggestions = suggestionsText.length > 0;
+
+  const hasCv = !!(cvMd && cvMd.trim().length >= 50);
+
+  // A bank body with no bullet lines is not a usable bank. This is the shape a
+  // no-resume onboarding produces: the prompt routes everything the user
+  // described into Suggested Additions, leaving a body of bare company headers.
+  // Treating that as a bank is worse than having no bank at all — rule 6 bans
+  // the only content there is, and the model has nothing left to build from.
+  const usableBank = BULLET_LINE_RE.test(bankBody);
+
+  // When the bank IS cv.md — generateAndSendPackage falls back to it when no
+  // bullet-bank.md exists — sending cv.md again as the provenance block is
+  // ~12KB of duplicate tokens for zero extra signal. Say so instead.
+  const bankIsCv = usableBank && hasCv && bankBody.trim() === cvMd.trim();
+
+  // Advisory block: AI-written suggestions, physically separated from the bank body.
+  const suggestionsBlock = hasSuggestions
+    ? `\n\nAI-SUGGESTED ADDITIONS (ADVISORY ONLY -- NEVER PUT THESE IN THE RESUME):\nThe block below was written by AI, not by the user. It covers achievements the user described but has not put on their resume. These bullets are BANNED from the "resume" field of your response, without exception, no matter how well they fit the job description. Their only permitted use is the SUGGESTED ADDITIONS section of atsText.\n\n${suggestionsText}\n`
+    : '';
+
+  // Provenance block: the user's real resume language, used as the traceability check.
+  const provenanceBlock = !hasCv
+    ? ''
+    : bankIsCv
+      ? `\n\nRESUME OF RECORD (cv.md) -- THE PROVENANCE CHECK:\nThe BULLET BANK above IS this user's cv.md, preserved verbatim at onboarding, so it is reproduced here rather than repeated. It is the authority on what the user's own language is.\n`
+      : `\n\nRESUME OF RECORD (cv.md) -- THE PROVENANCE CHECK:\nThis is the user's actual resume, preserved verbatim at onboarding. It is the authority on what the user's own language is.\n\n${cvMd.slice(0, 12000)}\n`;
+
+  const provenanceRules = hasCv
+    ? `\n\nPROVENANCE RULE (applies to every bullet in the "resume" field):\nA bullet may appear in the resume ONLY if its wording is traceable to the RESUME OF RECORD above -- verbatim, or near-verbatim where only dates, punctuation, or formatting differ. The meaning AND the phrasing must be the user's own. Some bullet banks were generated by an older version of this system that rewrote the user's bullets; those rewrites read well but are not the user's words. Before you place any bullet, find its source sentence in the RESUME OF RECORD. If you cannot, treat that bullet exactly as if it were tagged [${AI_SUGGESTED_TAG}]: leave it out of the resume, and if it is relevant to this job description, surface it in the SUGGESTED ADDITIONS section of atsText with a one-line rationale. Never silently upgrade a bank bullet into the resume because it sounds better than the original.`
+    : `\n\nPROVENANCE NOTE: no cv.md is on file for this user, so bullet wording cannot be checked against their real resume. Proceed using the Bullet Bank as-is, and include this exact sentence as the final sentence of tailoringNotes: "${NO_RESUME_NOTE}"`;
+
+  const bulletSelectionRules = `\n\nBULLET SELECTION RULES:\n1. Prefer bullets tagged for the role types listed in the Role Type field of the job context. The user defines their own role-type tags, so a selected role type may not appear in the bank at all -- if few or no bullets carry the selected tags, fall back to the bullets that best match the job description rather than returning a thin resume.\n2. For each theme, use only the [primary] tagged bullet. Use [alt] only if the JD specifically emphasizes that angle. Use [optional] only if the JD explicitly calls for that skill\n3. Never include two bullets on the same theme -- pick one per theme and discard the rest. Exception: for themes marked [allow-2], you may include up to 2 bullets if both are tagged for the selected role types AND they convey genuinely different information. Never include 2 bullets that overlap in meaning.\n4. Use every selected bullet verbatim -- do not change a single word\n5. Select 4-6 bullets per role section, prioritizing themes whose keywords appear in the job description\n6. HARD RULE: any bullet tagged [${AI_SUGGESTED_TAG}], and anything from the AI-SUGGESTED ADDITIONS block, is BANNED from the resume field. It may only appear under SUGGESTED ADDITIONS in atsText.\n7. Include a "Select Investment Experience" section only if the bullet bank actually contains investment/deal bullets AND the job description calls for that experience. It is not tied to any particular role-type tag.\n8. Where the bank offers several versions of a section (for example a Personal section written for different role types), pick the version tagged for the first selected role type, and the untagged or most general version otherwise.${provenanceRules}`;
+
+  // provenanceRules is returned separately as well as embedded in
+  // bulletSelectionRules: the no-bank prompt has no selection rules to carry it,
+  // and without it the disclosure never reaches the model at all.
+  return {
+    bankBody, suggestionsBlock, provenanceBlock, provenanceRules,
+    bulletSelectionRules, hasSuggestions, hasCv, usableBank,
+  };
+}
+
+// Turn a Messages API reply into the package object.
+//
+// The truncation check has to come first. The package is one JSON object, so a
+// reply cut off at the token limit is a half-written object: JSON.parse throws a
+// SyntaxError, and the user sees an unexplained 500 with no hint that the cause
+// was length. Exported so the guard is testable without a network round-trip.
+// "Respond with valid JSON only" is a request, not a guarantee. In staging the
+// draft-Q&A call failed on EVERY run with `Unexpected token 'I'` — the model
+// opened with a sentence of prose before the JSON, JSON.parse threw on the
+// first character, and the whole feature silently produced nothing.
+//
+// So: strip fences, try a straight parse, and if that fails carve out the span
+// from the first opening brace/bracket to the matching last closing one and
+// parse that. Returns undefined rather than throwing, so callers decide what a
+// failure means.
+export function parseLooseJson(text) {
+  const cleaned = String(text == null ? '' : text).replace(/```json|```/g, '').trim();
+  if (!cleaned) return undefined;
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    // Prose before and/or after the payload. Anchor on whichever structure
+    // opens first so a top-level array is handled as readily as an object.
+    const objAt = cleaned.indexOf('{');
+    const arrAt = cleaned.indexOf('[');
+    if (objAt === -1 && arrAt === -1) return undefined;
+    const start = objAt === -1 ? arrAt : arrAt === -1 ? objAt : Math.min(objAt, arrAt);
+    const end = cleaned.lastIndexOf(cleaned[start] === '{' ? '}' : ']');
+    if (end <= start) return undefined;
+    try {
+      return JSON.parse(cleaned.slice(start, end + 1));
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+export function parsePackageResponse(data) {
+  if (data && data.stop_reason === 'max_tokens') {
+    throw new Error('Package generation was cut off before it finished (hit the response length limit). Try again, or shorten the job description and any additional guidance.');
+  }
+  const text = data?.content?.[0]?.text || '';
+  const parsed = parseLooseJson(text);
+  // Still a throw on failure — the package IS the response, so there is nothing
+  // to degrade to. The brace carve-out just means prose no longer causes it.
+  if (parsed === undefined || parsed === null || typeof parsed !== 'object') {
+    throw new Error(`Package generation returned no parseable JSON. First 120 characters of the reply: ${String(text).slice(0, 120)}`);
+  }
+  return parsed;
+}
+
+// Normalize whatever shape came back into [{question, answer}].
+// Accepts {draftResponses: [...]} and a bare top-level array, because a model
+// that has already ignored one formatting instruction may ignore another.
+export function parseDraftQAResponse(rawText) {
+  // The request declares a json_schema output format, so the reply should be
+  // schema-valid JSON with no preamble. Everything below is a defensive
+  // backstop for the day that guarantee doesn't hold — a fence-wrapped reply,
+  // prose either side of the payload, or a bare top-level array.
+  const parsed = parseLooseJson(rawText);
+  if (parsed === undefined) return null;
+
+  const list = Array.isArray(parsed) ? parsed
+    : (parsed && Array.isArray(parsed.draftResponses)) ? parsed.draftResponses
+    : null;
+  if (!list) return null;
+
+  return list
+    .filter(qa => qa && typeof qa === 'object')
+    .map(qa => ({ question: String(qa.question || ''), answer: String(qa.answer || '') }))
+    .filter(qa => qa.question || qa.answer);
+  // null means "could not parse" — distinct from "parsed, empty"
+}
+
+// ── Measured package quality ─────────────────────────────────────────────────
+//
+// The package used to ask the model to estimate its own ATS score out of ten.
+// That number was indefensible: it clustered on 6-7 whatever it was given, no
+// real ATS works that way, and a staging package scored 6 on a resume that
+// still said [YOUR NAME] and had bracketed placeholders where the education
+// section should be. A number that survives that is not measuring anything.
+//
+// The score stays, because it is useful — but it is computed here, from facts
+// this code checked itself, and shown with its arithmetic visible so the user
+// can see exactly what it is made of. The model supplies the JD's key terms and
+// a qualitative FIT READ; it never sees or influences the digit.
+
+// A bracketed placeholder the draft must not ship with: [YOUR NAME],
+// [School Name], [ADD: specific number], [X]%. One to sixty characters, and no
+// newline, so it cannot swallow a paragraph.
+//
+// The lower bound is 1, not 2, so single-character placeholders are caught:
+// "Grew revenue [X]% in one year" is precisely the not-submittable case, and a
+// resume containing a genuine one-character bracket token is vanishingly rare
+// next to that.
+export const PLACEHOLDER_RE = /\[[^\]\n]{1,60}\]/g;
+
+// Points available to each measured component. Keyword coverage is a matter of
+// degree; completeness is not — a resume with [YOUR NAME] in it is not
+// partially finished, so its 3 points are all-or-nothing.
+const KEYWORD_POINTS = 7;
+const COMPLETENESS_POINTS = 3;
+
+// Below this many key terms the coverage percentage is not a measurement, it is
+// noise: a one-term list whose single term happens to appear would read
+// "SCORE: 10/10" — the exact overconfident number this whole mechanism exists to
+// replace. Too few terms and the score and coverage blocks are simply omitted;
+// the placeholder gate still fires, because that one does not depend on terms.
+const MIN_SCORABLE_TERMS = 5;
+
+export function findPlaceholders(resumeText) {
+  const found = String(resumeText || '').match(PLACEHOLDER_RE) || [];
+  const seen = new Set();
+  const out = [];
+  for (const raw of found) {
+    const key = raw.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(raw);
+  }
+  return out;
+}
+
+const escapeRegExp = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Does the resume actually contain this term?
+//
+// Raw substring matching was inflating the score with matches no human would
+// accept: "AI" inside "detAIled", "SQL" inside "MySQL", and a term like "R"
+// matching essentially every resume ever written. Every one of those became a
+// confident "Present:" line and points on a score.
+//
+// So an alphanumeric term is matched on word boundaries. A term whose own first
+// or last character is not a word character — "C++", ".NET" — falls back to
+// literal containment, because \b is defined relative to word characters and
+// would misbehave at those edges (\b after the '+' in "C++" demands a word
+// character follow it, so "C++ developer" would not match). Internal
+// punctuation is escaped and matched literally either way, so multi-word and
+// hyphenated phrases like "post-sales execution" still anchor on both ends.
+function resumeContainsTerm(resumeText, term) {
+  if (/^\w/.test(term) && /\w$/.test(term)) {
+    return new RegExp(`\\b${escapeRegExp(term)}\\b`, 'i').test(resumeText);
+  }
+  return resumeText.toLowerCase().includes(term.toLowerCase());
+}
+
+// Deliberately not fuzzy: a term the resume only paraphrases has not been
+// matched by a keyword filter either, and a generous check here would rebuild
+// the same comfortable fiction the invented score was.
+export function computeKeywordCoverage(resumeText, keyTerms) {
+  const haystack = String(resumeText || '');
+  const present = [];
+  const missing = [];
+  const seen = new Set();
+  for (const raw of Array.isArray(keyTerms) ? keyTerms : []) {
+    // Collapse internal whitespace, not just the ends. A term carrying an
+    // embedded newline would break the coverage block onto its own line, where
+    // an ALL-CAPS fragment reads as a heading — in the Google Doc renderer that
+    // is enough to forge a "NOT SUBMITTABLE YET" banner out of a keyword.
+    const term = String(raw == null ? '' : raw).replace(/\s+/g, ' ').trim();
+    if (!term) continue;
+    const key = term.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    (resumeContainsTerm(haystack, term) ? present : missing).push(term);
+  }
+  return { present, missing, total: present.length + missing.length };
+}
+
+// 4.5 → "4.5", 7 → "7". Keeps the arithmetic readable rather than "7.0/7".
+const fmtScore = n => (Number.isInteger(n) ? String(n) : n.toFixed(1));
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+export function computePackageScore(coverage, placeholders) {
+  const total = coverage?.total || 0;
+  const present = coverage?.present?.length || 0;
+  // Rounded to the nearest half point — finer precision would imply the term
+  // list is more exact than a 10-15 item judgement call really is.
+  const keyword = total > 0
+    ? Math.round((KEYWORD_POINTS * present / total) * 2) / 2
+    : 0;
+  const completeness = placeholders.length === 0 ? COMPLETENESS_POINTS : 0;
+  return {
+    keyword,
+    completeness,
+    total: keyword + completeness,
+    scorable: total >= MIN_SCORABLE_TERMS,
+  };
+}
+
+// The one sentence the placeholder gate uses, so the ATS block and the
+// checklist item cannot drift apart.
+export function placeholderGateLine(placeholders) {
+  return `This draft still contains ${plural(placeholders.length, 'placeholder')} that must be replaced before applying: ${placeholders.join(', ')}`;
+}
+
+// Fold the measured blocks into the ATS section and the checklist. Everything
+// downstream — the panel, the plain-text copy, the download, and the Google Doc
+// (buildResumeRequests renders atsText verbatim) — inherits from here.
+export function finalizePackage(pkg) {
+  // Idempotence guard. There is one call site today, but a second one would
+  // double-prepend the gate and re-stack the score and coverage blocks on top
+  // of the ones already there — a silent, plausible-looking corruption rather
+  // than a crash. Cheap to make impossible.
+  if (pkg && pkg._finalized) return pkg;
+
+  const resumeText = pkg?.resume || '';
+  const placeholders = findPlaceholders(resumeText);
+  const coverage = computeKeywordCoverage(resumeText, pkg?.keyTerms);
+  const score = computePackageScore(coverage, placeholders);
+
+  const blocks = [];
+
+  // The gate leads: nothing else in the section matters if the draft cannot be
+  // submitted at all.
+  if (placeholders.length) {
+    blocks.push(`NOT SUBMITTABLE YET\n${placeholderGateLine(placeholders)}`);
+  }
+
+  if (score.scorable) {
+    const lines = [
+      `SCORE: ${fmtScore(score.total)}/10`,
+      `Keyword match: ${fmtScore(score.keyword)}/${KEYWORD_POINTS} (${coverage.present.length} of ${coverage.total} key JD terms present)`,
+      placeholders.length
+        ? `Completeness: 0/${COMPLETENESS_POINTS} — ${plural(placeholders.length, 'placeholder')} still to fill in`
+        : `Completeness: ${COMPLETENESS_POINTS}/${COMPLETENESS_POINTS} — no placeholders left in the draft`,
+    ];
+    if (score.total < KEYWORD_POINTS + COMPLETENESS_POINTS) {
+      lines.push(placeholders.length
+        ? 'Fix the placeholders and add the missing terms below to raise this.'
+        : 'Add the missing terms below to raise this.');
+    }
+    blocks.push(lines.join('\n'));
+
+    blocks.push([
+      'KEYWORD COVERAGE',
+      `${coverage.present.length} of ${coverage.total} key JD terms present in the resume.`,
+      `Present: ${coverage.present.length ? coverage.present.join(', ') : 'none'}`,
+      `Missing: ${coverage.missing.length ? coverage.missing.join(', ') : 'none'}`,
+    ].join('\n'));
+  }
+
+  const body = String(pkg?.atsText || '').trim();
+  const atsText = [...blocks, body].filter(Boolean).join('\n\n');
+
+  const checklist = Array.isArray(pkg?.checklist) ? [...pkg.checklist] : [];
+  if (placeholders.length) checklist.unshift(placeholderGateLine(placeholders));
+
+  return { ...pkg, atsText, checklist, placeholders, keywordCoverage: coverage, score, _finalized: true };
+}
+
+async function callClaude(anthropicApiKey, articleDigest, bulletBank, job, roleTypes, additionalGuidance, memoryBlock = '', cvMd = '') {
+  const roleTypeStr = roleTypes && roleTypes.length ? roleTypes.join(', ') : 'not specified';
+  const { bankBody, suggestionsBlock, provenanceBlock, provenanceRules, bulletSelectionRules, usableBank } =
+    buildBulletSourceBlocks(bulletBank, cvMd);
+
+  // A bank that exists but holds no bullets is treated as no bank: fall through
+  // to cv.md (shipped below as the RESUME OF RECORD) or, failing that, to the
+  // conversation-derived path — either way with the disclosure attached.
+  const useBank = !!bulletBank && usableBank;
+  if (bulletBank && !usableBank) {
+    console.warn('[appPkg] bullet bank body has no bullet lines — treating as no bank; using cv.md/disclosure path');
+  }
+
+  const bulletBankIntro = `\nBULLET BANK: The following file contains the user's resume bullets, tagged with role types and priorities. You MUST use bullets from this file verbatim -- do not rewrite, paraphrase, or combine any bullet.\n\n`;
 
   const guidanceSection = additionalGuidance && additionalGuidance.trim()
     ? `\nADDITIONAL GUIDANCE FROM USER: ${additionalGuidance.trim()}\nApply this guidance to further refine bullet selection and framing beyond the role type tags above.`
@@ -64,7 +410,13 @@ Respond with valid JSON only — no markdown fences.`;
     ? [{ type: 'text', text: memoryBlock.trim(), cache_control: { type: 'ephemeral' } }]
     : [];
 
-  const systemPrompt = bulletBank ? [
+  // With no usable bank there are no bullet-selection rules to hang the
+  // provenance/disclosure text off, so it is appended explicitly here. Without
+  // this, a user with neither a bank nor a cv.md got a fully AI-drafted resume
+  // and no sentence in tailoringNotes saying so.
+  const noBankProvenance = `${provenanceBlock}${provenanceRules}`;
+
+  const systemPrompt = useBank ? [
     ...memoryPrefixBlock,
     {
       type: 'text',
@@ -72,23 +424,25 @@ Respond with valid JSON only — no markdown fences.`;
 ${bulletBankIntro}`,
     },
     {
+      // Only the BODY is cached as the verbatim source — the suggestions section
+      // has been split off above so it can never be mistaken for bank content.
       type: 'text',
-      text: bulletBank,
+      text: bankBody,
       cache_control: { type: 'ephemeral' },
     },
     {
       type: 'text',
-      text: `${bulletSelectionRules}${guidanceSection}${resumeFormatAndClosing}`,
+      text: `${suggestionsBlock}${provenanceBlock}${bulletSelectionRules}${guidanceSection}${resumeFormatAndClosing}`,
     },
   ] : (memoryPrefixBlock.length ? [
     ...memoryPrefixBlock,
     {
       type: 'text',
       text: `You are JobBud, generating a tailored application package for the user.
-${guidanceSection}${resumeFormatAndClosing}`,
+${noBankProvenance}${guidanceSection}${resumeFormatAndClosing}`,
     },
   ] : `You are JobBud, generating a tailored application package for the user.
-${guidanceSection}${resumeFormatAndClosing}`);
+${noBankProvenance}${guidanceSection}${resumeFormatAndClosing}`);
 
   const response = await fetch(ANTHROPIC_API_URL, {
     method: 'POST',
@@ -100,7 +454,10 @@ ${guidanceSection}${resumeFormatAndClosing}`);
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-6',
-      max_tokens: 5500,
+      // atsText grew a SUGGESTED ADDITIONS block and a per-bullet optimization
+      // check, and the response is a single JSON object — a cut-off reply is not
+      // a smaller package, it is a JSON.parse throw surfacing as a generic 500.
+      max_tokens: 7000,
       system: systemPrompt,
       messages: [{
         role: 'user',
@@ -126,12 +483,15 @@ Respond with exactly this JSON:
     "<checklist item>"
   ],
   "tailoringNotes": "<2-3 sentences on what was emphasized, what was cut, which JD keywords were matched, and which role type bullets were prioritized>",
-  "atsText": "<ATS & KEYWORD OPTIMIZATION section as plain text — use exactly the structure below>\n\nATS & KEYWORD OPTIMIZATION\n\nMISSING KEYWORDS\n[keyword or phrase]: [which role section to add it to, and in what context]\n\nSUGGESTED BULLET EDITS\nOriginal: [exact existing bullet text starting with •]\nSuggested: [replacement bullet — same facts, slightly different wording to incorporate a missing keyword]\nWhy: [one sentence explaining the keyword or phrasing benefit]\n\nATS SCORE ESTIMATE\nScore: [X/10]\n[2-3 sentences: why this score, the resume's top ATS strengths, and the most important remaining gaps]\n\nBULLET OPTIMIZATION CHECK\nBullet check: [bullet # or opening words] — [exactly ONE of: interview-proof | differentiating | one-metric | rules-clean] — suggested alternative: [a complete rewritten bullet]\n[one line per selected bullet that strains a gate; omit bullets that pass all four gates cleanly. The 'suggested alternative:' field is MANDATORY and must be a full rewritten sentence, never blank and never a note about the problem. Suggestions only — the resume above still uses Bullet Bank text verbatim]"
+  "atsText": "<ATS & KEYWORD OPTIMIZATION section as plain text — use exactly the structure below>\n\nATS & KEYWORD OPTIMIZATION\n\nMISSING KEYWORDS\n[keyword or phrase]: [which role section to add it to, and in what context]\n\nSUGGESTED ADDITIONS\nThese are AI-drafted from what you described in conversation, not taken from your resume. Treat each as a draft: check it is accurate and edit it into your own words before using it anywhere.\n[Each AI-suggested or non-traceable bullet that is relevant to THIS job description, one per entry, in this shape:]\nSuggested: [the bullet text]\nWhy: [the rationale from the bullet bank, or one sentence on what it proves for this role]\n[If none are relevant, write the single line: None relevant to this role.]\n\nSUGGESTED BULLET EDITS\nOriginal: [exact existing bullet text starting with •]\nSuggested: [replacement bullet — same facts, slightly different wording to incorporate a missing keyword]\nWhy: [one sentence explaining the keyword or phrasing benefit]\n\nFIT READ\n[2-4 sentences on how a recruiter or a semantic matcher would read THIS resume against THIS job description: title alignment, scope and seniority, domain fit, and the most important gaps. Write it in words only. Do NOT include a numeric score, a rating, a letter grade, a percentage, an "X out of Y", or any other number standing in for a judgement of fit. The package computes the only score it shows from measured facts; an invented one would contradict it.]\n\nBULLET OPTIMIZATION CHECK\nBullet check: [bullet # or opening words] — [exactly ONE of: interview-proof | differentiating | one-metric | rules-clean] — suggested alternative: [a complete rewritten bullet]\n[one line per selected bullet that strains a gate; omit bullets that pass all four gates cleanly. The 'suggested alternative:' field is MANDATORY and must be a full rewritten sentence, never blank and never a note about the problem. Suggestions only — the resume above still uses Bullet Bank text verbatim]",
+  "keyTerms": ["<exact phrase from the job description>", "..."]
 }
 
 For applicationQuestions: scan the job description for explicit application questions (e.g., "Why do you want to work here?", "Describe a time when...", etc.). If none found, return an empty array.
 For checklist: include 5-8 items specific to THIS role — things to verify, customize, or prepare before submitting.
-For atsText: list 5-8 missing JD keywords not present in the resume, suggest 2-3 bullet edits maximum where a keyword fits naturally, and provide an ATS score 1-10. Never invent facts, change metrics, or alter company names. Keep bullet meaning identical — only rephrase to absorb a missing keyword.
+For atsText: list 5-8 missing JD keywords not present in the resume and suggest 2-3 bullet edits maximum where a keyword fits naturally. Never invent facts, change metrics, or alter company names. Keep bullet meaning identical — only rephrase to absorb a missing keyword. Do NOT rate, score, or grade the resume anywhere in atsText: the package measures keyword coverage and completeness itself and prints the only score the user sees. A number you invent would sit next to a number that was actually measured, and contradict it.
+For keyTerms: return 10-15 of the job description's most important terms — the skills, tools, domains, and role-defining phrases a reader or a keyword filter would look for. Each entry must be an EXACT phrase as it appears in the job description, lowercase or as written, short enough to match literally (1-4 words; "stakeholder management", "SQL", "demand forecasting"), and NOT a generic filler word ("team", "work", "role"). This list is checked against the resume in code, literally and case-insensitively, so a paraphrase or an expanded acronym will read as missing. Return the array even if the resume already covers every term.
+For the SUGGESTED ADDITIONS block of atsText: this is where every bullet that is BANNED from the resume gets its say — bullets tagged [${AI_SUGGESTED_TAG}], anything from the AI-SUGGESTED ADDITIONS block, and any bank bullet that failed the provenance check. Include only the ones genuinely relevant to this job description, each with its rationale. Do not write new bullets here that are not already in those sources, and do not repeat a bullet that is already in the resume. These are things the user could choose to add to their real resume — never anything this package added on their behalf. Every entry here is a DRAFT, not a fact on file: it was written from what the user said in conversation, not copied from their resume, so it may be imprecise or not fully accurate. Open the block with the exact accuracy line given in the atsText structure above, and never present these as verified.
 For the BULLET OPTIMIZATION CHECK: review each resume bullet you selected from the Bullet Bank against four gates — (1) interview-proof: every claim survives "walk me through that"; (2) differentiating: a generic peer could not truthfully write the same sentence; (3) one-metric: exactly one metric per bullet, and never two different quantities (for example a cost-savings figure and a growth figure) in the same bullet; (4) rules-clean: passes the RESUME FORMAT RULES above. Check each selected bullet against the bullet anatomy — [strong verb] + [specific thing done] + [scope/scale] + [outcome with exactly ONE real number] — and confirm the variant (action-led / outcome-led / scale-led) matches the JD's emphasis; a variant mismatch (e.g. a scale-led bullet on an execution-focused JD) is itself a strain on the 'differentiating' gate and must be flagged. For EVERY bullet that strains any gate, output exactly one line in this format: "Bullet check: [bullet # or opening words] — [gate it strains] — suggested alternative: [text]". Two non-negotiable requirements for each line: (a) the gate token is EXACTLY one of interview-proof / differentiating / one-metric / rules-clean — no other wording; (b) 'suggested alternative:' is a CONCRETE, COMPLETE rewritten bullet — never blank, never a description of the problem — and the rewrite must itself obey every RESUME FORMAT RULE above and any resume rules stated in the user's own profile files: start with a strong action verb (never "responsible for"), contain exactly ONE metric, use no banned or hype vocabulary, no double dashes, and stay interview-provable from the user's real experience. A flagged bullet with a gate name but no rewrite is an incomplete answer. HARD RULE: these are SUGGESTIONS ONLY. The resume body above MUST still use the Bullet Bank text VERBATIM — never apply a suggested alternative to the resume itself. Nothing is rewritten unless the user adds it to the bank themselves.`,
       }],
     }),
@@ -143,8 +503,7 @@ For the BULLET OPTIMIZATION CHECK: review each resume bullet you selected from t
 
   const data = await response.json();
   console.log('[tokenUsage callClaude]', JSON.stringify(data.usage));
-  const text = data.content?.[0]?.text || '';
-  return JSON.parse(text.replace(/```json|```/g, '').trim());
+  return parsePackageResponse(data);
 }
 
 // ── Google Docs helpers ───────────────────────────────────────────────────────
@@ -851,6 +1210,43 @@ Respond with exactly this JSON:
 
 Return one entry per question in the same order as the input list.`,
       }],
+      // STRUCTURED OUTPUTS. Asking for "valid JSON only" was not enough — in
+      // staging this call failed on every run because the model opened with a
+      // sentence of prose ("I will draft these for you.") and JSON.parse threw
+      // on the first character. The schema below makes the API itself guarantee
+      // the first text block is JSON matching this shape, so there is no
+      // preamble to strip.
+      //
+      // Assistant prefill was the old fix for this and is NOT usable here: it
+      // returns HTTP 400 on this model generation. Do not reintroduce it.
+      //
+      // Schema constraints: every object needs additionalProperties:false and
+      // required; length/range constraints (minLength, minimum, ...) are not
+      // supported and will be rejected.
+      output_config: {
+        format: {
+          type: 'json_schema',
+          schema: {
+            type: 'object',
+            properties: {
+              draftResponses: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    question: { type: 'string' },
+                    answer: { type: 'string' },
+                  },
+                  required: ['question', 'answer'],
+                  additionalProperties: false,
+                },
+              },
+            },
+            required: ['draftResponses'],
+            additionalProperties: false,
+          },
+        },
+      },
     }),
   });
 
@@ -861,8 +1257,14 @@ Return one entry per question in the same order as the input list.`,
   const data = await response.json();
   console.log('[tokenUsage callClaudeDraftQA]', JSON.stringify(data.usage));
   const text = data.content?.[0]?.text || '';
-  const parsed = JSON.parse(text.replace(/```json|```/g, '').trim());
-  return Array.isArray(parsed.draftResponses) ? parsed.draftResponses : [];
+  const parsed = parseDraftQAResponse(text);
+  if (parsed === null) {
+    // Log the shape, not just the failure — the previous version reported only
+    // "Unexpected token 'I'", which said nothing about what actually came back.
+    console.warn(`[appPkg] Draft Q&A: could not parse the model reply. First 120 characters: ${text.slice(0, 120)}`);
+    return [];
+  }
+  return parsed;
 }
 
 export async function generateAndSendPackage(job, jobId, options = {}) {
@@ -881,25 +1283,57 @@ export async function generateAndSendPackage(job, jobId, options = {}) {
 
   // Read source files from the repo in parallel, including the three memory files
   // (each soft-read: absent → '' so a new user degrades to pre-memory behavior).
-  const [articleDigest, bulletBankRaw, memProfile, memVoice, memStories] = await Promise.all([
+  // cv.md is read UNCONDITIONALLY, not just as a missing-bank fallback: it is the
+  // user's resume preserved verbatim at onboarding, and it is what the provenance
+  // rule in callClaude checks bullet wording against. Without it, a bank generated
+  // by the old rewriting prompt would keep feeding AI phrasing into resumes.
+  const [articleDigest, bulletBankRaw, cvMdRaw, memProfile, memVoice, memStories] = await Promise.all([
     readFileFromRepo(githubToken, owner, repo, 'article-digest.md').catch(() => ''),
     readFileFromRepo(githubToken, owner, repo, 'bullet-bank.md').catch(() => null),
+    readFileFromRepo(githubToken, owner, repo, 'cv.md').catch(() => ''),
     ...MEMORY_KEYS.map(k => readFileFromRepo(githubToken, owner, repo, MEMORY_PATHS[k]).catch(() => '')),
   ]);
   const memoryBlock = assembleMemoryBlock({ profile: memProfile, voice: memVoice, stories: memStories });
   if (memoryBlock) console.log(`[appPkg] memory loaded (${memoryBlock.length} chars)`);
 
+  const cvMd = cvMdRaw || '';
+  // Same >=50-char threshold buildBulletSourceBlocks uses for hasCv, so the log
+  // never claims the provenance check is on when the check itself disagrees.
+  if (cvMd.trim().length >= 50) {
+    console.log(`[appPkg] cv.md loaded for provenance check (${cvMd.length} chars)`);
+  } else {
+    console.warn('[appPkg] cv.md absent — provenance check disabled; package will disclose AI-drafted wording');
+  }
+
   let bulletBank = bulletBankRaw;
   if (!bulletBank || bulletBank.length < 50) {
     console.log('[appPkg] bullet-bank.md not found or empty — falling back to cv.md');
-    bulletBank = await readFileFromRepo(githubToken, owner, repo, 'cv.md').catch(() => null);
+    bulletBank = cvMd || null;
     if (bulletBank) console.log(`[appPkg] cv.md fallback loaded (${bulletBank.length} chars)`);
   } else {
     console.log(`[appPkg] bullet-bank.md loaded (${bulletBank.length} chars)`);
   }
 
-  // Generate package + ATS analysis in a single Claude call
-  const pkg = await callClaude(anthropicApiKey, articleDigest, bulletBank, job, roleTypes, additionalGuidance, memoryBlock);
+  // Which language the resume is actually built from. The panel prints a
+  // sentence about this, and until now that sentence was hardcoded to "uses your
+  // bullet bank verbatim" — which is a lie in the two fallback modes, printed
+  // directly above a resume that is partly or wholly AI-drafted.
+  //
+  // buildBulletSourceBlocks is pure string work and is the single source of
+  // truth for the usable-bank / has-cv decision, so it is asked here rather than
+  // duplicating the rules. callClaude re-derives the same answer; the cost is
+  // negligible next to the API call it precedes.
+  const hadOwnBank = !!(bulletBankRaw && bulletBankRaw.length >= 50);
+  const { usableBank, hasCv } = buildBulletSourceBlocks(bulletBank, cvMd);
+  const resumeSource = (hadOwnBank && usableBank) ? 'bank' : (hasCv ? 'cv' : 'ai-drafted');
+  console.log(`[appPkg] resumeSource=${resumeSource}`);
+
+  // Generate package + ATS analysis in a single Claude call, then measure it.
+  // finalizePackage computes the score, the keyword coverage and the
+  // placeholder gate from the returned text — the model never supplies a digit.
+  const rawPkg = await callClaude(anthropicApiKey, articleDigest, bulletBank, job, roleTypes, additionalGuidance, memoryBlock, cvMd);
+  const pkg = finalizePackage(rawPkg);
+  console.log(`[appPkg] score=${pkg.score.scorable ? pkg.score.total + '/10' : 'n/a'} keywords=${pkg.keywordCoverage.present.length}/${pkg.keywordCoverage.total} placeholders=${pkg.placeholders.length}`);
 
   // Extract ATS text from the same response (no second API call needed)
   const atsText = pkg.atsText || '';
@@ -912,6 +1346,7 @@ export async function generateAndSendPackage(job, jobId, options = {}) {
   // Generate draft responses for application questions, if any were pasted in.
   // This is a separate Sonnet call — non-fatal if it fails.
   let draftQA = [];
+  let draftQAFailed = false;
   const parsedQuestions = parseApplicationQuestions(rawApplicationQuestions);
   if (parsedQuestions.length > 0) {
     console.log(`[appPkg] Generating draft responses for ${parsedQuestions.length} application question(s)`);
@@ -919,8 +1354,15 @@ export async function generateAndSendPackage(job, jobId, options = {}) {
       draftQA = await callClaudeDraftQA(anthropicApiKey, job, articleDigest, parsedQuestions);
       console.log(`[appPkg] Draft Q&A generated (${draftQA.length} response(s))`);
     } catch (err) {
-      console.warn(`[appPkg] Draft Q&A generation failed — omitting from doc: ${err.message}`);
+      console.warn(`[appPkg] Draft Q&A generation failed: ${err.message}`);
       draftQA = [];
+    }
+    // The user pasted questions and got nothing back. That must reach them —
+    // the old behaviour just dropped the section, so the failure looked exactly
+    // like never having asked.
+    if (draftQA.length === 0) {
+      draftQAFailed = true;
+      console.warn(`[appPkg] Draft Q&A produced no answers for ${parsedQuestions.length} pasted question(s) — surfacing the failure in the package`);
     }
   }
 
@@ -939,5 +1381,13 @@ export async function generateAndSendPackage(job, jobId, options = {}) {
   }
 
   console.log(`[appPkg] Package ready for ${job.company} — ${job.title}`);
-  return { pkg, docUrl };
+  // draftQA rides back with the package. It used to be handed to createGoogleDoc
+  // and nowhere else, so a user without Drive configured paid for answers to the
+  // questions THEY pasted in and never saw them — the same way the ATS analysis
+  // used to be dropped.
+  // pastedQuestions is echoed back so the panel can list the user's own
+  // questions when no answers could be drafted for them. The server already
+  // parsed them out of the raw paste; re-deriving that client-side would be a
+  // second copy of parseApplicationQuestions to keep in step.
+  return { pkg, docUrl, draftQA, draftQAFailed, pastedQuestions: parsedQuestions, resumeSource };
 }

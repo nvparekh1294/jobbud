@@ -29,7 +29,23 @@
     #gate input { width: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; margin-bottom: 12px; outline: none; }
     #gate input:focus { border-color: var(--accent); }
     #gate button { width: 100%; padding: 10px; background: var(--accent); color: white; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; }
-    #gate .error { font-size: 12px; color: var(--red); margin-top: 8px; display: none; }
+    #gate .error { font-size: 12px; color: var(--red); margin-top: 8px; display: none; line-height: 1.5; }
+    #gate .pending { font-size: 12px; color: var(--muted); margin-top: 8px; display: none; }
+
+    /* Setup self-check: banner, panel, and the inline error slots that quote it */
+    #setup-banner { display: none; align-items: center; gap: 12px; background: var(--amber-bg); color: var(--amber); font-size: 13px; padding: 10px 20px; border-bottom: 1px solid var(--border); line-height: 1.5; }
+    #setup-banner.open { display: flex; }
+    #setup-banner .setup-banner-text { flex: 1; }
+    #setup-banner button { background: none; border: 1px solid currentColor; border-radius: 8px; color: inherit; cursor: pointer; font-size: 12px; font-weight: 600; padding: 4px 10px; }
+    #setup-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 300; align-items: center; justify-content: center; }
+    #setup-overlay.open { display: flex; }
+    #setup-modal { background: var(--surface); border-radius: 12px; padding: 28px 32px; width: 620px; max-width: calc(100vw - 32px); max-height: calc(100vh - 40px); overflow-y: auto; box-shadow: 0 8px 40px rgba(0,0,0,0.18); }
+    #setup-modal h3 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin-bottom: 16px; }
+    .setup-check { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; font-size: 13px; line-height: 1.6; }
+    .setup-check.bad { border-color: var(--red); }
+    .setup-check .setup-fix { color: var(--muted); margin-top: 6px; }
+    #setup-note { font-size: 12px; color: var(--muted); line-height: 1.6; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+    #jobs-error { display: none; background: var(--amber-bg); color: var(--amber); font-size: 13px; line-height: 1.6; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; }
 
     /* Layout */
     #app { display: none; }
@@ -43,7 +59,13 @@
     nav button { padding: 7px 13px; border: none; background: transparent; font-family: 'Hanken Grotesk', sans-serif; font-size: 14px; color: #8a9085; cursor: pointer; border-radius: 9px; white-space: nowrap; font-weight: 500; }
     nav button.active { background: #ECE5D6; color: #1E241D; font-weight: 600; }
     nav button:hover:not(.active) { background: #EFEADF; color: #1E241D; }
-    #refresh-btn { display: inline-flex; align-items: center; gap: 6px; background: transparent; color: #5c6358; border: 1px solid #DED7C9; border-radius: 9px; padding: 8px 14px; font-family: 'Hanken Grotesk', sans-serif; font-size: 14px; font-weight: 500; cursor: pointer; white-space: nowrap; }
+    #refresh-btn, #setup-btn { display: inline-flex; align-items: center; gap: 6px; background: transparent; color: #5c6358; border: 1px solid #DED7C9; border-radius: 9px; padding: 8px 14px; font-family: 'Hanken Grotesk', sans-serif; font-size: 14px; font-weight: 500; cursor: pointer; white-space: nowrap; }
+    /* ⚙ is a single glyph, so it gets a squarer box than the labelled Refresh. */
+    #setup-btn { padding: 8px 11px; font-size: 15px; line-height: 1; }
+    #refresh-btn:hover, #setup-btn:hover { background: #EFEADF; color: #1E241D; }
+    /* Log out is a quiet link, not a fourth button competing with the actions. */
+    #logout-btn { background: transparent; border: none; color: var(--muted); font-family: 'Hanken Grotesk', sans-serif; font-size: 13px; padding: 8px 4px; cursor: pointer; white-space: nowrap; }
+    #logout-btn:hover { color: #1E241D; text-decoration: underline; }
 
     main { padding: 34px 30px 80px; max-width: 1180px; margin: 0 auto; }
     /* Pipeline view breaks out of the narrow main container */
@@ -305,6 +327,9 @@
       nav::-webkit-scrollbar { display: none; }
       nav button { white-space: nowrap; flex-shrink: 0; }
       .header-logo-name { display: none; }
+      /* Refresh goes — pull-to-refresh already exists on a phone. ⚙ STAYS: every
+         load-failure message on this dashboard ends with "open the ⚙ setup check
+         in the header", and that instruction has to remain followable on mobile. */
       #refresh-btn { display: none; }
 
       main { padding: 22px 16px 80px; }
@@ -387,14 +412,20 @@
     /* ── Role-type modal ──────────────────────────────────────────────────── */
     #role-modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 200; align-items: center; justify-content: center; }
     #role-modal-overlay.open { display: flex; }
-    #role-modal { background: var(--surface); border-radius: 12px; padding: 28px 32px; width: 520px; max-width: calc(100vw - 32px); box-shadow: 0 8px 40px rgba(0,0,0,0.18); }
+    /* The overlay is fixed and centres with flex, so anything taller than the
+       viewport hangs off both edges with no page scroll to reach it — dragging
+       the job-description box open used to push Generate Package out of sight.
+       Cap the height and scroll inside instead, like every other modal here. */
+    #role-modal { background: var(--surface); border-radius: 12px; padding: 28px 32px; width: 520px; max-width: calc(100vw - 32px); max-height: calc(100vh - 40px); overflow-y: auto; box-shadow: 0 8px 40px rgba(0,0,0,0.18); }
     #role-modal h3 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin-bottom: 4px; }
     #role-modal .modal-job { font-size: 16px; font-weight: 700; color: var(--text); margin-bottom: 20px; }
     #role-modal .modal-label { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 12px; }
+    #role-modal .role-jd-note { font-size: 11.5px; color: var(--muted); font-style: italic; margin: 0 0 16px; line-height: 1.45; }
     .role-option { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 10px; cursor: pointer; }
     .role-option input[type=checkbox] { width: 16px; height: 16px; flex-shrink: 0; margin-top: 2px; accent-color: var(--accent); cursor: pointer; }
     .role-option-text { font-size: 13px; color: var(--text); line-height: 1.4; }
     .role-option-desc { font-size: 11px; color: var(--muted); font-style: italic; margin-top: 3px; }
+    .role-type-source { font-size: 11.5px; color: var(--muted); font-style: italic; margin: 2px 0 4px; line-height: 1.45; }
     #role-modal .guidance-label { font-size: 13px; font-weight: 600; color: var(--text); margin: 16px 0 6px; }
     #role-guidance { width: 100%; height: 80px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; font-family: inherit; color: var(--text); resize: vertical; outline: none; }
     #role-guidance:focus { border-color: #aaa; }
@@ -405,6 +436,10 @@
     .memory-save-btn { white-space: nowrap; flex-shrink: 0; }
     .memory-textarea { width: 100%; min-height: 200px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; line-height: 1.6; font-family: ui-monospace, 'SF Mono', Menlo, monospace; color: var(--text); background: var(--bg); resize: vertical; outline: none; box-sizing: border-box; }
     .memory-textarea:focus { border-color: #aaa; }
+    .memory-searchnote { margin-top: 14px; padding: 14px 16px; background: #FBF9F3; border: 1px solid #E7E0D2; border-radius: 10px; font-family: 'Hanken Grotesk', sans-serif; font-size: 12.5px; color: var(--text); line-height: 1.6; }
+    .memory-searchnote code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 11.5px; background: #EFEADF; padding: 1px 5px; border-radius: 4px; }
+    .memory-searchnote-hint { font-size: 11.5px; color: var(--muted); font-style: italic; }
+    .memory-searchnote-result { margin-top: 12px; padding-top: 10px; border-top: 1px solid #E7E0D2; font-size: 12.5px; line-height: 1.7; white-space: pre-line; }
     #role-modal .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
     #modal-generate { padding: 9px 20px; background: var(--accent); color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
     #modal-generate:disabled { background: var(--border); color: var(--muted); cursor: default; }
@@ -545,11 +580,30 @@
     .btn-scanner { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
     .btn-scanner.on { background: #effdfb; color: #0d9488; border-color: #99f6e4; }
 
-    /* Radar generic modal (Add Company, Company Detail, Radar Research) */
-    #radar-add-overlay, #radar-detail-overlay, #radar-research-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 200; align-items: center; justify-content: center; }
-    #radar-add-overlay.open, #radar-detail-overlay.open, #radar-research-overlay.open { display: flex; }
-    #radar-add-modal, #radar-detail-modal, #radar-research-modal { background: var(--surface); border-radius: 12px; padding: 28px 32px; width: 600px; max-width: calc(100vw - 32px); max-height: calc(100vh - 40px); overflow-y: auto; box-shadow: 0 8px 40px rgba(0,0,0,0.18); }
-    #radar-add-modal h3, #radar-detail-modal h3, #radar-research-modal h3 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin-bottom: 16px; }
+    /* Radar generic modal (Add Company, Company Detail, Radar Research, Watch List) */
+    #radar-add-overlay, #radar-detail-overlay, #radar-research-overlay, #watchlist-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 200; align-items: center; justify-content: center; }
+    #radar-add-overlay.open, #radar-detail-overlay.open, #radar-research-overlay.open, #watchlist-overlay.open { display: flex; }
+    /* The Add/Edit form is the only one of these that can be opened FROM another
+       (Company Detail → Edit). At a shared z-index the winner is DOM order, and
+       #radar-add-overlay comes first — so the edit form opened behind the detail
+       view and looked like a dead button. editCompanyFromDetail() now closes the
+       detail overlay first; this is the belt-and-braces half of that fix. */
+    #radar-add-overlay { z-index: 210; }
+    #radar-add-modal, #radar-detail-modal, #radar-research-modal, #watchlist-modal { background: var(--surface); border-radius: 12px; padding: 28px 32px; width: 600px; max-width: calc(100vw - 32px); max-height: calc(100vh - 40px); overflow-y: auto; box-shadow: 0 8px 40px rgba(0,0,0,0.18); }
+    #radar-add-modal h3, #radar-detail-modal h3, #radar-research-modal h3, #watchlist-modal h3 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin-bottom: 16px; }
+
+    /* Watch List editor */
+    #radar-watchlist-btn { padding: 8px 16px; background: none; color: var(--muted); border: 1px solid var(--border); border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+    #radar-watchlist-btn:hover { color: var(--text); border-color: var(--muted); }
+    .wl-intro { font-size: 13px; color: var(--muted); line-height: 1.6; margin-bottom: 16px; }
+    .wl-banner { font-size: 13px; color: var(--amber); background: var(--amber-bg); border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; line-height: 1.5; }
+    .wl-section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin: 22px 0 10px; }
+    .wl-suggestion { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; background: var(--bg); }
+    .wl-suggestion .wl-sug-name { font-size: 13px; font-weight: 600; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+    .wl-suggestion .wl-sug-url { flex: 1.4; min-width: 0; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; outline: none; font-family: inherit; }
+    .wl-suggestion .wl-sug-url:focus { border-color: var(--accent); }
+    .wl-suggestion button[disabled] { opacity: .45; cursor: not-allowed; }
+    .wl-error { display: none; color: #b3261e; font-size: 13px; margin-top: 10px; line-height: 1.5; }
     .radar-priority-row { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 2px; }
     .radar-priority-row label { display: flex; align-items: center; gap: 7px; font-size: 13px; cursor: pointer; }
     .radar-priority-row input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
@@ -739,13 +793,15 @@
       <a id="modal-job-url" href="#" target="_blank" style="color:var(--accent);text-decoration:underline;">View job posting ↗</a>
     </div>
     <div class="modal-label">Job description <span style="font-weight:400;color:var(--muted)">— edit or paste if missing</span></div>
-    <textarea id="role-jd" rows="6" placeholder="Paste the job description here if it wasn't captured automatically..." style="margin-bottom:16px"></textarea>
+    <textarea id="role-jd" rows="6" placeholder="Paste the job description here if it wasn't captured automatically..." style="margin-bottom:6px"></textarea>
+    <div class="role-jd-note">Descriptions pulled from job boards are often cut off partway through. Pasting the full posting here gives you a better package.</div>
     <div class="modal-label">Which role types best describe this position? Select all that apply.</div>
-    <label class="role-option"><input type="checkbox" value="ops"><span class="role-option-text">Business Operations / Chief of Staff / COO</span></label>
-    <label class="role-option"><input type="checkbox" value="corpdev"><span class="role-option-text">Corporate Development / M&amp;A</span></label>
-    <label class="role-option"><input type="checkbox" value="stratfin"><span class="role-option-text">Strategic Finance / FP&amp;A</span></label>
-    <label class="role-option"><input type="checkbox" value="investing"><span class="role-option-text">Venture / Growth Equity / Investing</span></label>
-    <label class="role-option"><input type="checkbox" value="ceo-office"><span class="role-option-text">CEO's Office / Special Projects</span></label>
+    <!-- Populated at runtime from the tag legend in the user's own bullet-bank.md
+         (GET /api/jobs?resource=role-tags). It used to be a hardcoded list of the
+         original author's five categories, which meant every other user filtered
+         their bullets against tags their bank had never heard of. -->
+    <div id="role-type-options"></div>
+    <div id="role-type-source" class="role-type-source"></div>
     <div class="guidance-label">Additional guidance for Claude (optional)</div>
     <textarea id="role-guidance" placeholder="e.g. emphasize portfolio operating support; lead with operations bullet; highlight key deal or project experience"></textarea>
     <div class="guidance-label" style="margin-top:16px">Additional application questions <span style="font-weight:400;color:var(--muted)">(optional)</span></div>
@@ -1062,14 +1118,72 @@
   </div>
 </div>
 
+<!-- Radar: Watch List editor modal -->
+<div id="watchlist-overlay">
+  <div id="watchlist-modal">
+    <h3>Watch List</h3>
+    <div class="wl-intro">
+      These are the companies JobBud checks for new roles on every scan. Paste each company's careers page — the link to their jobs list. Saving replaces your whole watch list with what's below.
+    </div>
+    <div class="wl-banner" id="wl-starter-banner" style="display:none">
+      You're still on the built-in example list, so your scans are finding roles at companies you didn't pick. Add your own below and save.
+    </div>
+
+    <div class="loading" id="wl-loading">Loading your watch list...</div>
+
+    <div id="wl-body" style="display:none">
+      <div id="wl-rows"></div>
+      <button type="button" class="coach-back-link" style="background:none;border:none;color:var(--accent);cursor:pointer;font-size:13px;padding:4px 0" onclick="watchListAddRow()">+ Add another company</button>
+
+      <!-- Radar bridge: companies already on the Radar that aren't being scanned -->
+      <div id="wl-suggestions-wrap" style="display:none">
+        <div class="wl-section-label">On your radar — add to watch list?</div>
+        <div id="wl-suggestions"></div>
+      </div>
+
+      <div class="wl-error" id="wl-error"></div>
+
+      <div class="modal-actions" style="display:flex;gap:10px;justify-content:flex-end;margin-top:22px">
+        <button class="aj-btn-secondary" onclick="closeWatchList()">Cancel</button>
+        <button class="aj-btn-primary" id="wl-save-btn" onclick="saveWatchList()">Save Watch List</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Password Gate -->
 <div id="gate" style="display:none">
   <div class="box">
     <h2>JobBud</h2>
     <p>Enter your dashboard password to continue.</p>
-    <input type="password" id="pw-input" placeholder="Password" autocomplete="current-password">
-    <button id="pw-btn">Unlock</button>
+    <!-- A real form with a real submit button, because that is what Chrome and
+         Safari look for before they offer to save the password. A password-only
+         form is a shape both recognise, so there is no username field to fake. -->
+    <!-- onsubmit="return false" is belt and braces: if the submit listener ever
+         fails to attach, the form must still not navigate away and lose what was
+         typed. The listener's own preventDefault runs normally when it is there. -->
+    <form id="pw-form" autocomplete="on" onsubmit="return false">
+      <input type="password" id="pw-input" name="password" placeholder="Password" autocomplete="current-password">
+      <button type="submit" id="pw-btn">Unlock</button>
+    </form>
+    <div class="pending" id="pw-pending">Checking…</div>
+    <div class="error" id="pw-error"></div>
     <p style="font-size:11px;color:var(--muted);margin-top:16px;margin-bottom:0;line-height:1.5">Forgot your password? Check your <code style="font-size:11px">DASHBOARD_PASSWORD</code> environment variable in Vercel.</p>
+  </div>
+</div>
+
+<!-- Setup check panel. Opened from the "Setup needs attention" banner or the ⚙
+     button in the header; lists every check /api/health reported as failing,
+     each with the plain-English reason and the exact fix. -->
+<div id="setup-overlay">
+  <div id="setup-modal">
+    <h3>Setup Check</h3>
+    <div id="setup-results"></div>
+    <div id="setup-note"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:22px">
+      <button class="aj-btn-secondary" onclick="closeSetupPanel()">Close</button>
+      <button class="aj-btn-primary" id="setup-rerun-btn" onclick="rerunSetupCheck()">Run setup check</button>
+    </div>
   </div>
 </div>
 
@@ -1093,12 +1207,25 @@
       </nav>
     </div>
     <div class="header-right">
+      <button id="setup-btn" title="Run a setup check" onclick="openSetupPanel()">⚙</button>
       <button id="refresh-btn">↻ Refresh</button>
       <button id="add-job-btn" onclick="openAddJobModal()"><span class="add-job-label">+ Add Job</span><span class="add-job-short" style="display:none">+</span></button>
+      <button id="logout-btn" title="Forget the saved password on this browser" onclick="logOut()">Log out</button>
     </div>
   </header>
 
+  <!-- Raised when the last setup check found failing checks. Dismissible; the ⚙
+       button in the header re-opens the panel either way. -->
+  <div id="setup-banner">
+    <span class="setup-banner-text" id="setup-banner-text"></span>
+    <button type="button" onclick="openSetupPanel()">See what's wrong</button>
+    <button type="button" id="setup-banner-dismiss" onclick="dismissSetupBanner()">Dismiss</button>
+  </div>
+
   <main>
+    <!-- Job-data load failures land here, quoting the setup check rather than
+         failing silently in the console the way they used to. -->
+    <div id="jobs-error"></div>
     <!-- Action Required -->
     <div class="view" id="view-action">
       <div class="loading" id="action-loading">Loading jobs...</div>
@@ -1241,6 +1368,7 @@
       </div>
       <div class="radar-toolbar">
         <button id="radar-add-btn" onclick="openAddCompanyModal()">+ Add Company</button>
+        <button id="radar-watchlist-btn" onclick="openWatchList()">⚙ Edit Watch List</button>
       </div>
       <div class="loading" id="radar-loading">Loading companies...</div>
       <div class="card-grid" id="radar-grid"></div>
@@ -1563,7 +1691,7 @@
         <!-- Step: input -->
         <div id="onboarding-step-input">
           <div id="onboarding-checking-note" style="display:none;font-size:13px;color:var(--muted);margin-bottom:16px">Checking your profile…</div>
-          <div id="onboarding-found-note" style="display:none;font-size:13px;color:var(--muted);margin-bottom:16px">We found your existing profile — we'll just ask what's changed. Upload or paste an updated resume, or skip straight to the questions. All five files get updated together.</div>
+          <div id="onboarding-found-note" style="display:none;font-size:13px;color:var(--muted);margin-bottom:16px">We found your existing profile — we'll just ask what's changed. Upload or paste an updated resume, or skip straight to the questions. Your profile files get updated together.</div>
           <div id="onboarding-refresh-note" style="display:none;font-size:13px;color:var(--muted);margin-bottom:16px">Updating your profile? Upload your existing files and answer a few questions about what's changed for the best results.</div>
           <div style="font-size:13px;color:var(--muted);margin-bottom:16px" id="onboarding-input-default-note">How would you like to provide your background?</div>
           <div class="onboarding-cards">
@@ -1571,8 +1699,8 @@
             <div class="onboarding-option-card" id="onboarding-card-existing" style="display:none">
               <h3>Upload existing profile files</h3>
               <p>Upload your CLAUDE.md, cv.md, bullet-bank.md, and/or article-digest.md. The AI will update them based on what's changed.</p>
-              <input type="file" id="onboarding-existing-file-input" accept=".md" multiple style="display:none" onchange="onboardingLoadExistingFiles(event)">
-              <button class="draft-discard-btn" style="width:100%;margin-bottom:10px" onclick="document.getElementById('onboarding-existing-file-input').click()">Browse .md files</button>
+              <input type="file" id="onboarding-existing-file-input" accept=".md,.yml" multiple style="display:none" onchange="onboardingLoadExistingFiles(event)">
+              <button class="draft-discard-btn" style="width:100%;margin-bottom:10px" onclick="document.getElementById('onboarding-existing-file-input').click()">Browse files</button>
               <div id="onboarding-existing-status" style="font-size:12px;color:var(--muted);min-height:18px"></div>
               <button class="coach-new-btn" id="onboarding-existing-continue-btn" style="width:100%;margin-top:10px;display:none" onclick="onboardingContinueFromExisting()">Continue →</button>
             </div>
@@ -1618,7 +1746,7 @@
             </div>
           </div>
           <div id="onboarding-gen-wrap" style="display:none;margin-top:16px">
-            <button class="onboarding-gen-btn" id="onboarding-gen-btn" onclick="onboardingGenerateProfile()">Generate Profile</button>
+            <button class="onboarding-gen-btn" id="onboarding-gen-btn" onclick="onboardingEnterCompanies()">Generate Profile</button>
           </div>
         </div>
 
@@ -1656,6 +1784,37 @@
             </div>
             <div style="font-size:12px;color:var(--muted);margin-top:12px;margin-bottom:12px;line-height:1.5">⚠️ This takes 1–3 minutes to update all five files. Please don't close this tab or navigate to another section of the dashboard while it's running — doing so may interrupt the update.</div>
             <button class="draft-save-btn" onclick="onboardingStartGenerateFromNotes()">Update My Profile</button>
+          </div>
+        </div>
+
+        <!-- Step: companies (build a personalized scanner/portals.yml) -->
+        <div id="onboarding-step-companies" style="display:none">
+          <div style="max-width:560px">
+            <div style="font-size:15px;font-weight:700;margin-bottom:6px">Which companies do you want JobBud to watch?</div>
+            <div style="font-size:13px;color:var(--muted);margin-bottom:18px;line-height:1.6">
+              Paste each careers page URL — the link to their jobs page. JobBud checks these companies for new roles on every scan. You can change this list any time from the Radar tab → <strong>Edit Watch List</strong>. <span id="onboarding-companies-skip-note">Skip this to keep the built-in example list for now.</span>
+            </div>
+
+            <!-- Phase 1: enter company rows -->
+            <div id="onboarding-companies-edit">
+              <div id="onboarding-companies-rows"></div>
+              <button type="button" class="coach-back-link" style="background:none;border:none;color:var(--accent);cursor:pointer;font-size:13px;padding:4px 0" onclick="onboardingAddCompanyRow()">+ Add another company</button>
+              <div id="onboarding-companies-error" style="display:none;color:#b3261e;font-size:13px;margin-top:10px"></div>
+              <div style="margin-top:20px;display:flex;gap:10px;flex-wrap:wrap">
+                <button class="draft-save-btn" id="onboarding-companies-continue-btn" onclick="onboardingCompaniesContinue()">Continue →</button>
+                <button class="draft-discard-btn" id="onboarding-companies-skip-btn" onclick="onboardingCompaniesSkip()">Skip — keep the example list (you can set your companies anytime from Radar → Edit Watch List)</button>
+              </div>
+            </div>
+
+            <!-- Phase 2: review detected ATS per company -->
+            <div id="onboarding-companies-review" style="display:none">
+              <div style="font-size:13px;color:var(--muted);margin-bottom:12px;line-height:1.6">Here's what JobBud recognised. "Fully supported" companies are scanned via their official job API. "Custom" pages are scraped best-effort — they work better with a Firecrawl key set.</div>
+              <div id="onboarding-companies-detected"></div>
+              <div style="margin-top:20px;display:flex;gap:10px;flex-wrap:wrap">
+                <button class="draft-save-btn" onclick="onboardingCompaniesProceed()">Looks good — build my files →</button>
+                <button class="draft-discard-btn" onclick="onboardingCompaniesEdit()">← Edit companies</button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1723,14 +1882,18 @@
             <button class="onboarding-dl-btn" id="onboarding-dl-bulletbank" onclick="onboardingDownload('bullet-bank.md', 'bulletBankMd')">⬇ Download bullet-bank.md</button>
             <button class="onboarding-dl-btn" id="onboarding-dl-digest" onclick="onboardingDownload('article-digest.md', 'articleDigestMd')">⬇ Download article-digest.md</button>
             <button class="onboarding-dl-btn" id="onboarding-dl-profile" onclick="onboardingDownload('config/profile.yml', 'profileYml')">⬇ Download config/profile.yml</button>
+            <button class="onboarding-dl-btn" id="onboarding-dl-portals" style="display:none" onclick="onboardingDownload('scanner/portals.yml', 'portalsYml')">⬇ Download scanner/portals.yml</button>
+            <div class="onboarding-instruction-box" id="onboarding-portals-instruction" style="display:none;margin-bottom:14px">
+              <strong>scanner/portals.yml</strong> is your personalized company watch-list. Add it to the <strong>scanner/</strong> folder, replacing the example list that ships with the repo. Commit it so your next scan checks your companies.
+            </div>
             <div class="onboarding-instruction-box">
-              Download all five files. Add CLAUDE.md, cv.md, bullet-bank.md, and article-digest.md to the root of your JobBud repo. Add config/profile.yml to the config/ folder. Commit all five — your scanner and application generator will use them automatically.<br><br>
-              <strong>Updating an existing profile? Commit all five.</strong> Your applications are written from <strong>bullet-bank.md</strong>, not cv.md — committing cv.md on its own leaves every future application running on your old resume.<br><br>
+              Download the files above. Add CLAUDE.md, cv.md, bullet-bank.md, and article-digest.md to the root of your JobBud repo. Add config/profile.yml to the config/ folder. Commit them — your scanner and application generator will use them automatically.<br><br>
+              <strong>Updating an existing profile? Commit all of them.</strong> Your applications are written from <strong>bullet-bank.md</strong>, not cv.md — committing cv.md on its own leaves every future application running on your old resume.<br><br>
               <strong>Setting up for the first time?</strong> CLAUDE.md, cv.md, and bullet-bank.md are the three the scanner and application generator read on every job. article-digest.md and config/profile.yml sharpen the output — add them when you can.<br><br>
               <strong>article-digest.md</strong> is a starter file — enrich it over time by adding role context, proof points, and tailoring guidance specific to your background.
             </div>
             <div class="onboarding-instruction-box" style="margin-top:14px">
-              <strong>Prefer not to download?</strong> Save all five straight to your repo. This commits them for you — but only if your repo is <strong>private</strong>. A public repo is refused, since these files contain your real background.
+              <strong>Prefer not to download?</strong> Save them straight to your repo. This commits them for you — but only if your repo is <strong>private</strong>. A public repo is refused, since these files contain your real background.
             </div>
             <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">
               <button class="draft-save-btn" id="onboarding-save-repo-btn" onclick="onboardingSaveToRepo()">Save to my repo</button>
@@ -1774,6 +1937,17 @@
             <button class="coach-new-btn memory-save-btn" data-file="profile" onclick="saveMemoryFile('profile')">Save</button>
           </div>
           <textarea class="memory-textarea" id="memory-text-profile" placeholder="No profile facts yet — JobBud fills this in after onboarding and as you chat."></textarea>
+          <!-- The search-profile bridge. Editing memory changes how JobBud WRITES
+               about you; the titles it SEARCHES for live in config/profile.yml, and
+               nothing used to carry a memory edit across to it. -->
+          <div class="memory-searchnote">
+            <div><strong>What JobBud searches for lives somewhere else.</strong> The job titles, locations, and salary floor used to find jobs are in your search profile (<code>config/profile.yml</code>). Editing your memory above changes how JobBud writes about you — it does not change what it goes looking for.</div>
+            <div style="margin-top:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+              <button class="coach-new-btn" id="apply-profile-btn" onclick="applyMemoryToProfile()">Apply to search profile</button>
+              <span class="memory-searchnote-hint">Rebuilds your search profile from the profile memory above. Anything it doesn't mention is left as-is.</span>
+            </div>
+            <div id="apply-profile-result" class="memory-searchnote-result" style="display:none"></div>
+          </div>
         </div>
         <div class="memory-block">
           <div class="memory-block-head">
@@ -1886,6 +2060,13 @@
   let onboardingSaved = false;       // onboardingResult was committed to the repo
   let onboardingDownloaded = {};     // onboardingResult key -> true once downloaded
   let onboardingAbandoned = false;   // user explicitly chose to leave unsaved/in-flight work behind
+  // The watch-list already in play is the user's own, not the shipped starter
+  // list — so "Skip" on the companies step preserves THEIR companies, and the
+  // copy has to say that instead of offering to keep an example list.
+  let onboardingHasCustomPortals = false;
+  // Coach tab — personalized portals.yml (company watch-list) built in the
+  // 'companies' step. Null when the user skips it (starter list left untouched).
+  let onboardingPortalsYml = null;
   // Coach tab — mock interview state
   let mockQuestions = [];
   let mockCurrentIndex = 0;
@@ -1946,56 +2127,411 @@
     }
   })();
 
+  // ── Setup self-check ─────────────────────────────────────────────────────
+  //
+  // /api/health is the single place that knows why something is broken. The
+  // dashboard's job is to never invent its own guess: every failure message the
+  // user sees below is a sentence the health endpoint produced.
+  //
+  // The endpoint answers 200 even for a wrong password, with a failed `auth`
+  // check — that is what lets the gate VERIFY a password and say what went wrong
+  // instead of silently storing a stale one and 401-ing forever afterwards.
+
+  let _health = null;          // last /api/health payload, or null if never run
+  let _setupBannerDismissed = false;
+  // True while the ⚙ panel has a check running. The button label alone was not
+  // enough feedback — the user watches the RESULTS area, which sat unchanged for
+  // the several seconds of GitHub round-trips, and a re-run that found the same
+  // things redrew identical text, so the honest question was "does the button do
+  // anything?". The panel now says out loud that it is working, and stamps the
+  // time each run finished so an unchanged result still visibly changed.
+  let _healthRunning = false;
+  let _healthRanAt = null;
+
+  // Callers that can overlap share one request. unlock() fires loadData() and
+  // loadRadar() together, so a broken setup has both failing at once and both
+  // calling healthSentence — two identical health runs, each making its own
+  // sequential GitHub round-trips, to print the same sentence twice. Only an
+  // identical password may share: a different one is a different question.
+  // The handle clears on settle, so a later run (the ⚙ Run setup check button)
+  // always gets a fresh answer.
+  let _healthInFlight = null;   // { pw, promise } while a run is open
+  async function fetchHealth(pw) {
+    if (_healthInFlight && _healthInFlight.pw === pw) return _healthInFlight.promise;
+    const promise = (async () => {
+      const res = await fetch('/api/health?t=' + Date.now(), {
+        headers: { 'X-Dashboard-Password': pw },
+      });
+      const data = await res.json();
+      if (!data || !Array.isArray(data.checks)) throw new Error('unreadable setup-check response');
+      return data;
+    })();
+    _healthInFlight = { pw, promise };
+    try {
+      return await promise;
+    } finally {
+      if (_healthInFlight && _healthInFlight.promise === promise) _healthInFlight = null;
+    }
+  }
+
+  function healthCheck(name) {
+    if (!_health) return null;
+    return _health.checks.find(c => c.check === name) || null;
+  }
+
+  function healthFailures() {
+    if (!_health) return [];
+    // `informational` entries are facts, not problems — they must never count
+    // toward the banner or appear as something to fix.
+    return _health.checks.filter(c => !c.ok && !c.informational);
+  }
+
+  // The one sentence most likely to explain why a given area came back broken or
+  // empty. Ordered most-specific-first: a radar read that failed says so; failing
+  // that, the repo it could not reach; failing that, the token; then the env var.
+  const HEALTH_PRIORITY = {
+    radar:     ['data:data/radar.json', 'github:repo', 'github:token', 'env:GH_TOKEN', 'env:GH_REPO', 'auth'],
+    jobs:      ['data:data/job-status.json', 'github:repo', 'github:token', 'env:GH_TOKEN', 'env:GH_REPO', 'auth'],
+    watchlist: ['github:repo', 'github:token', 'env:GH_TOKEN', 'env:GH_REPO', 'auth'],
+  };
+
+  // Returns the health sentence for `area`, or '' when nothing this area depends
+  // on is broken (or the check could not be run at all) and the caller should
+  // fall back to its generic "open the ⚙ setup check" line.
+  // Triggers a health run if we have not done one yet, so an error path always
+  // has something real to say.
+  //
+  // ONLY checks listed for this area may answer. There used to be a fallback to
+  // the first failure of any kind, and it lied: ANTHROPIC_API_KEY is Coach-only,
+  // so an unset key turned "your companies could not be loaded" into a confident
+  // accusation against a variable that has nothing to do with Radar. A wrong
+  // cause is worse than a generic one — the user goes and fixes the wrong thing.
+  async function healthSentence(area) {
+    if (!_health) {
+      try { _health = await fetchHealth(storedPassword() || ''); }
+      catch (_) { return ''; }
+      renderSetupState();
+    }
+    for (const name of (HEALTH_PRIORITY[area] || [])) {
+      const c = healthCheck(name);
+      if (c && !c.ok) return c.fix ? `${c.message} ${c.fix}` : c.message;
+    }
+    return '';
+  }
+
+  function renderSetupState() {
+    const banner = document.getElementById('setup-banner');
+    const failures = healthFailures();
+    if (banner) {
+      if (failures.length && !_setupBannerDismissed) {
+        document.getElementById('setup-banner-text').textContent =
+          `Setup needs attention (${failures.length})`;
+        banner.classList.add('open');
+      } else {
+        banner.classList.remove('open');
+      }
+    }
+    renderSetupPanel();
+  }
+
+  function renderSetupPanel() {
+    const wrap = document.getElementById('setup-results');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+
+    if (_healthRunning) {
+      const p = document.createElement('div');
+      p.className = 'setup-check';
+      p.textContent = 'Running the setup check… this takes a few seconds.';
+      wrap.appendChild(p);
+      const noteWhileRunning = document.getElementById('setup-note');
+      if (noteWhileRunning) noteWhileRunning.textContent = '';
+      return;
+    }
+
+    if (!_health) {
+      const p = document.createElement('div');
+      p.className = 'setup-check';
+      p.textContent = 'No setup check has run yet. Press "Run setup check" below.';
+      wrap.appendChild(p);
+    } else {
+      const failures = healthFailures();
+      if (!failures.length) {
+        const p = document.createElement('div');
+        p.className = 'setup-check';
+        p.textContent = 'Everything checks out — nothing here needs your attention.';
+        wrap.appendChild(p);
+      }
+      // Failures first and in full; then the informational notes, which are
+      // things worth knowing rather than things to fix.
+      for (const c of failures.concat(_health.checks.filter(c => c.informational))) {
+        const row = document.createElement('div');
+        row.className = c.ok ? 'setup-check' : 'setup-check bad';
+        const msg = document.createElement('div');
+        msg.textContent = c.message;   // textContent — the message is data, never markup
+        row.appendChild(msg);
+        if (c.fix) {
+          const fix = document.createElement('div');
+          fix.className = 'setup-fix';
+          fix.textContent = c.fix;
+          row.appendChild(fix);
+        }
+        wrap.appendChild(row);
+      }
+    }
+
+    const noteEl = document.getElementById('setup-note');
+    if (noteEl) {
+      const note = (_health && _health.note) || '';
+      const stamp = _healthRanAt ? `Last checked at ${_healthRanAt}.` : '';
+      noteEl.textContent = [stamp, note].filter(Boolean).join(' ');
+    }
+  }
+
+  function openSetupPanel() {
+    renderSetupPanel();
+    document.getElementById('setup-overlay').classList.add('open');
+    if (!_health) rerunSetupCheck();
+  }
+  function closeSetupPanel() { document.getElementById('setup-overlay').classList.remove('open'); }
+  function dismissSetupBanner() {
+    _setupBannerDismissed = true;
+    document.getElementById('setup-banner').classList.remove('open');
+  }
+
+  async function rerunSetupCheck() {
+    if (_healthRunning) return;   // a second click must not start a second run
+    const btn = document.getElementById('setup-rerun-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+    _healthRunning = true;
+    renderSetupPanel();           // say "running" where the user is looking
+    try {
+      _health = await fetchHealth(storedPassword() || '');
+      _setupBannerDismissed = false;
+    } catch (err) {
+      _health = {
+        ok: false,
+        checks: [{
+          check: 'self', ok: false, informational: false,
+          message: 'Could not reach the setup check itself, so nothing could be verified.',
+          fix: 'Check your internet connection and try again. If the dashboard is loading but this keeps failing, the deployment may be mid-redeploy.',
+        }],
+        note: '',
+      };
+    } finally {
+      _healthRunning = false;
+      _healthRanAt = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      if (btn) { btn.disabled = false; btn.textContent = 'Run setup check'; }
+      renderSetupState();
+    }
+  }
+
   // ── Password gate ────────────────────────────────────────────────────────
+  //
+  // WHERE THE PASSWORD LIVES. It used to be sessionStorage, which meant the
+  // password was gone the moment the browser closed — every single morning
+  // started with retyping it — and, worse, a password JobBud held privately in
+  // JS was never offered to the browser's own password manager, so there was
+  // nothing to retype it FROM. It is now localStorage, and the gate is a real
+  // <form> with a password input, submitted normally, which is the shape Chrome
+  // and Safari recognise as a sign-in and respond to with "save this password?".
+  //
+  // Persisting it is only safe because of the verified-gate rule below: a stored
+  // password is re-checked against /api/health on every load and is thrown away
+  // the moment it stops matching. Nothing here relaxes that.
+  const PW_KEY = 'co_pw';
+
+  // Reads the saved password, migrating a session-era one across on first sight
+  // so an open tab does not get logged out by this change.
+  function storedPassword() {
+    const saved = localStorage.getItem(PW_KEY);
+    if (saved !== null) return saved;
+    const legacy = sessionStorage.getItem(PW_KEY);
+    if (legacy !== null) {
+      localStorage.setItem(PW_KEY, legacy);
+      sessionStorage.removeItem(PW_KEY);
+    }
+    return legacy;
+  }
+
+  function rememberPassword(pw) { localStorage.setItem(PW_KEY, pw); }
+
+  // Clears both vaults: the session-era copy may still exist on a browser that
+  // has not been through storedPassword() yet.
+  function forgetPassword() {
+    localStorage.removeItem(PW_KEY);
+    sessionStorage.removeItem(PW_KEY);
+  }
+
   function unlock(pw) {
-    sessionStorage.setItem('co_pw', pw);
+    rememberPassword(pw);
     document.getElementById('gate').style.display = 'none';
     document.getElementById('app').style.display = 'block';
+    renderSetupState();
     loadData();
     loadRadar();
   }
 
-  // Ask the API whether a password is required before showing the gate.
-  // If DASHBOARD_PASSWORD is unset, skip straight to the dashboard.
+  // The header's "Log out" link. Drops the saved password and returns to the
+  // gate — the same gate the user would see on a fresh browser, so the next
+  // unlock goes through verification exactly as it always does.
+  function logOut() {
+    forgetPassword();
+    _health = null;
+    document.getElementById('app').style.display = 'none';
+    showGate('');
+    const input = document.getElementById('pw-input');
+    if (input) { input.value = ''; input.focus(); }
+  }
+
+  function showGate(message) {
+    document.getElementById('gate').style.display = 'flex';
+    const err = document.getElementById('pw-error');
+    if (message) { err.textContent = message; err.style.display = 'block'; }
+    else { err.textContent = ''; err.style.display = 'none'; }
+  }
+
+  function gatePending(on) {
+    const el = document.getElementById('pw-pending');
+    if (el) el.style.display = on ? 'block' : 'none';
+    const btn = document.getElementById('pw-btn');
+    if (btn) btn.disabled = !!on;
+  }
+
+  // The same invisible-character trap that bit the GitHub token, one layer up.
+  // A password pasted out of a password manager or an email can carry a
+  // non-breaking space, a smart quote, a bullet or a stray newline. We put it in
+  // the X-Dashboard-Password header, and fetch() refuses to build a header value
+  // out of anything outside Latin-1 — it throws a TypeError ("Cannot convert
+  // argument to a ByteString...") synchronously, before any request leaves the
+  // machine. The catch below used to call that "Could not reach the server",
+  // blaming the network for a paste. api/health.js has findInvalidTokenChar for
+  // exactly this, but this file is one inline script with no imports, so the
+  // check is duplicated here deliberately. Header values may only carry visible
+  // ASCII, 0x21 to 0x7E.
+  const BAD_CHAR_MESSAGE =
+    'Your password contains an invisible or special character (often from copy-pasting) — try typing it by hand.';
+  function passwordHasInvalidChar(pw) {
+    const s = String(pw == null ? '' : pw);
+    for (let i = 0; i < s.length; i++) {
+      const code = s.charCodeAt(i);
+      if (code < 0x21 || code > 0x7e) return true;
+    }
+    return false;
+  }
+  // Backstop for anything that slips past the scan above: a ByteString
+  // conversion failure is a TypeError thrown by fetch itself, never a network
+  // error, so it must not be reported as one.
+  function isHeaderCharError(err) {
+    return !!err && (err.name === 'TypeError' || err instanceof TypeError) &&
+      /ByteString|Latin-1|header/i.test(String(err.message || ''));
+  }
+
+  // Verify a password against /api/health before unlocking anything.
+  //
+  // This is the fix for the stale-password failure: the old gate stored whatever
+  // was typed and unlocked immediately, so a wrong or since-changed password
+  // produced a fully-rendered dashboard where every request 401'd with no
+  // message anywhere. Now a password that does not match never gets stored, and
+  // the reason is on screen.
+  async function verifyAndUnlock(pw, staleMessage) {
+    gatePending(true);
+    let health;
+    try {
+      health = await fetchHealth(pw);
+    } catch (err) {
+      gatePending(false);
+      forgetPassword();
+      showGate(isHeaderCharError(err)
+        ? BAD_CHAR_MESSAGE
+        : 'Could not reach the server to check your password. Check your connection and try again.');
+      return false;
+    }
+    gatePending(false);
+
+    const auth = health.checks.find(c => c.check === 'auth');
+    if (auth && !auth.ok) {
+      // A stored password that no longer matches is a different situation from a
+      // fresh typo, and saying so saves the user from retyping the same thing.
+      forgetPassword();
+      showGate(staleMessage || (auth.fix ? `${auth.message} ${auth.fix}` : auth.message));
+      return false;
+    }
+
+    _health = health;
+    unlock(pw);
+    return true;
+  }
+
   let driveConfigured = false;
 
   (async () => {
+    // Put the gate on screen BEFORE any network call. #gate and #app both start
+    // hidden, so every await between here and unlock() is a blank white page —
+    // and the stored-password path awaits the config probe plus /api/health,
+    // which itself makes up to four sequential GitHub round-trips. That was
+    // seconds of nothing on every single load. The gate is where "Checking…"
+    // belongs, so show it first and let the pending state account for the wait.
+    const storedPw = storedPassword();
+    showGate('');
+    // No stored password means nothing to verify: the gate is the final answer
+    // and must stay instant and interactive, so no pending state on that path.
+    if (storedPw !== null) gatePending(true);
+
     try {
       const res = await fetch('/api/jobs?config=true');
       const cfg = await res.json();
       driveConfigured = !!cfg.driveConfigured;
-      if (!cfg.passwordRequired) { unlock(''); return; }
-    } catch (_) { /* network error — fall through to gate */ }
+    } catch (_) { /* network error — the health check below reports it properly */ }
 
-    // Password is required (or config fetch failed) — check sessionStorage first.
-    const storedPw = sessionStorage.getItem('co_pw');
-    if (storedPw) { unlock(storedPw); return; }
-
-    // Show the gate.
-    document.getElementById('gate').style.display = 'flex';
+    // Note: an unset DASHBOARD_PASSWORD no longer skips straight in. It used to,
+    // and the result was a dashboard that rendered fully and then 401'd every
+    // single request, because api/jobs.js fails closed. /api/health names that
+    // exact misconfiguration, so we let it, and show the sentence at the gate.
+    if (storedPw !== null) {
+      await verifyAndUnlock(
+        storedPw,
+        'Your saved password no longer matches — enter the current one.',
+      );
+      return;
+    }
+    gatePending(false);
   })();
 
-  document.getElementById('pw-btn').addEventListener('click', () => {
+  // Submit, not click: the browser only offers to save a password when it sees a
+  // form actually submitted. preventDefault stops the navigation, and Enter in
+  // the field comes through here for free, so there is no keydown handler left
+  // to keep in step with the button.
+  document.getElementById('pw-form').addEventListener('submit', e => {
+    e.preventDefault();
     const pw = document.getElementById('pw-input').value;
-    if (pw) unlock(pw);
-  });
-  document.getElementById('pw-input').addEventListener('keydown', e => {
-    if (e.key === 'Enter') document.getElementById('pw-btn').click();
+    if (!pw) return;
+    if (passwordHasInvalidChar(pw)) { showGate(BAD_CHAR_MESSAGE); return; }
+    verifyAndUnlock(pw);
   });
 
   // ── Data loading ─────────────────────────────────────────────────────────
   async function loadData() {
+    const errEl = document.getElementById('jobs-error');
     try {
-      const pw = sessionStorage.getItem('co_pw') || '';
+      const pw = storedPassword() || '';
       const res = await fetch(JOBS_API + '?t=' + Date.now(), {
         headers: { 'X-Dashboard-Password': pw },
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       jobs = data.jobs || {};
+      if (errEl) { errEl.textContent = ''; errEl.style.display = 'none'; }
       render();
     } catch (err) {
       console.error('Failed to load job-status.json:', err);
+      // Say WHY, using the setup check's own words, instead of leaving an empty
+      // pipeline and a console message no non-technical user will ever open.
+      const sentence = await healthSentence('jobs');
+      const text = sentence || 'Your jobs could not be loaded. Open the ⚙ setup check in the header to find out why.';
+      if (errEl) { errEl.textContent = text; errEl.style.display = 'block'; }
+      const loadingEl = document.getElementById('action-loading');
+      if (loadingEl) { loadingEl.style.display = 'block'; loadingEl.textContent = text; }
     }
   }
 
@@ -2388,7 +2924,7 @@
     if (btn) { btn.disabled = true; btn.textContent = 'Queuing…'; }
     setResearchStatus('Writing job file to the repo…');
     try {
-      const pw  = sessionStorage.getItem('co_pw') || '';
+      const pw  = storedPassword() || '';
       const res = await fetch('/api/queue-linkedin-research', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
@@ -2536,7 +3072,7 @@
 
   // ── Inline actions (no page navigation) ──────────────────────────────────
   async function _doInlineAction(id, status) {
-    const pw  = sessionStorage.getItem('co_pw') || '';
+    const pw  = storedPassword() || '';
     const url = `${VERCEL_URL}/api/action?jobId=${encodeURIComponent(id)}&status=${status}`;
     const res = await fetch(url, {
       headers: { 'X-Dashboard-Password': pw },
@@ -2605,7 +3141,7 @@
     document.getElementById('check-all').checked = false;
     updateBulkBar();
 
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     let success = 0, fail = 0;
 
     for (const id of ids) {
@@ -2732,14 +3268,118 @@
   function buildPackageHtml(content) {
     const esc = s => (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-    const questionsHtml = (content.applicationQuestions || []).length
+    // ── Typeset resume ────────────────────────────────────────────────────────
+    // Without Google Drive the resume used to be dumped into a monospace <pre>,
+    // so the only users who ever saw a real resume document were the ones with
+    // Drive configured. These two functions give the panel — and the downloaded
+    // .html, and its print-to-PDF — the same structure the Doc gets.
+    //
+    // SIBLING: scanner/applicationPackage.mjs, classifyResumeLine() and
+    // buildResumeRequests(). classifyResumeLineForPanel below is a port of
+    // classifyResumeLine's RESUME branch and must be kept in step with it — if a
+    // rule changes there, change it here too. The ATS and application-question
+    // branches of the original are deliberately absent: this renderer is only
+    // ever handed content.resume, and the panel gives those blocks their own
+    // sections. Pure string work either way — nothing is fetched.
+    //
+    // One deliberate divergence: the Doc path rewrites ' -- ' to '; ' before
+    // classifying. The panel does not, because it must stay a faithful
+    // rendering of the exact text Copy Resume puts on the clipboard.
+    function classifyResumeLineForPanel(trimmed, nonBlankCount, currentSection) {
+      if (trimmed.startsWith('⚠ WARNING:')) return 'warning';
+      if (nonBlankCount === 1) return 'name';
+      if (nonBlankCount === 2) return 'contact';
+      // Checked before the bullet and all-caps tests, exactly as in the sibling,
+      // so it never renders as a section header.
+      if (trimmed.replace(/^•\s*/, '').replace(/:\s*$/, '').trim().toLowerCase() === 'select investment experience') {
+        return 'investment_label';
+      }
+      if (trimmed.startsWith('•')) return /^•\s*\$/.test(trimmed) ? 'deal_header' : 'bullet';
+      if (trimmed.startsWith('$')) return 'deal_header';
+      if (/^(Interests|Global Experience|Languages|Community|Angel):/.test(trimmed)) return 'personal_line';
+      const isAllCaps = trimmed === trimmed.toUpperCase() && /[A-Z]{3,}/.test(trimmed) && !trimmed.includes('@');
+      if (isAllCaps) return 'section_header';
+      if (currentSection === 'EDUCATION' || currentSection === 'PERSONAL') return 'body';
+      if (trimmed.includes('|')) {
+        const hasDate = /\b(20\d{2}|19\d{2}|January|February|March|April|May|June|July|August|September|October|November|December|Present)\b/.test(trimmed);
+        return hasDate ? 'location_date' : 'role_title';
+      }
+      return 'body';
+    }
+
+    // Every non-blank line is emitted, in order; 'body' is the classifier's
+    // default, so an unrecognized line becomes a plain paragraph rather than
+    // being dropped. Blank lines carry no text — they only close a bullet list.
+    function renderResume(text) {
+      const lines = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+      const out = [];
+      let nonBlank = 0, section = null, inList = false;
+      const closeList = () => { if (inList) { out.push('</ul>'); inList = false; } };
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) { closeList(); continue; }
+        nonBlank++;
+        const type = classifyResumeLineForPanel(trimmed, nonBlank, section);
+        if (type === 'section_header') section = trimmed;
+
+        if (type === 'bullet' || type === 'deal_header') {
+          if (!inList) { out.push('<ul class="r-bullets">'); inList = true; }
+          // The • glyph becomes the list marker, which CSS draws back in — the
+          // verbatim text with its glyph still goes to the clipboard via RESUME.
+          out.push(`<li${type === 'deal_header' ? ' class="r-deal"' : ''}>${esc(trimmed.replace(/^•\s*/, ''))}</li>`);
+          continue;
+        }
+
+        closeList();
+        const body = esc(type === 'investment_label' ? trimmed.replace(/^•\s*/, '') : trimmed);
+        if (type === 'name')                  out.push(`<h1 class="r-name">${body}</h1>`);
+        else if (type === 'contact')          out.push(`<p class="r-contact">${body}</p>`);
+        else if (type === 'section_header')   out.push(`<h3 class="r-section">${body}</h3>`);
+        else if (type === 'role_title')       out.push(`<p class="r-role">${body}</p>`);
+        else if (type === 'location_date')    out.push(`<p class="r-meta">${body}</p>`);
+        else if (type === 'investment_label') out.push(`<p class="r-invest">${body}</p>`);
+        else if (type === 'personal_line')    out.push(`<p class="r-personal">${body}</p>`);
+        else if (type === 'warning')          out.push(`<p class="r-warning">${body}</p>`);
+        else                                  out.push(`<p class="r-body">${body}</p>`);
+      }
+      closeList();
+      return out.join('\n');
+    }
+
+    const resumeHtml = renderResume(content.resume || '');
+
+    // Two independent streams of questions, and they must stay distinguishable:
+    // draftQA answers the questions the USER pasted into the modal, while
+    // applicationQuestions are the ones the model found in the job description.
+    // draftQA goes first — the user asked for those by name.
+    //
+    // When drafting failed outright, the user's own questions are still listed
+    // with a retry note in place of each answer. Silently dropping the section
+    // made a failed run look exactly like never having pasted anything —
+    // which is how a run that failed every single time went unnoticed.
+    const QA_RETRY_NOTE = "A draft answer couldn't be generated this run — hit Generate Package again to retry.";
+    const formItems = (content.draftQA || []).length
+      ? content.draftQA
+      : (content.draftQAFailed
+          ? (content.pastedQuestions || []).map(q => ({ question: q, answer: QA_RETRY_NOTE, failed: true }))
+          : []);
+
+    const qaGroups = [
+      { label: 'From your application form', items: formItems },
+      { label: 'Found in the job description', items: content.applicationQuestions || [] },
+    ].filter(g => g.items.length);
+
+    const questionsHtml = qaGroups.length
       ? `<section>
           <h2>📝 Application Questions</h2>
-          ${content.applicationQuestions.map(qa => `
+          ${qaGroups.map(g => `
+            <h3 class="qa-group">${esc(g.label)}</h3>
+            ${g.items.map(qa => `
             <div class="qa">
               <div class="q">${esc(qa.question)}</div>
-              <div class="a">${esc(qa.answer || '').replace(/\n/g, '<br>')}</div>
-            </div>`).join('')}
+              <div class="a${qa.failed ? ' a-failed' : ''}">${esc(qa.answer || '').replace(/\n/g, '<br>')}</div>
+            </div>`).join('')}`).join('')}
         </section>`
       : '';
 
@@ -2757,6 +3397,45 @@
         </section>`
       : '';
 
+    // ATS analysis — score, missing keywords, suggested bullet edits, suggested
+    // additions, bullet-optimization check. This was previously generated on every
+    // package and then thrown away unless Google Drive happened to be configured.
+    // Amber styling echoes the shaded advisory block in the Google Doc.
+    // The old note said "the resume above uses your bullet bank verbatim" no
+    // matter what actually happened. On a package generated with no bank and no
+    // cv.md that sentence sat directly above an entirely AI-written resume.
+    // resumeSource comes from the generator, which knows which mode ran.
+    const RESUME_SOURCE_NOTES = {
+      'bank': 'Suggestions only — the resume above uses your bullet bank verbatim. Nothing here has been applied.',
+      'cv': "Suggestions only — the resume above uses your resume's own wording. Nothing here has been applied.",
+      'ai-drafted': 'No resume on file — this draft is AI-written; treat every line as a suggestion to verify. Nothing here has been applied.',
+    };
+    // An unrecognized value must not be allowed to pick a sentence that might be
+    // false, so it gets the one claim that is true in every mode.
+    const resumeSourceNote = RESUME_SOURCE_NOTES[content.resumeSource]
+      || 'Suggestions only — nothing here has been applied to the resume above.';
+
+    const atsHtml = content.atsText
+      ? `<section class="ats">
+          <h2>🔍 ATS &amp; Keyword Analysis</h2>
+          <p class="ats-note">${esc(resumeSourceNote)}</p>
+          <p class="ats-note">Suggested Additions below are AI-drafted from your conversation, not from your resume — they may not be 100% accurate. Review and edit each one for accuracy before using it anywhere.</p>
+          <pre id="ats">${esc(content.atsText)}</pre>
+        </section>`
+      : '';
+
+    // When a Google Doc was created it stays the nicely formatted resume artifact,
+    // but the panel no longer redirects to it — the full package is shown here too.
+    // Allowlisted to the Docs origin — nothing else is ever rendered as a link.
+    const safeDocUrl = /^https:\/\/docs\.google\.com\/[\w/-]*$/.test(content.docUrl || '')
+      ? content.docUrl : '';
+    const docHtml = safeDocUrl
+      ? `<section class="docnote">
+          <h2>📎 Google Doc</h2>
+          <p class="notes">A formatted copy was saved to your Drive: <a href="${esc(safeDocUrl)}" target="_blank" rel="noopener">open the Google Doc ↗</a></p>
+        </section>`
+      : '';
+
     // Build plain-text version for clipboard (used by Copy Full Package)
     const plainParts = [
       content.title || 'Application Package',
@@ -2767,10 +3446,13 @@
       content.resume || '',
       '',
     ];
-    if ((content.applicationQuestions || []).length) {
+    if (qaGroups.length) {
       plainParts.push('APPLICATION QUESTIONS', '-'.repeat(40));
-      content.applicationQuestions.forEach(qa => {
-        plainParts.push(`Q: ${qa.question}`, `A: ${qa.answer || ''}`, '');
+      qaGroups.forEach(g => {
+        plainParts.push(`[${g.label}]`, '');
+        g.items.forEach(qa => {
+          plainParts.push(`Q: ${qa.question}`, `A: ${qa.answer || ''}`, '');
+        });
       });
     }
     if ((content.checklist || []).length) {
@@ -2779,13 +3461,34 @@
       plainParts.push('');
     }
     if (content.tailoringNotes) {
-      plainParts.push('TAILORING NOTES', '-'.repeat(40), content.tailoringNotes);
+      plainParts.push('TAILORING NOTES', '-'.repeat(40), content.tailoringNotes, '');
+    }
+    if (content.atsText) {
+      plainParts.push('ATS & KEYWORD ANALYSIS (suggestions only — not applied to the resume)',
+        '-'.repeat(40), resumeSourceNote,
+        'Suggested Additions below are AI-drafted from your conversation, not from your resume — they may not be 100% accurate. Review and edit each one for accuracy before using it anywhere.',
+        '', content.atsText);
     }
     const plainText = plainParts.join('\n');
 
+    // Filename for the downloaded .html — ASCII-safe, no path separators.
+    const fileName = (content.title || 'application-package')
+      .replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-').slice(0, 80).toLowerCase() || 'application-package';
+
     // Safely embed JS string literals — escape any script-closing tags in AI
-    // content so they can't break the generated page's script block.
-    const safeJson = obj => JSON.stringify(obj).replace(/<\/script>/gi, '<\\/script>');
+    // content so they can't break the generated page's script block. An HTML
+    // comment opener is escaped too: it flips the HTML parser into
+    // script-double-escaped state, where a later closing script tag inside the
+    // string stops terminating the block as expected.
+    //
+    // Both the comment above and the pattern below deliberately avoid writing
+    // that four-character opener literally — this file is itself served inside a
+    // <script> block, and a literal one here would spring the exact trap it is
+    // meant to defuse (see test/dashboardScriptBlock.test.mjs). \x2D is '-', so
+    // the regex still matches the opener; only its source text differs.
+    const safeJson = obj => JSON.stringify(obj)
+      .replace(/<\/script>/gi, '<\\/script>')
+      .replace(/<!\x2D\x2D/g, '<\\!--');
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -2806,13 +3509,60 @@
     section{background:#fff;border:1px solid #e5e5e5;border-radius:10px;padding:24px 28px}
     h2{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:16px}
     pre{font-family:'Courier New',Courier,monospace;font-size:12.5px;line-height:1.75;white-space:pre-wrap;word-wrap:break-word;color:#1a1a1a}
+    /* Typeset resume — mirrors the Google Doc layout built by buildResumeRequests. */
+    .r-doc{color:#1a1a1a}
+    .r-name{font-size:22px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;line-height:1.2;margin:0 0 5px}
+    .r-contact{font-size:12px;color:#666;margin:0 0 18px}
+    .r-section{font-size:11.5px;font-weight:700;text-transform:uppercase;letter-spacing:1.2px;color:#111;margin:20px 0 8px;padding-bottom:4px;border-bottom:1px solid #e5e5e5}
+    .r-role{font-size:13.5px;font-weight:700;margin:12px 0 1px}
+    .r-meta{font-size:12px;color:#777;margin:0 0 6px}
+    .r-invest{font-size:13px;font-style:italic;margin:10px 0 4px}
+    .r-personal,.r-body{font-size:13px;line-height:1.6;margin:0 0 4px}
+    .r-warning{font-size:12.5px;color:#9a3412;background:#fff7ed;border-left:3px solid #fdba74;padding:8px 12px;margin:0 0 12px;border-radius:0 6px 6px 0}
+    ul.r-bullets{margin:0 0 6px;padding-left:18px;list-style:disc}
+    ul.r-bullets li{font-size:13px;color:#222;line-height:1.55;padding:2px 0}
+    ul.r-bullets li.r-deal{margin-left:14px;list-style:circle}
+    .qa-group{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#999;margin:0 0 10px}
+    .qa-group:not(:first-of-type){margin-top:20px;padding-top:16px;border-top:1px solid #eee}
     .qa{margin-bottom:16px}.qa:last-child{margin-bottom:0}
     .q{font-size:13px;font-weight:600;margin-bottom:6px}
     .a{font-size:13px;color:#444;line-height:1.6;background:#f9f9f9;border-left:3px solid #e5e5e5;padding:10px 14px;border-radius:0 6px 6px 0;white-space:pre-wrap}
+    .a-failed{background:#fff7ed;border-left-color:#fdba74;color:#9a3412;font-style:italic}
     ul{padding-left:20px}li{font-size:13px;color:#444;padding:3px 0;line-height:1.5}
     .notes{font-size:13px;color:#555;line-height:1.6;font-style:italic}
+    .notes a{color:#1a56db}
+    section.ats{background:#fffbe8;border-color:#e8d9a0}
+    section.ats pre{font-size:12px;color:#3d3210}
+    .ats-note{font-size:12px;color:#7a6a2a;font-style:italic;margin-bottom:12px}
     .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#111;color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none}
     .toast.show{opacity:1}
+    .btn-dl{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
+    /* Print → PDF: drop the chrome, let sections flow, keep the shading legible. */
+    @media print{
+      body{background:#fff}
+      .topbar,.toast{display:none !important}
+      .wrap{max-width:none;margin:0;padding:0;gap:0}
+      section{border:none;border-radius:0;padding:0 0 18px;break-inside:avoid;page-break-inside:avoid}
+      section.ats{background:#fff}
+      h2{color:#333;margin-top:14px}
+      pre,.a,li,.notes{color:#000}
+      a{color:#000;text-decoration:underline}
+      /* The resume prints as an actual resume document: its own page, serif
+         face, no card chrome, no section label. Everything after it keeps the
+         treatment above. Rules come last so they win over the generic ones. */
+      @page{margin:0.5in}
+      section.resume{padding:0;break-after:page;page-break-after:always}
+      section.resume h2{display:none}
+      .r-doc{font-family:Georgia,'Times New Roman',serif;color:#000}
+      .r-name{font-size:19pt;letter-spacing:.4pt;margin:0 0 4pt}
+      .r-contact{font-size:9pt;color:#222;margin:0 0 14pt}
+      .r-section{font-size:10pt;color:#000;border-bottom:1px solid #000;margin:14pt 0 6pt}
+      .r-role{font-size:10.5pt;margin:10pt 0 1pt}
+      .r-meta{font-size:9pt;color:#222;margin:0 0 4pt}
+      .r-invest{font-size:10pt}
+      .r-body,.r-personal{font-size:10pt;color:#000}
+      ul.r-bullets li{font-size:10pt;color:#000;padding:1pt 0}
+    }
   </style>
 </head>
 <body>
@@ -2820,20 +3570,24 @@
     <div class="topbar-title">${esc(content.title || 'Application Package')}</div>
     <button class="btn btn-resume" onclick="copyResume()">Copy Resume</button>
     <button class="btn btn-all" onclick="copyAll()">Copy Full Package</button>
+    <button class="btn btn-dl" onclick="downloadPackage()">Download</button>
   </div>
   <div class="wrap">
-    <section>
+    ${docHtml}
+    <section class="resume">
       <h2>📄 Tailored Resume</h2>
-      <pre id="resume">${esc(content.resume || '')}</pre>
+      <div id="resume" class="r-doc">${resumeHtml}</div>
     </section>
     ${questionsHtml}
     ${checklistHtml}
     ${notesHtml}
+    ${atsHtml}
   </div>
   <div class="toast" id="toast"></div>
   <script>
-    var RESUME = ${safeJson(content.resume || '')};
-    var FULL   = ${safeJson(plainText)};
+    var RESUME   = ${safeJson(content.resume || '')};
+    var FULL     = ${safeJson(plainText)};
+    var FILENAME = ${safeJson(fileName)};
     function toast(msg){var t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(function(){t.classList.remove('show')},2200)}
     function copyText(txt){
       if(navigator.clipboard&&navigator.clipboard.writeText){
@@ -2843,6 +3597,32 @@
     function fallback(txt){var ta=document.createElement('textarea');ta.value=txt;document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);toast('Copied!')}
     function copyResume(){copyText(RESUME)}
     function copyAll(){copyText(FULL)}
+    // Save the whole package as ONE self-contained .html file. The page is already
+    // standalone — inline styles, no external resources — so the download is a
+    // clone of this document with the toolbar and scripts stripped out. Print CSS
+    // rides along, so browser print → PDF gives a clean document. No libraries,
+    // nothing fetched at open time; the file works offline forever.
+    function downloadPackage(){
+      var clone = document.documentElement.cloneNode(true);
+      var strip = clone.querySelectorAll('script,.topbar,.toast');
+      for (var i=0;i<strip.length;i++) strip[i].parentNode.removeChild(strip[i]);
+      // Doubled backslash, deliberately. Everything in this script is inside
+      // buildPackageHtml's template literal, so a single backslash is consumed
+      // when the template is evaluated and a REAL newline is emitted into the
+      // generated page — splitting the string literal below across two lines and
+      // throwing SyntaxError before any function on this page is defined. The
+      // doubled backslash emits the two-character escape the generated page
+      // needs. No comment in this region may contain a backslash escape either,
+      // for the same reason. Guarded by test/packageHtmlScript.test.mjs.
+      var html = '<!DOCTYPE html>\\n' + clone.outerHTML;
+      var blob = new Blob([html], {type:'text/html;charset=utf-8'});
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url; a.download = FILENAME + '.html';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(function(){URL.revokeObjectURL(url)}, 1000);
+      toast('Downloaded — open it in any browser, or print it to PDF.');
+    }
   <\/script>
 </body>
 </html>`;
@@ -2850,6 +3630,69 @@
 
   // ── Role-type modal state ─────────────────────────────────────────────────
   let _modalJobId = null, _modalTitle = null, _modalCompany = null, _modalJobUrl = '', _modalJobDescription = '';
+
+  // Role-type options come from the tag legend in the user's own bullet-bank.md.
+  // Cached for the session: the bank only changes at onboarding/refresh, and a
+  // fetch per modal open would add latency to every Prepare to Apply click.
+  let _roleTagsLoaded = false;
+
+  // Same generic set the API falls back to. Duplicated here only so the modal can
+  // render instantly on a failed fetch — the server copy in lib/bulletBank.mjs is
+  // the source of truth.
+  const FALLBACK_ROLE_TAGS = [
+    { value: 'operations', label: 'Operations / Program Management' },
+    { value: 'strategy',   label: 'Strategy / Business Development' },
+    { value: 'finance',    label: 'Finance / Analytics' },
+    { value: 'product',    label: 'Product / Project Management' },
+    { value: 'leadership', label: 'Leadership / People Management' },
+  ];
+
+  // Build the checkboxes. Every string goes in via textContent / setAttribute —
+  // labels originate in an AI-generated file, so they are never interpolated
+  // into markup.
+  function renderRoleTypeOptions(tags, source) {
+    const box = document.getElementById('role-type-options');
+    const note = document.getElementById('role-type-source');
+    if (!box) return;
+    box.textContent = '';
+    (tags || []).forEach(tag => {
+      const label = document.createElement('label');
+      label.className = 'role-option';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.value = tag.value;
+      const span = document.createElement('span');
+      span.className = 'role-option-text';
+      span.textContent = tag.label || tag.value;
+      label.appendChild(cb);
+      label.appendChild(span);
+      box.appendChild(label);
+    });
+    if (note) {
+      note.textContent = source === 'bullet-bank'
+        ? 'These are the role types from your bullet bank.'
+        : 'Generic role types for now — these become your own tags from your bullet bank once onboarding creates it.';
+    }
+  }
+
+  async function loadRoleTypeOptions() {
+    if (_roleTagsLoaded) return;
+    try {
+      const pw = storedPassword() || '';
+      const res = await fetch(`${VERCEL_URL}/api/jobs?resource=role-tags`, {
+        headers: { 'X-Dashboard-Password': pw },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const tags = Array.isArray(data.tags) && data.tags.length ? data.tags : FALLBACK_ROLE_TAGS;
+      renderRoleTypeOptions(tags, Array.isArray(data.tags) && data.tags.length ? data.source : 'fallback');
+      _roleTagsLoaded = true;
+    } catch (err) {
+      console.error('loadRoleTypeOptions error:', err);
+      renderRoleTypeOptions(FALLBACK_ROLE_TAGS, 'fallback');
+      // Not marked loaded — retry on the next modal open in case it was transient.
+    }
+  }
 
   function prepareInline(id, title, company, url) {
     _modalJobId          = id;
@@ -2868,6 +3711,7 @@
       urlRow.style.display = 'none';
     }
     document.getElementById('role-jd').value = _modalJobDescription;
+    loadRoleTypeOptions();
     document.querySelectorAll('#role-modal input[type=checkbox]').forEach(cb => cb.checked = false);
     document.getElementById('role-guidance').value = '';
     document.getElementById('role-app-questions').value = '';
@@ -2879,13 +3723,14 @@
     document.getElementById('role-modal-overlay').classList.remove('open');
   }
 
-  // Keep Generate button in sync with checkbox state
+  // Keep Generate button in sync with checkbox state. Delegated to the modal
+  // rather than bound per checkbox: the options are now rendered at runtime from
+  // the user's bullet bank, so there is nothing to bind to at DOMContentLoaded.
   document.addEventListener('DOMContentLoaded', () => {
-    document.querySelectorAll('#role-modal input[type=checkbox]').forEach(cb => {
-      cb.addEventListener('change', () => {
-        const any = [...document.querySelectorAll('#role-modal input[type=checkbox]')].some(c => c.checked);
-        document.getElementById('modal-generate').disabled = !any;
-      });
+    document.getElementById('role-modal').addEventListener('change', e => {
+      if (!e.target.matches('input[type=checkbox]')) return;
+      const any = [...document.querySelectorAll('#role-modal input[type=checkbox]')].some(c => c.checked);
+      document.getElementById('modal-generate').disabled = !any;
     });
     // Close on overlay click (but not on modal itself)
     document.getElementById('role-modal-overlay').addEventListener('click', e => {
@@ -2926,7 +3771,7 @@
       pkgWin.document.close();
     }
 
-    const pw  = sessionStorage.getItem('co_pw') || '';
+    const pw  = storedPassword() || '';
     const url = `${VERCEL_URL}/api/action?jobId=${encodeURIComponent(id)}&status=preparing`;
 
     try {
@@ -2948,19 +3793,23 @@
       _removeJobFromView(id);
       renderPipeline();
 
-      if (data.docUrl && pkgWin) {
+      // The panel is now shown in EVERY case, Drive or no Drive. It used to
+      // redirect straight to the Google Doc whenever one existed, which meant the
+      // only way to see the package was through Drive — and the ATS analysis was
+      // invisible to everyone else. The Doc is still created and still the nicely
+      // formatted resume artifact; the panel links to it and shows everything.
+      if (pkgWin && data.content) {
+        pkgWin.document.open();
+        pkgWin.document.write(buildPackageHtml({ ...data.content, docUrl: data.docUrl || '' }));
+        pkgWin.document.close();
+        showToast(data.docUrl ? `📋 Package ready — Google Doc linked inside.` : `📋 Package ready!`, 4000);
+      } else if (data.docUrl && pkgWin) {
+        // No inline content came back but the Doc exists — send them there.
         pkgWin.location.href = data.docUrl;
         showToast(`📋 Package ready! Opening Google Doc...`);
       } else {
-        if (pkgWin && data.content) {
-          pkgWin.document.open();
-          pkgWin.document.write(buildPackageHtml(data.content));
-          pkgWin.document.close();
-          showToast(`📋 Package ready!`, 4000);
-        } else {
-          if (pkgWin) pkgWin.close();
-          showToast(`📋 Package generated but could not display. Try again.`, 6000);
-        }
+        if (pkgWin) pkgWin.close();
+        showToast(`📋 Package generated but could not display. Try again.`, 6000);
       }
     } catch (err) {
       if (pkgWin) pkgWin.close();
@@ -3599,7 +4448,7 @@
     const btn = document.getElementById('ro-save-btn');
     btn.disabled = true; btn.textContent = 'Saving…';
     try {
-      const pw = sessionStorage.getItem('co_pw') || '';
+      const pw = storedPassword() || '';
       const res = await fetch(`${VERCEL_URL}/api/action?jobId=${encodeURIComponent(_reachedOutId)}&status=reached_out_logged`, {
         method: 'POST',
         headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
@@ -3684,7 +4533,7 @@
     showToast('⏳ Drafting outreach message...', 0);
 
     try {
-      const pw  = sessionStorage.getItem('co_pw') || '';
+      const pw  = storedPassword() || '';
       const res = await fetch(`${VERCEL_URL}/api/outreach`, {
         method: 'POST',
         headers: {
@@ -3809,7 +4658,7 @@
     statusEl.className = 'aj-status';
 
     try {
-      const pw  = sessionStorage.getItem('co_pw') || '';
+      const pw  = storedPassword() || '';
       const res = await fetch('/api/add-job', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
@@ -3866,7 +4715,7 @@
     ajSetState('scoring');
 
     try {
-      const pw  = sessionStorage.getItem('co_pw') || '';
+      const pw  = storedPassword() || '';
       const res = await fetch('/api/add-job', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
@@ -3946,7 +4795,7 @@
 
   async function loadRadar() {
     try {
-      const pw = sessionStorage.getItem('co_pw') || '';
+      const pw = storedPassword() || '';
       const res = await fetch('/api/radar?t=' + Date.now(), { headers: { 'X-Dashboard-Password': pw } });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const data = await res.json();
@@ -3954,15 +4803,23 @@
       renderRadar();
     } catch (err) {
       console.error('Failed to load radar.json:', err);
+      // The old one-liner here told the user nothing they could act on — and the
+      // wrong-repo case never even reached it, since GitHub's 404 made the read
+      // succeed empty. Quote the setup check; the generic line is a last resort.
+      const sentence = await healthSentence('radar');
       const loadingEl = document.getElementById('radar-loading');
-      if (loadingEl) { loadingEl.style.display = 'block'; loadingEl.textContent = 'Failed to load companies.'; }
+      if (loadingEl) {
+        loadingEl.style.display = 'block';
+        loadingEl.textContent = sentence
+          || 'Your companies could not be loaded. Open the ⚙ setup check in the header to find out why.';
+      }
     }
   }
 
   // Thin wrapper over /api/radar. On success it folds the returned company back
   // into local state so callers can re-render without a full reload.
   async function radarApi(action, body) {
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     const res = await fetch('/api/radar?action=' + action, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
@@ -4077,7 +4934,7 @@
     status.className = 'aj-status';
     status.innerHTML = '<span class="aj-spin" style="display:inline-block;animation:aj-spin 1s linear infinite">⟳</span> Fetching company details…';
     try {
-      const pw  = sessionStorage.getItem('co_pw') || '';
+      const pw  = storedPassword() || '';
       const res = await fetch('/api/radar-fetch-company', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
@@ -4229,6 +5086,11 @@
     const status = document.getElementById('rc-fetch-status'); status.textContent = ''; status.className = 'aj-status';
     document.querySelector('#radar-add-modal h3').textContent = 'Edit Company';
     document.getElementById('rc-save-btn').textContent = 'Save Company';
+    // Close the detail view before opening the edit form. Two stacked modals is
+    // not what "Edit" means to anyone, and it is what made this button look
+    // broken: both overlays shared z-index 200, so the detail view — later in
+    // the DOM — painted over the edit form that had just opened.
+    closeCompanyDetail();
     document.getElementById('radar-add-overlay').classList.add('open');
   }
 
@@ -4356,7 +5218,7 @@
     btn.disabled = true; btn.textContent = 'Queuing…';
     statusEl.textContent = 'Writing company file to the repo…';
     try {
-      const pw  = sessionStorage.getItem('co_pw') || '';
+      const pw  = storedPassword() || '';
       const res = await fetch('/api/queue-radar-research', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
@@ -4387,7 +5249,7 @@
   }
 
   // Close radar overlays on backdrop click (elements already exist by now).
-  ['radar-add-overlay', 'radar-detail-overlay', 'radar-research-overlay'].forEach(oid => {
+  ['radar-add-overlay', 'radar-detail-overlay', 'radar-research-overlay', 'watchlist-overlay', 'setup-overlay'].forEach(oid => {
     const ov = document.getElementById(oid);
     if (ov) ov.addEventListener('click', e => { if (e.target === ov) ov.classList.remove('open'); });
   });
@@ -4423,7 +5285,7 @@
   // Fetch the three memory files once and cache them for the session. Failure
   // degrades gracefully (memoryContext stays '') so the coach still works.
   async function loadMemory() {
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     try {
       const res = await fetch('/api/memory?action=get-memory', { headers: { 'X-Dashboard-Password': pw } });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -4442,7 +5304,7 @@
   // server, and must never block a chat or onboarding response. Takes effect on the
   // next conversation (memoryContext above is not mutated here).
   function fireMemoryUpdate(eventType, payload) {
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     fetch('/api/memory?action=update-memory', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
@@ -4475,7 +5337,7 @@
   }
 
   async function saveMemoryFile(file) {
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     const ta = document.getElementById('memory-text-' + file);
     if (!ta) return;
     const btn = document.querySelector(`.memory-save-btn[data-file="${file}"]`);
@@ -4490,11 +5352,53 @@
       if (!res.ok) { showToast('Save failed: ' + (data.error || res.status), 5000); return; }
       memoryFiles[file] = ta.value;
       memoryContext = assembleMemoryBlockClient(memoryFiles);
-      showToast('Memory saved. Applies to your next conversation.');
+      // Saving profile memory is the moment a user expects their search to change.
+      // It doesn't, on its own — say so here rather than letting them find out by
+      // getting the same jobs for another week.
+      if (file === 'profile') {
+        showToast('Memory saved. To change what JobBud searches for, use "Apply to search profile" below.', 7000);
+        const result = document.getElementById('apply-profile-result');
+        if (result) { result.style.display = 'none'; result.textContent = ''; }
+      } else {
+        showToast('Memory saved. Applies to your next conversation.');
+      }
     } catch (err) {
       showToast('Network error: ' + err.message, 4000);
     } finally {
       if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+    }
+  }
+
+  // Rebuild config/profile.yml — the file whose target_roles drive both job
+  // scoring and the search queries themselves — from the saved profile memory,
+  // then say in plain English what actually changed about the search.
+  async function applyMemoryToProfile() {
+    const btn = document.getElementById('apply-profile-btn');
+    const result = document.getElementById('apply-profile-result');
+    if (btn) { btn.disabled = true; btn.textContent = 'Applying…'; }
+    if (result) { result.style.display = ''; result.textContent = 'Rebuilding your search profile…'; }
+    try {
+      const pw = storedPassword() || '';
+      const res = await fetch('/api/coach?action=apply-memory-to-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) {
+        const msg = data.error || `HTTP ${res.status}`;
+        if (result) result.textContent = '⚠ ' + msg;
+        showToast('⚠ ' + msg, 7000);
+        return;
+      }
+      // Server-generated summary lines — inserted as text, never as markup.
+      if (result) result.textContent = (data.summary || []).join('\n');
+      showToast(data.changed ? '✓ Search profile updated.' : '✓ Search profile already matched your memory.', 5000);
+    } catch (err) {
+      if (result) result.textContent = '⚠ Network error: ' + err.message;
+      showToast('Network error: ' + err.message, 5000);
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Apply to search profile'; }
     }
   }
 
@@ -4508,7 +5412,7 @@
   }
 
   async function loadStories() {
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     const loadEl = document.getElementById('coach-loading');
     const emptyEl = document.getElementById('coach-empty');
     const listEl  = document.getElementById('coach-stories-list');
@@ -4640,7 +5544,7 @@
     saveBtn.disabled = true;
     saveBtn.textContent = 'Saving…';
     errorEl.textContent = '';
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     try {
       const res = await fetch('/api/coach?action=update-story', {
         method: 'POST',
@@ -4683,7 +5587,7 @@
     deletingStoryId = null;
     renderStories(storyBankContent);
 
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     fetch('/api/coach?action=delete-story', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
@@ -4779,7 +5683,7 @@
     isWaitingForReply = true;
     document.getElementById('chat-send-btn').disabled = true;
     showTypingIndicator();
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     try {
       const res = await fetch('/api/coach?action=chat', {
         method: 'POST',
@@ -4841,7 +5745,7 @@
     const saveBtn = document.getElementById('draft-save-btn');
     saveBtn.disabled = true;
     saveBtn.textContent = 'Saving…';
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     try {
       const res = await fetch('/api/coach?action=save-story', {
         method: 'POST',
@@ -5007,7 +5911,7 @@
   }
 
   async function sendPrepTurn(userText) {
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     const sendBtn = document.getElementById('prep-send-btn');
     isPrepWaiting = true;
     if (sendBtn) sendBtn.disabled = true;
@@ -5073,7 +5977,7 @@
   }
 
   async function generatePrepDoc() {
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     renderPrepPhase('generating');
 
     try {
@@ -5196,7 +6100,7 @@
     switchCoachView('mock');
     showMockState('loading');
 
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     try {
       const docUrl = jobContext?.prepDocUrl || '';
       const contextForApi = jobContext ? { ...jobContext } : null;
@@ -5280,7 +6184,7 @@
     submitBtn.textContent = 'Getting feedback…';
 
     const q = mockQuestions[mockCurrentIndex];
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     try {
       const res = await fetch('/api/coach?action=mock-feedback', {
         method: 'POST',
@@ -5499,7 +6403,7 @@
   }
 
   async function saveMockSession() {
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     const id = Date.now() + '-' + Math.random().toString(36).slice(2, 8);
     const now = new Date().toISOString();
     const session = {
@@ -5546,7 +6450,7 @@
     emptyEl.style.display = 'none';
     listEl.style.display  = 'none';
     listEl.innerHTML = '';
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     try {
       const res = await fetch('/api/coach?action=get-mock-sessions', {
         headers: { 'X-Dashboard-Password': pw },
@@ -5651,6 +6555,8 @@
     onboardingSaved = false;
     onboardingDownloaded = {};
     onboardingAbandoned = false;
+    onboardingPortalsYml = null;
+    onboardingHasCustomPortals = false;
     onboardingHideDiscardConfirm();
 
     // Reset the refresh-notes inputs too. They are plain DOM textareas, so a
@@ -5701,7 +6607,11 @@
   // Fails SOFT: on any error we leave onboardingExistingFiles null, which is
   // exactly the pre-existing first-time behaviour.
   async function onboardingProbeExistingProfile() {
-    const pw = sessionStorage.getItem('co_pw') || '';
+    // storedPassword(), not sessionStorage: v1.2 moved the saved password to
+    // localStorage and CLEARS the sessionStorage copy on first read, so a raw
+    // sessionStorage read here would send an empty password, 401, and quietly
+    // treat every returning user as brand new.
+    const pw = storedPassword() || '';
     try {
       const res = await fetch('/api/coach?action=get-assets', { headers: { 'X-Dashboard-Password': pw } });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -5713,11 +6623,21 @@
         articleDigestMd: (d.articleDigestMd || '').trim() ? d.articleDigestMd : null,
         profileYml: (d.profileYml || '').trim() ? d.profileYml : null,
       };
-      if (!Object.values(found).some(v => v)) return; // brand-new user — leave the flow untouched
+      // portals.yml is carried for PREFILL but deliberately excluded from the
+      // returning-user test above: the starter watch-list ships in every repo, so
+      // counting it would put every brand-new user in the refresh flow. Only a
+      // customized list (portalsIsStarter false, per lib/portalsMeta.mjs) is
+      // evidence of a returning user, and it is tested separately below.
+      const portalsYml = (d.portalsYml || '').trim() ? d.portalsYml : null;
+      const hasCustomPortals = !!portalsYml && d.portalsIsStarter === false;
+      if (!Object.values(found).some(v => v) && !hasCustomPortals) return; // brand-new user — leave the flow untouched
       // The manual "existing files" card is the OVERRIDE, so a slow probe must
       // never overwrite an upload the user made while it was in flight.
       if (onboardingExistingFiles) return;
-      onboardingExistingFiles = found;
+      // Same 6-key shape onboardingExistingFilesReady builds, so the companies
+      // step prefills identically whether the list was probed or hand-uploaded.
+      onboardingExistingFiles = { ...found, portalsYml };
+      onboardingHasCustomPortals = hasCustomPortals;
       onboardingFoundRepoProfile = true;
       onboardingIsRefresh = true;
     } catch (err) {
@@ -5744,6 +6664,7 @@
       'bullet-bank.md': 'bulletBankMd',
       'article-digest.md': 'articleDigestMd',
       'profile.yml': 'profileYml',
+      'portals.yml': 'portalsYml',
     };
 
     const loaded = {};
@@ -5771,8 +6692,12 @@
       bulletBankMd: loaded.bulletBankMd || null,
       articleDigestMd: loaded.articleDigestMd || null,
       profileYml: loaded.profileYml || null,
+      portalsYml: loaded.portalsYml || null,
     };
-    const names = Object.entries({ 'CLAUDE.md': loaded.claudeMd, 'cv.md': loaded.cvMd, 'bullet-bank.md': loaded.bulletBankMd, 'article-digest.md': loaded.articleDigestMd, 'config/profile.yml': loaded.profileYml })
+    // A hand-uploaded portals.yml is by definition the list this user is already
+    // running, so Skip preserves it and the companies-step copy must say so.
+    onboardingHasCustomPortals = !!loaded.portalsYml;
+    const names = Object.entries({ 'CLAUDE.md': loaded.claudeMd, 'cv.md': loaded.cvMd, 'bullet-bank.md': loaded.bulletBankMd, 'article-digest.md': loaded.articleDigestMd, 'config/profile.yml': loaded.profileYml, 'scanner/portals.yml': loaded.portalsYml })
       .filter(([, v]) => v).map(([k]) => k);
     const statusEl = document.getElementById('onboarding-existing-status');
     if (statusEl) statusEl.textContent = names.length ? `Loaded: ${names.join(', ')}` : 'No recognized files found (.md filenames must match exactly).';
@@ -5810,8 +6735,10 @@
     if (resumeEl && resumeEl.value.trim()) {
       onboardingResumeText = resumeEl.value.trim();
     }
-    switchOnboardingStep('generating');
-    onboardingGenerateSequential();
+    // Capture the change notes above BEFORE leaving refresh-notes, then run the
+    // companies step. onboardingGenerateProfile (called after companies) routes
+    // to the per-file sequential path because existingFiles is set.
+    onboardingEnterCompanies();
   }
 
   // Exit is rendered on every step, including download — so it has to run the
@@ -5828,11 +6755,473 @@
     // it (generation finishing while the "still generating" warning is up) would
     // otherwise leave stale copy on screen.
     onboardingHideDiscardConfirm();
-    const steps = ['input', 'conversation', 'refresh-notes', 'generating', 'bulletbank', 'bulletbankchat', 'download'];
+    const steps = ['input', 'conversation', 'refresh-notes', 'companies', 'generating', 'bulletbank', 'bulletbankchat', 'download'];
     steps.forEach(s => {
       const el = document.getElementById(`onboarding-step-${s}`);
       if (el) el.style.display = s === step ? '' : 'none';
     });
+    // The portals.yml download button + note only make sense when the user
+    // actually built a company list (skipping leaves onboardingResult.portalsYml
+    // unset). Toggle them whenever the download step is shown.
+    if (step === 'download') {
+      const hasPortals = !!(onboardingResult && onboardingResult.portalsYml);
+      const dlBtn = document.getElementById('onboarding-dl-portals');
+      const note  = document.getElementById('onboarding-portals-instruction');
+      if (dlBtn) dlBtn.style.display = hasPortals ? '' : 'none';
+      if (note)  note.style.display  = hasPortals ? '' : 'none';
+      // Same guard for config/profile.yml: hide its button when generation
+      // produced nothing (e.g. generate-profile failed), so an empty file can
+      // never be downloaded on any path.
+      const hasProfile = !!(onboardingResult && onboardingResult.profileYml && onboardingResult.profileYml.trim());
+      const profBtn = document.getElementById('onboarding-dl-profile');
+      if (profBtn) profBtn.style.display = hasProfile ? '' : 'none';
+    }
+  }
+
+  // ── Companies step (personalized scanner/portals.yml) ──
+
+  // Friendly, non-technical label for each detected ATS. Custom pages warn that
+  // they're scraped best-effort so the user knows a Firecrawl key helps.
+  const ONBOARDING_ATS_LABELS = {
+    greenhouse: '✓ Greenhouse — fully supported',
+    ashby:      '✓ Ashby — fully supported',
+    lever:      '✓ Lever — fully supported',
+    workday:    '✓ Workday — fully supported',
+    custom:     'Custom page — scanned best-effort; works better with a Firecrawl key',
+  };
+
+  // Enter the companies step from either path (first-time gen button or refresh
+  // "Update My Profile"). Prefills rows from an uploaded portals.yml on refresh,
+  // otherwise starts with one empty row.
+  function onboardingEnterCompanies() {
+    const container = document.getElementById('onboarding-companies-rows');
+    if (container) container.innerHTML = '';
+    const errEl = document.getElementById('onboarding-companies-error');
+    if (errEl) errEl.style.display = 'none';
+
+    const prefill = onboardingParsePortals(onboardingExistingFiles?.portalsYml || '');
+    if (prefill.length) {
+      prefill.forEach(c => onboardingAddCompanyRow(c.name, c.careers_url));
+    } else {
+      onboardingAddCompanyRow();
+    }
+
+    onboardingRenderCompaniesSkipCopy();
+    onboardingCompaniesEdit();
+    switchOnboardingStep('companies');
+  }
+
+  // "Skip" writes no portals.yml, so it leaves whatever list the repo already
+  // has. For a first-time user that is the shipped example list; for someone
+  // refreshing a customized list it is THEIR companies — and telling them Skip
+  // keeps "the example list" gets it exactly backwards, pushing them to overwrite
+  // a curated list with the two companies they happened to type here.
+  function onboardingRenderCompaniesSkipCopy() {
+    const custom = onboardingHasCustomPortals;
+    const note = document.getElementById('onboarding-companies-skip-note');
+    if (note) {
+      note.textContent = custom
+        ? 'The list below is the one you\'re running now — edit it, or skip to leave it unchanged.'
+        : 'Skip this to keep the built-in example list for now.';
+    }
+    const btn = document.getElementById('onboarding-companies-skip-btn');
+    if (btn) {
+      btn.textContent = custom
+        ? 'Skip — leave my current watch list unchanged'
+        : 'Skip — keep the example list (you can set your companies anytime from Radar → Edit Watch List)';
+    }
+  }
+
+  // Shared row machinery. Onboarding's companies step and the Radar tab's Watch
+  // List editor are the same UI over the same generate-portals endpoint, so they
+  // share these two helpers and differ only in which container they render into.
+  function companyRowsAdd(containerId, name = '', careersUrl = '') {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    const row = document.createElement('div');
+    row.className = 'onboarding-company-row';
+    row.style.cssText = 'display:flex;gap:8px;margin-bottom:8px;align-items:center';
+    const inputStyle = 'padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;outline:none;background:var(--surface);color:var(--text)';
+    row.innerHTML =
+      `<input type="text" class="onboarding-company-name" style="flex:1;${inputStyle}" placeholder="Company name">` +
+      `<input type="text" class="onboarding-company-url" style="flex:2;${inputStyle}" placeholder="https://jobs.example.com/…">` +
+      `<button type="button" class="draft-discard-btn" title="Remove" style="padding:6px 10px" onclick="this.closest('.onboarding-company-row').remove()">✕</button>`;
+    container.appendChild(row);
+    // Set values via .value (not innerHTML) so prefilled text can't inject markup.
+    row.querySelector('.onboarding-company-name').value = name;
+    row.querySelector('.onboarding-company-url').value = careersUrl;
+  }
+
+  // Read the rows in one container into [{ name, careers_url }], dropping
+  // fully-empty rows.
+  function companyRowsCollect(containerId) {
+    const rows = Array.from(document.querySelectorAll('#' + containerId + ' .onboarding-company-row'));
+    return rows.map(r => ({
+      name: r.querySelector('.onboarding-company-name').value.trim(),
+      careers_url: r.querySelector('.onboarding-company-url').value.trim(),
+    })).filter(c => c.name || c.careers_url);
+  }
+
+  // Onboarding's bindings, unchanged for its own callers (inline onclick etc).
+  function onboardingAddCompanyRow(name = '', careersUrl = '') {
+    companyRowsAdd('onboarding-companies-rows', name, careersUrl);
+  }
+  function onboardingCollectCompanies() {
+    return companyRowsCollect('onboarding-companies-rows');
+  }
+
+  function onboardingShowCompaniesError(msg) {
+    const errEl = document.getElementById('onboarding-companies-error');
+    if (errEl) { errEl.textContent = msg; errEl.style.display = ''; }
+  }
+
+  function onboardingCompaniesEdit() {
+    document.getElementById('onboarding-companies-edit').style.display = '';
+    document.getElementById('onboarding-companies-review').style.display = 'none';
+  }
+
+  // Continue from the edit phase: validate, call generate-portals, and show the
+  // detected-ATS review. Keeps the user on this step so they can go back and edit.
+  async function onboardingCompaniesContinue() {
+    const companies = onboardingCollectCompanies();
+    if (!companies.length) {
+      onboardingShowCompaniesError(onboardingHasCustomPortals
+        ? 'Add at least one company, or use Skip to leave your current watch list unchanged.'
+        : 'Add at least one company, or use Skip to keep the example list.');
+      return;
+    }
+    const missing = companies.find(c => !c.name || !c.careers_url);
+    if (missing) {
+      onboardingShowCompaniesError('Each company needs both a name and a careers URL.');
+      return;
+    }
+    const errEl = document.getElementById('onboarding-companies-error');
+    if (errEl) errEl.style.display = 'none';
+
+    const btn = document.getElementById('onboarding-companies-continue-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+    const pw = storedPassword() || '';
+    try {
+      const res = await fetch('/api/coach?action=generate-portals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
+        body: JSON.stringify({ companies }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        onboardingShowCompaniesError(data.error || 'Could not read those URLs. Check them and try again.');
+        return;
+      }
+      onboardingPortalsYml = data.portalsYml || null;
+      onboardingRenderDetected(data.entries || []);
+      document.getElementById('onboarding-companies-edit').style.display = 'none';
+      document.getElementById('onboarding-companies-review').style.display = '';
+    } catch (e) {
+      onboardingShowCompaniesError('Could not reach the server. Please try again.');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Continue →'; }
+    }
+  }
+
+  function onboardingRenderDetected(entries) {
+    const wrap = document.getElementById('onboarding-companies-detected');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    entries.forEach(e => {
+      const label = ONBOARDING_ATS_LABELS[e.ats] || ONBOARDING_ATS_LABELS.custom;
+      const isCustom = e.ats === 'custom';
+      const div = document.createElement('div');
+      div.style.cssText = 'padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;background:var(--surface)';
+      const nameEl = document.createElement('div');
+      nameEl.style.cssText = 'font-weight:700;font-size:14px;margin-bottom:2px';
+      nameEl.textContent = e.name; // textContent — never trust the name as HTML
+      const atsEl = document.createElement('div');
+      atsEl.style.cssText = `font-size:12px;color:${isCustom ? '#8a6d00' : 'var(--accent)'}`;
+      atsEl.textContent = label;
+      div.appendChild(nameEl);
+      div.appendChild(atsEl);
+      wrap.appendChild(div);
+    });
+  }
+
+  // Proceed from review into generation. onboardingGenerateProfile picks single
+  // vs per-file sequential based on whether existing files are loaded.
+  function onboardingCompaniesProceed() {
+    onboardingGenerateProfile();
+  }
+
+  // Skip: leave portals.yml untouched (the starter list stays) and generate.
+  function onboardingCompaniesSkip() {
+    onboardingPortalsYml = null;
+    onboardingGenerateProfile();
+  }
+
+  // Best-effort client-side parse of an existing portals.yml to prefill rows on
+  // the refresh path. Not a full YAML parser — just pulls name + careers_url per
+  // company block, which is all the rows need.
+  function onboardingParsePortals(yamlText) {
+    if (!yamlText || typeof yamlText !== 'string') return [];
+    const companies = [];
+    let current = null;
+    for (const rawLine of yamlText.split('\n')) {
+      const line = onboardingStripYamlComment(rawLine); // strip trailing comments
+      const nameMatch = line.match(/^\s*-\s*name:\s*(.+?)\s*$/);
+      if (nameMatch) {
+        if (current && current.name) companies.push(current);
+        current = { name: onboardingUnquote(nameMatch[1]), careers_url: '' };
+        continue;
+      }
+      const urlMatch = line.match(/^\s*careers_url:\s*(.+?)\s*$/);
+      if (urlMatch && current) {
+        const val = onboardingUnquote(urlMatch[1]);
+        current.careers_url = val === 'null' ? '' : val;
+      }
+    }
+    if (current && current.name) companies.push(current);
+    return companies.filter(c => c.name);
+  }
+
+  function onboardingUnquote(s) {
+    const t = s.trim();
+    if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
+      return t.slice(1, -1);
+    }
+    return t;
+  }
+
+  // Strip a trailing YAML comment without eating a '#' inside a quoted value
+  // (e.g. name: "Gamma #3"). A comment '#' must sit outside quotes and be at line
+  // start or preceded by whitespace. Quote-aware scan — enough for this
+  // best-effort prefill parser.
+  function onboardingStripYamlComment(line) {
+    let quote = null; // "'" or '"' when inside a quoted run, else null
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (quote) {
+        if (ch === quote) quote = null;
+      } else if (ch === '"' || ch === "'") {
+        quote = ch;
+      } else if (ch === '#' && (i === 0 || /\s/.test(line[i - 1]))) {
+        return line.slice(0, i);
+      }
+    }
+    return line;
+  }
+
+  // ── Watch List editor (Radar → Edit Watch List) ────────────────────────────
+  //
+  // The same company rows as onboarding's companies step, but reachable at any
+  // time and seeded from the file the scanner is actually using. It exists
+  // because skipping onboarding's companies step used to be a dead end: the
+  // scanner quietly kept running on the maintainer's example list with no way
+  // back except hand-editing YAML in GitHub.
+  //
+  // It also bridges the Radar. People reasonably assume the companies they put
+  // on their Radar are the ones being scanned; they are two separate lists. So
+  // when this opens we offer every Radar company that isn't already on the watch
+  // list as a one-click add.
+
+  function watchListAddRow(name = '', careersUrl = '') {
+    companyRowsAdd('wl-rows', name, careersUrl);
+  }
+
+  function watchListShowError(msg) {
+    const el = document.getElementById('wl-error');
+    if (el) { el.textContent = msg; el.style.display = 'block'; }
+  }
+  function watchListClearError() {
+    const el = document.getElementById('wl-error');
+    if (el) { el.textContent = ''; el.style.display = 'none'; }
+  }
+
+  function closeWatchList() {
+    document.getElementById('watchlist-overlay').classList.remove('open');
+  }
+
+  // Open + load. Two reads in parallel: the live portals.yml (the truth about
+  // what's being scanned) and the Radar (for the import suggestions).
+  async function openWatchList() {
+    const overlay = document.getElementById('watchlist-overlay');
+    if (overlay) overlay.classList.add('open');
+    watchListClearError();
+    // Reset the text too, not just visibility — a previous failed open leaves the
+    // error message in this element, and it would flash on the next open.
+    const loadingEl = document.getElementById('wl-loading');
+    loadingEl.textContent = 'Loading your watch list...';
+    loadingEl.style.display = 'block';
+    document.getElementById('wl-body').style.display = 'none';
+    document.getElementById('wl-rows').innerHTML = '';
+    document.getElementById('wl-starter-banner').style.display = 'none';
+
+    const pw = storedPassword() || '';
+    const headers = { 'X-Dashboard-Password': pw };
+    try {
+      // The Radar half is allowed to fail on its own — a Radar hiccup should
+      // never stop someone editing their watch list.
+      const [portalsRes, radarCompanies] = await Promise.all([
+        fetch('/api/coach?action=get-portals&t=' + Date.now(), { headers }),
+        watchListLoadRadarCompanies(headers),
+      ]);
+      const data = await portalsRes.json().catch(() => ({}));
+      if (!portalsRes.ok || data.error) throw new Error(data.error || ('HTTP ' + portalsRes.status));
+
+      const existing = onboardingParsePortals(data.portalsYml || '');
+      if (existing.length) existing.forEach(c => watchListAddRow(c.name, c.careers_url));
+      else watchListAddRow();
+
+      if (data.isStarterList) document.getElementById('wl-starter-banner').style.display = 'block';
+
+      watchListRenderSuggestions(radarCompanies);
+      document.getElementById('wl-loading').style.display = 'none';
+      document.getElementById('wl-body').style.display = 'block';
+    } catch (e) {
+      // Same rule as Radar and the pipeline: the setup check knows why, so say
+      // what it says. "Close this and try again" was advice that never worked
+      // for any of the real causes (dead token, unreachable repo, stale password).
+      const sentence = await healthSentence('watchlist');
+      document.getElementById('wl-loading').textContent = sentence
+        || 'Could not load your watch list. Open the ⚙ setup check in the header to find out why.';
+    }
+  }
+
+  // Prefer the Radar we already have in memory; fetch only if the Radar tab
+  // hasn't been opened yet this session.
+  async function watchListLoadRadarCompanies(headers) {
+    try {
+      const inMemory = Object.values((radar && radar.companies) || {});
+      if (inMemory.length) return inMemory;
+      const res = await fetch('/api/radar?t=' + Date.now(), { headers });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Object.values((data && data.companies) || {});
+    } catch (e) {
+      return [];
+    }
+  }
+
+  // Names already in the rows, lowercased, so a company can't be suggested twice.
+  function watchListRowNames() {
+    return new Set(companyRowsCollect('wl-rows').map(c => c.name.toLowerCase()).filter(Boolean));
+  }
+
+  function watchListRenderSuggestions(companies) {
+    const wrap = document.getElementById('wl-suggestions-wrap');
+    const list = document.getElementById('wl-suggestions');
+    if (!wrap || !list) return;
+    list.innerHTML = '';
+
+    const onList = watchListRowNames();
+    const candidates = (companies || []).filter(c => {
+      const name = (c && c.company || '').trim();
+      return name && !onList.has(name.toLowerCase()) && c.status !== 'archived';
+    });
+
+    if (!candidates.length) { wrap.style.display = 'none'; return; }
+    wrap.style.display = 'block';
+
+    candidates.forEach(c => {
+      const name = (c.company || '').trim();
+      const url  = (c.url || '').trim();
+      const row = document.createElement('div');
+      row.className = 'wl-suggestion';
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'wl-sug-name';
+      nameEl.textContent = name; // textContent — never trust a saved name as HTML
+      row.appendChild(nameEl);
+
+      const accept = (careersUrl) => {
+        watchListAddRow(name, careersUrl);
+        row.remove();
+        if (!list.children.length) wrap.style.display = 'none';
+      };
+
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'coach-back-link';
+      btn.style.cssText = 'background:none;border:1px solid var(--border);border-radius:8px;color:var(--accent);cursor:pointer;font-size:12px;font-weight:600;padding:5px 12px';
+      btn.textContent = '+ Add';
+
+      if (/^https?:\/\//i.test(url)) {
+        btn.onclick = () => accept(url);
+      } else {
+        // This company has no usable link. It used to say "Add their careers
+        // page link on the Radar card first" — a dead end AND wrong: the Radar
+        // card's url field is the company HOMEPAGE (its placeholder is
+        // https://anthropic.com), not a careers page, so following that
+        // instruction would put the wrong URL on the watch list.
+        //
+        // Take the careers link here instead. It feeds watchListAddRow exactly
+        // like a manually typed row, so Save runs it through the same
+        // generate-portals job-board detection.
+        const input = document.createElement('input');
+        input.type = 'url';
+        input.className = 'wl-sug-url';
+        input.placeholder = 'Careers page link — https://…';
+        input.setAttribute('aria-label', `Careers page link for ${name}`);
+
+        const valid = () => /^https?:\/\//i.test(input.value.trim());
+        const sync = () => { btn.disabled = !valid(); };
+        input.addEventListener('input', sync);
+        input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); btn.click(); } });
+        sync();
+
+        btn.onclick = () => { if (valid()) accept(input.value.trim()); };
+        row.appendChild(input);
+      }
+
+      row.appendChild(btn);
+      list.appendChild(row);
+    });
+  }
+
+  // Save: same two steps the onboarding path uses — generate-portals turns the
+  // rows into YAML (and detects each company's job board), then save-onboarding
+  // commits it. That write refuses a public repo and REPLACES portals.yml, which
+  // is exactly the "this is my list now" semantics we want here.
+  async function saveWatchList() {
+    const companies = companyRowsCollect('wl-rows');
+    if (!companies.length) {
+      watchListShowError('Add at least one company. An empty watch list would mean nothing gets scanned.');
+      return;
+    }
+    const missing = companies.find(c => !c.name || !c.careers_url);
+    if (missing) {
+      watchListShowError('Each company needs both a name and a careers URL.');
+      return;
+    }
+    watchListClearError();
+
+    const btn = document.getElementById('wl-save-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+    const pw = storedPassword() || '';
+    const headers = { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw };
+    try {
+      const genRes = await fetch('/api/coach?action=generate-portals', {
+        method: 'POST', headers, body: JSON.stringify({ companies }),
+      });
+      const gen = await genRes.json().catch(() => ({}));
+      if (!genRes.ok || gen.error || !gen.portalsYml) {
+        watchListShowError(gen.error || 'Could not read those URLs. Check them and try again.');
+        return;
+      }
+
+      const saveRes = await fetch('/api/coach?action=save-onboarding', {
+        method: 'POST', headers, body: JSON.stringify({ portalsYml: gen.portalsYml }),
+      });
+      const saved = await saveRes.json().catch(() => ({}));
+      if (!saveRes.ok || !saved.success) {
+        watchListShowError(saved.error || 'Could not save your watch list. Please try again.');
+        return;
+      }
+
+      closeWatchList();
+      showToast(`✓ Watch list saved — ${companies.length} compan${companies.length === 1 ? 'y' : 'ies'} on your next scan`);
+    } catch (e) {
+      watchListShowError('Could not reach the server. Please try again.');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Save Watch List'; }
+    }
   }
 
   // ── File upload ──
@@ -5873,7 +7262,7 @@
     reader.onload = async function(ev) {
       const dataUrl = ev.target.result;
       const base64 = dataUrl.split(',')[1];
-      const pw = sessionStorage.getItem('co_pw') || '';
+      const pw = storedPassword() || '';
       try {
         const res = await fetch('/api/coach?action=parse-resume', {
           method: 'POST',
@@ -5987,7 +7376,7 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
         : 'No resume — answer a few questions to build your profile.';
     }
 
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     const initMsg = { role: 'user', content: '__init__' };
     onboardingTranscript = [initMsg];
     onboardingLoading = true;
@@ -6027,7 +7416,7 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
     appendOnboardingMessage('user', text);
     onboardingTranscript.push({ role: 'user', content: text });
 
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     onboardingLoading = true;
     document.getElementById('onboarding-send-btn').disabled = true;
 
@@ -6114,11 +7503,16 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
     if (spinner) spinner.style.display = '';
     if (rows) rows.style.display = 'none';
 
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     const transcript = onboardingTranscript
       .filter(m => m.content !== '__init__')
       .map(m => ({ role: m.role, content: m.content }));
 
+    // Same in-flight flag the sequential path sets. Without it a first-time user
+    // who hits Exit mid-generation gets waved straight out with no warning, and
+    // the run lands onboardingResult on a hidden view — arming beforeunload for
+    // the rest of the session with nothing on screen to clear it.
+    onboardingGenerationInProgress = true;
     try {
       const res = await fetch('/api/coach?action=generate-onboarding', {
         method: 'POST',
@@ -6132,6 +7526,33 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
         return;
       }
       onboardingResult = data;
+      // generate-onboarding does NOT produce config/profile.yml, so fetch it
+      // separately here (the sequential/refresh path already does this). Without
+      // it a brand-new user's scanner runs with no profile. Non-blocking, exactly
+      // like the sequential path: a failure toasts a warning and proceeds, leaving
+      // profileYml absent so the download button self-hides.
+      try {
+        const conversationText = onboardingTranscript
+          .filter(m => m.content !== '__init__')
+          .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+          .join('\n\n');
+        const rp = await fetch('/api/coach?action=generate-profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
+          body: JSON.stringify({ resumeText: onboardingResumeText, transcriptText: conversationText, existingFiles: null }),
+        });
+        const rpData = await rp.json();
+        if (rpData.error) {
+          showToast(`config/profile.yml: ${rpData.error}`);
+        } else if (rpData.profileYml) {
+          onboardingResult.profileYml = rpData.profileYml;
+        }
+      } catch (e) {
+        showToast('config/profile.yml generation failed — other files are ready.');
+      }
+      // Attach the personalized portals.yml (if the user built one) so it rides
+      // the same download + save-to-repo path as the generated profile files.
+      if (onboardingPortalsYml) onboardingResult.portalsYml = onboardingPortalsYml;
       // Trigger (a): seed persistent memory from the resume + onboarding chat so
       // JobBud no longer "forgets everything after onboarding". Fire-and-forget —
       // never blocks the download step.
@@ -6140,6 +7561,8 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
     } catch (err) {
       showToast('Generation failed. Please try again.');
       switchOnboardingStep('conversation');
+    } finally {
+      onboardingGenerationInProgress = false;
     }
   }
 
@@ -6159,7 +7582,7 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
     if (spinner) spinner.style.display = 'none';
     if (rows) rows.style.display = '';
 
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     const conversationText = onboardingTranscript
       .filter(m => m.content !== '__init__')
       .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
@@ -6256,6 +7679,9 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
       setStatus('gen-status-profile', profileYml ? '✓' : '⚠️');
 
       onboardingResult = { claudeMd, cvMd, bulletBankMd, articleDigestMd, profileYml };
+      // Attach the personalized portals.yml (if the user built one) so it rides
+      // the same download + save-to-repo path as the generated profile files.
+      if (onboardingPortalsYml) onboardingResult.portalsYml = onboardingPortalsYml;
       // Trigger (a): seed/refresh persistent memory from the resume + conversation.
       fireMemoryUpdate('onboarding', { resumeText: onboardingResumeText, transcript: transcriptText });
       switchOnboardingStep('download');
@@ -6335,7 +7761,7 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
       return;
     }
     const btn = document.getElementById('onboarding-save-repo-btn');
-    const pw = sessionStorage.getItem('co_pw') || '';
+    const pw = storedPassword() || '';
     if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
     try {
       const r = await fetch('/api/coach?action=save-onboarding', {

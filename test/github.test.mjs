@@ -423,3 +423,211 @@ test('readGithubFile does NOT retry a 404 (immediate not-found)', async () => {
   }
   assert.equal(calls, 1, '404 must not be retried');
 });
+
+// ── Empty-commit (no-op write) guard ──────────────────────────────────────────
+//
+// Git trees are content-addressed, so when the new tree sha comes back identical
+// to the base tree sha the write changes nothing and committing it produces an
+// empty "0 files changed" commit. Every empty-commit write seen in production was
+// silent data loss (the radar.json array-seed bug: a mutation applied to a parsed
+// array was dropped by JSON.stringify, the endpoint reported success, and the
+// company vanished on the next read). writeGithubFile must refuse by default, and
+// accept the no-op only for callers that opt in with allowNoop.
+//
+// This mock returns the SAME tree sha from POST /git/trees that GET /git/commits
+// reported for the base tree, which is exactly what GitHub does for an unchanged
+// write. It records whether a commit was created and whether the ref was advanced.
+function makeNoopMockGitHub() {
+  const state = { baseTreeSha: 'tree-base', commitsCreated: 0, patchAttempts: 0, seq: 0 };
+  const res = (obj, status = 200) => ({
+    ok: status >= 200 && status < 300, status,
+    json: async () => obj, text: async () => (typeof obj === 'string' ? obj : JSON.stringify(obj)),
+  });
+  async function fetchMock(url, opts = {}) {
+    const method = opts.method || 'GET';
+    if (url.includes('/contents/')) {
+      return res({ content: Buffer.from('{}').toString('base64'), encoding: 'base64' });
+    }
+    if (url.endsWith('/git/blobs') && method === 'POST') return res({ sha: `blob-${++state.seq}` });
+    if (url.includes('/git/ref/heads/') && method === 'GET') return res({ object: { sha: 'commit-head' } });
+    if (url.includes('/git/commits/') && method === 'GET') return res({ tree: { sha: state.baseTreeSha } });
+    // Unchanged content -> GitHub hands back the base tree's own sha.
+    if (url.endsWith('/git/trees') && method === 'POST') return res({ sha: state.baseTreeSha });
+    if (url.endsWith('/git/commits') && method === 'POST') {
+      state.commitsCreated += 1;
+      return res({ sha: `commit-${++state.seq}` });
+    }
+    if (url.includes('/git/refs/heads/') && method === 'PATCH') {
+      state.patchAttempts += 1;
+      return res({ ref: 'refs/heads/main' });
+    }
+    throw new Error(`unexpected fetch: ${method} ${url}`);
+  }
+  return { state, fetchMock };
+}
+
+test('writeGithubFile refuses a no-op write instead of creating an empty commit', async () => {
+  const { state, fetchMock } = makeNoopMockGitHub();
+  const realFetch = global.fetch;
+  global.fetch = fetchMock;
+  let thrown = null;
+  try {
+    await writeGithubFile(
+      'tok', 'owner', 'repo', 'data/radar.json',
+      '[]\n', // the exact byte-identical blob the radar bug produced
+      'chore: radar add Acme [skip ci]',
+    );
+  } catch (err) {
+    thrown = err;
+  } finally {
+    global.fetch = realFetch;
+  }
+
+  assert.ok(thrown, 'a write that changes nothing must throw, not silently succeed');
+  assert.match(thrown.message, /write produced no change to data\/radar\.json/);
+  assert.match(thrown.message, /refusing to create an empty commit/);
+  assert.equal(state.commitsCreated, 0, 'no commit object may be created');
+  assert.equal(state.patchAttempts, 0, 'the ref must not be advanced');
+});
+
+test('writeGithubFile accepts a no-op write when the caller passes allowNoop', async () => {
+  const { state, fetchMock } = makeNoopMockGitHub();
+  const realFetch = global.fetch;
+  global.fetch = fetchMock;
+  let result;
+  try {
+    result = await writeGithubFile(
+      'tok', 'owner', 'repo', 'data/seen-jobs.json',
+      '[]\n',
+      'chore: persist scanner state (seen-jobs.json) [skip ci]',
+      { logTag: 'commit-state', allowNoop: true },
+    );
+  } finally {
+    global.fetch = realFetch;
+  }
+
+  assert.equal(result, 'commit-head', 'returns the current head sha — nothing new was committed');
+  assert.equal(state.commitsCreated, 0, 'still no empty commit');
+  assert.equal(state.patchAttempts, 0, 'still no ref advance');
+});
+
+// allowNoop also takes a PREDICATE, evaluated only when a no-op actually happens.
+// scanner/persistJobs.mjs uses `() => added === 0` so the guard stays armed at the
+// highest-value write: "the builder added nothing" is benign under concurrency,
+// but "the builder says it added jobs and nothing landed" is the silent-loss bug.
+test('writeGithubFile allowNoop predicate: a truthy result accepts the no-op', async () => {
+  const { state, fetchMock } = makeNoopMockGitHub();
+  const realFetch = global.fetch;
+  global.fetch = fetchMock;
+  let evaluated = 0;
+  let added = 0; // the concurrency case — a concurrent writer added every candidate
+  let result;
+  try {
+    result = await writeGithubFile(
+      'tok', 'owner', 'repo', 'data/job-status.json',
+      () => '{}',
+      'chore: persist scanned jobs [skip ci]',
+      { logTag: 'persist', allowNoop: () => { evaluated += 1; return added === 0; } },
+    );
+  } finally {
+    global.fetch = realFetch;
+  }
+  assert.equal(result, 'commit-head');
+  assert.equal(evaluated, 1, 'the predicate is evaluated exactly once, at no-op time');
+  assert.equal(state.commitsCreated, 0);
+});
+
+test('writeGithubFile allowNoop predicate: a falsy result still throws', async () => {
+  const { state, fetchMock } = makeNoopMockGitHub();
+  const realFetch = global.fetch;
+  global.fetch = fetchMock;
+  let added = 3; // the bug case — the builder claims it added jobs, yet nothing changed
+  let thrown = null;
+  try {
+    await writeGithubFile(
+      'tok', 'owner', 'repo', 'data/job-status.json',
+      () => '{}',
+      'chore: persist scanned jobs [skip ci]',
+      { logTag: 'persist', allowNoop: () => added === 0 },
+    );
+  } catch (err) {
+    thrown = err;
+  } finally {
+    global.fetch = realFetch;
+  }
+  assert.ok(thrown, 'a builder that added jobs but changed nothing must still throw');
+  assert.match(thrown.message, /write produced no change to data\/job-status\.json/);
+  assert.equal(state.commitsCreated, 0);
+});
+
+test('writeGithubFile allowNoop predicate is NOT evaluated when the write really changes something', async () => {
+  const { state, fetchMock } = makeMockGitHub({ jobs: { a: { status: 'new' }, b: { status: 'new' } } });
+  const realFetch = global.fetch;
+  global.fetch = fetchMock;
+  let evaluated = 0;
+  try {
+    state.patchAttempts = 1; // skip the mock's forced 422 so this commits once
+    await writeGithubFile(
+      'tok', 'owner', 'repo', 'data/job-status.json',
+      JSON.stringify({ jobs: { a: { status: 'applied' } } }),
+      'test: a real change',
+      { allowNoop: () => { evaluated += 1; return true; } },
+    );
+  } finally {
+    global.fetch = realFetch;
+  }
+  assert.equal(evaluated, 0, 'the predicate must only run on an actual no-op');
+});
+
+// A no-op on attempt >= 2 means a concurrent writer advanced HEAD and the content
+// we rebuilt now matches the commit that landed — our change IS in the file, put
+// there by someone else. Converged, not lost, so it succeeds even when strict.
+test('writeGithubFile treats a no-op AFTER a 422 as success, even without allowNoop', async () => {
+  const state = { headSha: 'commit-0', baseTree: 'tree-0', patchAttempts: 0, commitsCreated: 0, seq: 0 };
+  const res = (obj, status = 200) => ({
+    ok: status >= 200 && status < 300, status,
+    json: async () => obj, text: async () => (typeof obj === 'string' ? obj : JSON.stringify(obj)),
+  });
+  const realFetch = global.fetch;
+  global.fetch = async (url, opts = {}) => {
+    const method = opts.method || 'GET';
+    if (url.includes('/contents/')) {
+      return res({ content: Buffer.from('{}').toString('base64'), encoding: 'base64' });
+    }
+    if (url.endsWith('/git/blobs') && method === 'POST') return res({ sha: `blob-${++state.seq}` });
+    if (url.includes('/git/ref/heads/') && method === 'GET') return res({ object: { sha: state.headSha } });
+    if (url.includes('/git/commits/') && method === 'GET') return res({ tree: { sha: state.baseTree } });
+    if (url.endsWith('/git/trees') && method === 'POST') {
+      // Attempt 1 produces a genuinely new tree; after the 422 the concurrent
+      // writer's commit already contains our content, so the tree is unchanged.
+      return res({ sha: state.patchAttempts === 0 ? `tree-new-${++state.seq}` : state.baseTree });
+    }
+    if (url.endsWith('/git/commits') && method === 'POST') {
+      state.commitsCreated += 1;
+      return res({ sha: `commit-${++state.seq}` });
+    }
+    if (url.includes('/git/refs/heads/') && method === 'PATCH') {
+      state.patchAttempts += 1;
+      // A concurrent writer landed our exact content and moved HEAD -> 422.
+      state.headSha = 'commit-concurrent';
+      state.baseTree = 'tree-converged';
+      return res('non-fast-forward', 422);
+    }
+    throw new Error(`unexpected fetch: ${method} ${url}`);
+  };
+  let result;
+  try {
+    result = await writeGithubFile(
+      'tok', 'owner', 'repo', 'data/job-status.json',
+      () => '{"jobs":{"a":{"status":"applied"}}}',
+      'test: converged with a concurrent writer',
+      // Deliberately strict: this must succeed on the retry anyway.
+      { maxAttempts: 5 },
+    );
+  } finally {
+    global.fetch = realFetch;
+  }
+  assert.equal(state.patchAttempts, 1, 'exactly one PATCH — the 422 — then convergence');
+  assert.equal(state.commitsCreated, 1, 'only attempt 1 created a commit; the retry created none');
+  assert.equal(result, 'commit-concurrent', 'returns the head the concurrent writer left behind');
+});

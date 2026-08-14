@@ -8,7 +8,7 @@
 // The file is committed to the repo so a clone (e.g. ~/linkedin-research) gets it
 // on `git pull`, and the LinkedIn research agent reads it from there.
 
-import { readGithubFile, writeGithubFile } from '../lib/github.js';
+import { readGithubFile, writeGithubFile, normalizeJsonDoc } from '../lib/github.js';
 
 const RADAR_PATH = 'data/radar.json';
 
@@ -26,9 +26,10 @@ function slugify(str) {
 async function readRadar(githubToken, owner, repo) {
   const { exists, content } = await readGithubFile(githubToken, owner, repo, RADAR_PATH);
   if (!exists) return { companies: {} };
-  const parsed = JSON.parse(content);
-  if (!parsed.companies || typeof parsed.companies !== 'object') parsed.companies = {};
-  return parsed;
+  // The committed seed is the array `[]`. Patching .companies onto it would be
+  // dropped by JSON.stringify, so normalize to a real { companies: {} } document —
+  // same invariant api/radar.js readRadar applies.
+  return normalizeJsonDoc(JSON.parse(content), { companies: {} });
 }
 
 // ── Handler ──────────────────────────────────────────────────────────────────
@@ -76,7 +77,9 @@ export default async function handler(req, res) {
       'linkedin-research/current_company.json',
       JSON.stringify(payload, null, 2) + '\n',
       `chore: queue radar research for ${payload.company} [skip ci]`,
-      { logTag: 'queue-radar-research' },
+      // Re-queueing research for the same company writes a byte-identical payload.
+      // That is a legitimate idempotent action, not lost data — accept the no-op.
+      { logTag: 'queue-radar-research', allowNoop: true },
     );
 
     console.log(`[queue-radar-research] wrote current_company.json for ${payload.company} (${commitSha})`);

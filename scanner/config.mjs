@@ -131,6 +131,55 @@ export function parseLocations(yaml) {
   return results.length ? results : null;
 }
 
+// ── Numeric settings the user can actually deliver ───────────────────────────
+//
+// These used to be read from process.env only, which quietly made them
+// unreachable for the people they were written for. The scheduled scan runs
+// through .github/workflows/weekly-api-scan.yml, that workflow hands
+// scanner/index.mjs a fixed env block, Actions injects nothing on its own, and
+// the workflow files are frozen (a GitHub token cannot deliver workflow edits
+// through the update PR). So a value set as an Actions secret never reached the
+// scanner at all.
+//
+// config/profile.yml does reach it: loadConfig fetches that file from the user's
+// repo on every run. That is the delivery path. process.env stays ahead of it so
+// someone running the scanner on their own machine can still override a single
+// run from .env or the command line.
+//
+// Order: env → profile.yml → built-in default. A non-numeric or non-positive
+// value falls through to the next source rather than turning a budget off by
+// accident, and says so.
+// A number out of a YAML scalar, tolerating a trailing comment.
+//
+// parseProfileYml keeps everything after the colon, comment and all — this
+// file's own example writes "name: Jane Smith  # Your full name" and expects
+// it. For prose that is harmless; for a number it is fatal and silent:
+// "1000  # default 250" is NaN, and NaN falls back to the built-in default
+// while the user is looking at the figure they set. Anyone annotating their own
+// settings deserves better than a limit that silently ignores them.
+function toNumber(value) {
+  if (typeof value !== 'string') return Number(value);
+  return Number(value.split('#')[0].trim());
+}
+
+export function numericSetting(profile, key, envName, fallback) {
+  const raw = process.env[envName];
+  const fromEnv = toNumber(raw);
+  if (Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv;
+  if (raw !== undefined && raw !== '') {
+    console.warn(`[config] ${envName}="${raw}" is not a positive number — ignoring it`);
+  }
+
+  const declared = profile?.[key];
+  const fromProfile = toNumber(declared);
+  if (Number.isFinite(fromProfile) && fromProfile > 0) return fromProfile;
+  if (declared !== undefined && declared !== null && declared !== '') {
+    console.warn(`[config] ${key} in config/profile.yml is "${declared}", which is not a positive number — ignoring it`);
+  }
+
+  return fallback;
+}
+
 // ── Config ───────────────────────────────────────────────────────────────────
 // loadConfig reads config/profile.yml (when a repo is passed) and layers the
 // user's declared preferences over GENERIC defaults. The defaults are deliberately
@@ -203,6 +252,20 @@ export async function loadConfig(githubToken, owner, repo) {
       'Series A', 'Series B', 'Series C', 'Series D', 'Series E',
       'late stage', 'growth stage', 'public', 'pre-IPO',
     ],
+
+    // Monthly API budgets, one per source, plus Adzuna's per-run slice size.
+    // The defaults are the figures these were hardcoded to, but none of them is
+    // a fact: every provider sets its own allowance per account and Adzuna does
+    // not publish its free tier at all, so a number baked into the code is a
+    // guess that silently throttles anyone whose real plan is bigger. Declare
+    // the real figure in config/profile.yml (see the settings block in
+    // config/profile.yml.example); the provider's developer dashboard shows it.
+    adzunaMonthlyLimit: numericSetting(profile, 'adzuna_monthly_limit', 'ADZUNA_MONTHLY_LIMIT', 250),
+    jsearchMonthlyLimit: numericSetting(profile, 'jsearch_monthly_limit', 'JSEARCH_MONTHLY_LIMIT', 200),
+    serpapiMonthlyLimit: numericSetting(profile, 'serpapi_monthly_limit', 'SERPAPI_MONTHLY_LIMIT', 250),
+    // null = "no opinion", so quota.mjs's callsPerRun works out the slice from
+    // the monthly limit and the scan cadence.
+    adzunaCallsPerRun: numericSetting(profile, 'adzuna_calls_per_run', 'ADZUNA_CALLS_PER_RUN', null),
 
     minScoreToIncludeInDigest: 3.0,
     maxJobsPerDigest: 20,

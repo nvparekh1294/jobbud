@@ -49,6 +49,8 @@ The JSON files in `data/` are committed as intentionally empty stubs (`[]` or `{
 
 Never commit real data into `data/`. Leave the stubs as `[]` / `{}` in any PR. If you need to change the shape of a seed file, open an issue first.
 
+**Maintainer rule: the seed files in `data/` are frozen upstream.** After a file's initial release, upstream must never modify it again — not the contents, not the formatting, not even a whitespace fix. Every deployed copy of JobBud commits real data into these exact paths (the scanner and the dashboard both write them back through the GitHub API), so any upstream change to a seed file lands as a merge conflict for every active user at once, in a file none of them ever edited by hand. New seed files may be added; existing ones are append-only in the sense that only downstream copies write to them. If a seed file's shape genuinely has to change, migrate it in application code at read time rather than by editing the committed file.
+
 ## Questions
 
 Open an issue or start a discussion. Response time may vary — this is a solo-maintained project.

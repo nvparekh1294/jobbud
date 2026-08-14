@@ -92,7 +92,9 @@ async function handleSaveMemory(req, res, githubToken, owner, repo) {
     // stale-blob overwrite.
     await writeGithubFile(
       githubToken, owner, repo, MEMORY_PATHS[file], () => normalized,
-      `chore: update memory ${file} [skip ci]`, { logTag: 'memory' },
+      // Saving the editor without having changed anything is a normal user action,
+      // so an identical write is a legitimate no-op rather than lost data.
+      `chore: update memory ${file} [skip ci]`, { logTag: 'memory', allowNoop: true },
     );
     console.log(`[memory] action=save-memory file=${file} bytes=${normalized.length}`);
     return res.status(200).json({ success: true });
@@ -191,7 +193,9 @@ async function handleUpdateMemory(req, res, githubToken, owner, repo) {
             }
             return next;
           },
-          `chore: memory update (${eventType}) — ${k} [skip ci]`, { logTag: 'memory' },
+          // A distillation that produces content identical to `base` is a valid
+          // "nothing new to record" outcome, not a dropped write.
+          `chore: memory update (${eventType}) — ${k} [skip ci]`, { logTag: 'memory', allowNoop: true },
         );
         updated.push(k);
       } catch (e) {

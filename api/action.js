@@ -1,6 +1,6 @@
 import { generateAndSendPackage } from '../scanner/applicationPackage.mjs';
 import { esc } from '../scanner/html.mjs';
-import { readGithubFile, writeGithubFile } from '../lib/github.js';
+import { readGithubFile, writeGithubFile, normalizeJsonDoc } from '../lib/github.js';
 import { safeEqual, verifyActionToken, actionTokenSecret, actionKeySource, actionKeyFingerprint } from '../lib/auth.mjs';
 
 const VALID_STATUSES = [
@@ -86,7 +86,8 @@ const SNOOZE_MESSAGE = (company, title) => `
 async function getJobStatus(githubToken, owner, repo) {
   const { exists, content } = await readGithubFile(githubToken, owner, repo, 'data/job-status.json');
   if (!exists) throw new Error('GitHub GET failed: data/job-status.json not found (404)');
-  return { content: JSON.parse(content) };
+  // The committed seed is the array `[]`; normalize it to the { jobs: {} } model.
+  return { content: normalizeJsonDoc(JSON.parse(content), { jobs: {} }) };
 }
 
 // Field-safe update of a single job in job-status.json.
@@ -95,18 +96,19 @@ async function getJobStatus(githubToken, owner, repo) {
 // re-applies applyChange on top of the current data — so a concurrent status
 // change to a DIFFERENT job (from the scanner or another dashboard action) is
 // preserved rather than erased by a stale whole-file overwrite.
-async function updateJobStatus(githubToken, owner, repo, jobId, applyChange) {
+async function updateJobStatus(githubToken, owner, repo, jobId, applyChange, { allowNoop = false } = {}) {
   await writeGithubFile(
     githubToken, owner, repo, 'data/job-status.json',
     (current) => {
-      const doc = current ? JSON.parse(current) : { jobs: {} };
-      if (!doc.jobs) doc.jobs = {};
+      // The array seed `[]` cannot carry a .jobs property through JSON.stringify —
+      // normalize it to a real { jobs: {} } document before mutating.
+      const doc = normalizeJsonDoc(current ? JSON.parse(current) : { jobs: {} }, { jobs: {} });
       if (!doc.jobs[jobId]) doc.jobs[jobId] = {};
       applyChange(doc.jobs[jobId]);
       return JSON.stringify(doc, null, 2);
     },
     'chore: update job status [skip ci]',
-    { logTag: 'action' },
+    { logTag: 'action', allowNoop },
   );
 }
 
@@ -315,7 +317,7 @@ export default async function handler(req, res) {
       if (wantJson) {
         // Dashboard path: run synchronously, return full package content as JSON.
         try {
-          const { pkg, docUrl } = await generateAndSendPackage(job, jobId, { roleTypes, additionalGuidance, applicationQuestions });
+          const { pkg, docUrl, draftQA, draftQAFailed, pastedQuestions, resumeSource } = await generateAndSendPackage(job, jobId, { roleTypes, additionalGuidance, applicationQuestions });
 
           // Persist docUrl (and the possibly-updated description) back to
           // job-status.json as a second, field-safe commit so the dashboard can
@@ -325,7 +327,9 @@ export default async function handler(req, res) {
               await updateJobStatus(githubToken, owner, repo, jobId, (j) => {
                 j.docUrl = docUrl;
                 if (jobDescription) j.description = jobDescription;
-              });
+              // Regenerating a package that produced the same doc URL writes
+              // nothing. Benign — unlike the status writes, this adds no timestamp.
+              }, { allowNoop: true });
               console.log(`[action] docUrl persisted for ${jobId}`);
             } catch (writeErr) {
               // Non-fatal — doc was created, URL just won't show on the dashboard
@@ -340,8 +344,27 @@ export default async function handler(req, res) {
               title: `Application Package: ${title} at ${company}`,
               resume: pkg.resume || '',
               applicationQuestions: pkg.applicationQuestions || [],
+              // Answers to the questions the USER pasted into the modal. Same
+              // bug as atsText had: generated on every package, then handed only
+              // to createGoogleDoc, so without Drive the user never saw the
+              // answers to the questions they typed in themselves.
+              draftQA: draftQA || [],
+              // When drafting failed, the panel still shows the user's own
+              // pasted questions with a retry note. Omitting the section made a
+              // failure look identical to never having asked.
+              draftQAFailed: !!draftQAFailed,
+              pastedQuestions: pastedQuestions || [],
+              // Which language the resume is actually built from, so the panel
+              // can print a sentence that is true in all three modes instead of
+              // always claiming the bullet bank was used verbatim.
+              resumeSource: resumeSource || 'ai-drafted',
               checklist: pkg.checklist || [],
               tailoringNotes: pkg.tailoringNotes || '',
+              // The ATS analysis (score, missing keywords, suggested bullet edits,
+              // bullet-optimization check) used to be generated and then dropped on
+              // the floor here: it only ever reached the Google Doc, so a user
+              // without Drive configured paid for the analysis and never saw it.
+              atsText: pkg.atsText || '',
             },
           });
         } catch (err) {

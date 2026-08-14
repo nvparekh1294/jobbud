@@ -19,7 +19,22 @@ export async function checkSerpApiBalance(apiKey) {
   return remaining;
 }
 
+// Per-run counters, read by index.mjs so quota is recorded from the searches
+// actually sent (they count against the quota even when they fail) rather than
+// a pre-computed estimate. The account balance check is not counted — it is not
+// a search.
+export const serpApiStats = { attempts: 0, queries: 0, failures: 0, lastError: null };
+
+function resetSerpApiRun() {
+  serpApiStats.attempts = 0;
+  serpApiStats.queries = 0;
+  serpApiStats.failures = 0;
+  serpApiStats.lastError = null;
+}
+
 export async function fetchSerpApi(config) {
+  resetSerpApiRun();
+
   if (!config.serpApiKey) {
     console.warn('SerpAPI key not set -- skipping');
     return [];
@@ -29,11 +44,14 @@ export async function fetchSerpApi(config) {
   const results = [];
 
   for (const query of queries) {
+    serpApiStats.queries++;
     try {
       const jobs = await searchSerpApi(query, config.serpApiKey);
       results.push(...jobs);
       await sleep(500);
     } catch (err) {
+      serpApiStats.failures++;
+      serpApiStats.lastError = err.message;
       console.error(`SerpAPI query failed for "${query.q}":`, err.message);
     }
   }
@@ -82,6 +100,7 @@ async function searchSerpApi(query, apiKey) {
     ...query,
   });
 
+  serpApiStats.attempts++;
   const response = await fetch(`${BASE_URL}?${params}`);
 
   if (!response.ok) {

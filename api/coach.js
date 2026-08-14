@@ -2,11 +2,15 @@
 // api/interview.js, api/interview-save.js, and api/interview-prep.js.
 // Route by GET/POST + ?action query param.
 
+import { stringify as stringifyYaml, parse as parseYaml } from 'yaml';
 import { generateInterviewPrepDoc } from '../scanner/interviewPackage.mjs';
-import { readGithubText, writeGithubFile, assertRepoPrivate, RepoPublicError } from '../lib/github.js';
+import { readGithubText, writeGithubFile, assertRepoPrivate, RepoPublicError, normalizeJsonDoc } from '../lib/github.js';
+import { detectAts } from '../lib/atsDetect.js';
 import { safeEqual } from '../lib/auth.mjs';
+import { isStarterPortalsList } from '../lib/portalsMeta.mjs';
 import { isExtractedTextEmpty, EMPTY_RESUME_ERROR } from '../lib/resumeParse.mjs';
 import { ANTI_AI_WRITING_RULES } from '../lib/writingRules.mjs';
+import { MEMORY_PATHS } from '../lib/memory.mjs';
 
 const SONNET_MODEL    = 'claude-sonnet-4-6';
 
@@ -126,9 +130,9 @@ async function readRadar(githubToken, owner, repo) {
   const raw = await readGithubFile(githubToken, owner, repo, 'data/radar.json');
   if (!raw) return { companies: {} };
   try {
-    const parsed = JSON.parse(raw);
-    if (!parsed.companies || typeof parsed.companies !== 'object') parsed.companies = {};
-    return parsed;
+    // The committed seed is the array `[]`; normalize it to the { companies: {} }
+    // model rather than patching a property onto an array (see lib/github.js).
+    return normalizeJsonDoc(JSON.parse(raw), { companies: {} });
   } catch (e) {
     console.warn(`[coach] radar.json parse error: ${e.message}`);
     return { companies: {} };
@@ -212,30 +216,46 @@ async function getOAuthAccessToken() {
 
 // ── Route: GET ?action=get-assets ─────────────────────────────────────────────
 // Replaces api/claude-md.js + api/story-bank.js in a single round trip.
-// Returns { claudeMd, storyBank, cvMd, bulletBankMd, articleDigestMd, profileYml }
-// — every durable profile file, so the dashboard can tell a returning user from a
-// brand-new one without a second round trip. Absent files come back as ''.
+// Returns { claudeMd, storyBank, cvMd, bulletBankMd, articleDigestMd, profileYml,
+// portalsYml, portalsIsStarter } — every durable profile file, so the dashboard
+// can tell a returning user from a brand-new one without a second round trip.
+// Absent files come back as ''.
 // The response is a SUPERSET of the old two-key shape; existing callers that
 // destructure { claudeMd, storyBank } are unaffected.
+//
+// portalsYml needs the extra flag because it is the one file that ships in EVERY
+// repo: the ~9.5KB starter watch-list is committed from the template, so a
+// brand-new user has one. Treating its presence as "this user has a profile"
+// would flip every first-time setup into the refresh flow. portalsIsStarter says
+// which kind it is, so the dashboard can prefill the companies step from the
+// content while leaving the starter list out of the returning-user decision.
+// The check runs here, not in the browser: dashboard/index.html is one plain
+// (non-module) inline <script>, so importing lib/portalsMeta.mjs there is
+// impossible and the alternative is a second copy of the fingerprint rules.
 
 async function handleGetAssets(req, res, githubToken, owner, repo) {
   try {
     // Every read is individually soft: one missing or unreadable file must not
     // blank out the others, or a returning user would look brand new.
-    const [claudeMd, storyBank, cvMd, bulletBankMd, articleDigestMd, profileYml] = await Promise.all([
+    const [claudeMd, storyBank, cvMd, bulletBankMd, articleDigestMd, profileYml, portalsYml] = await Promise.all([
       readGithubFile(githubToken, owner, repo, 'CLAUDE.md').catch(() => ''),
       readGithubFile(githubToken, owner, repo, 'story-bank.md').catch(() => ''),
       readGithubFile(githubToken, owner, repo, 'cv.md').catch(() => ''),
       readGithubFile(githubToken, owner, repo, 'bullet-bank.md').catch(() => ''),
       readGithubFile(githubToken, owner, repo, 'article-digest.md').catch(() => ''),
       readGithubFile(githubToken, owner, repo, 'config/profile.yml').catch(() => ''),
+      readGithubFile(githubToken, owner, repo, 'scanner/portals.yml').catch(() => ''),
     ]);
     res.setHeader('Cache-Control', 'no-store');
-    return res.status(200).json({ claudeMd, storyBank, cvMd, bulletBankMd, articleDigestMd, profileYml });
+    return res.status(200).json({
+      claudeMd, storyBank, cvMd, bulletBankMd, articleDigestMd, profileYml,
+      portalsYml, portalsIsStarter: isStarterPortalsList(portalsYml),
+    });
   } catch (err) {
     console.error('[coach] get-assets error:', err);
     return res.status(200).json({
       claudeMd: '', storyBank: '', cvMd: '', bulletBankMd: '', articleDigestMd: '', profileYml: '',
+      portalsYml: '', portalsIsStarter: false,
     });
   }
 }
@@ -370,7 +390,9 @@ async function writeStoryBankContent(githubToken, owner, repo, updatedContent, c
   await assertRepoPrivate(githubToken, owner, repo);
   await writeGithubFile(
     githubToken, owner, repo, 'story-bank.md', updatedContent, commitMessage,
-    { logTag: 'coach' },
+    // Re-saving a story without editing it is a normal user action, so an
+    // identical write here is a legitimate no-op rather than lost data.
+    { logTag: 'coach', allowNoop: true },
   );
 }
 
@@ -501,12 +523,14 @@ async function handleGeneratePrep(req, res, githubToken, owner, repo) {
         await writeGithubFile(
           githubToken, owner, repo, 'data/job-status.json',
           (current) => {
-            const status = current ? JSON.parse(current) : { jobs: {} };
-            if (status.jobs?.[jobId]) status.jobs[jobId].prepDocUrl = docUrl;
+            const status = normalizeJsonDoc(current ? JSON.parse(current) : { jobs: {} }, { jobs: {} });
+            if (status.jobs[jobId]) status.jobs[jobId].prepDocUrl = docUrl;
             return JSON.stringify(status, null, 2);
           },
           'chore: update job status [skip ci]',
-          { logTag: 'coach' },
+          // Re-generating prep for a job that already has this prepDocUrl (or whose
+          // record is gone) writes nothing. Benign — not the silent-loss case.
+          { logTag: 'coach', allowNoop: true },
         );
         console.log(`[coach] generate-prep persisted prepDocUrl for jobId=${jobId}`);
       } catch (persistErr) {
@@ -845,8 +869,13 @@ async function handleParseResume(req, res) {
 
     if (mimeType === 'application/pdf') {
       try {
-        const { default: pdfParse } = await import('pdf-parse');
-        const result = await pdfParse(buffer);
+        // unpdf wraps a modern, serverless-safe pdf.js build (no worker, no
+        // canvas, no native deps). The previous dependency, pdf-parse, bundles
+        // pdf.js v1.10.100 (2018), whose UMD module init throws under Vercel's
+        // bytecode-caching module loader — every PDF failed at import time.
+        const { extractText, getDocumentProxy } = await import('unpdf');
+        const pdf = await getDocumentProxy(new Uint8Array(buffer));
+        const result = await extractText(pdf, { mergePages: true });
         text = result.text;
       } catch (parseErr) {
         console.error('[coach] parse-resume PDF error:', parseErr?.stack || parseErr);
@@ -1036,24 +1065,57 @@ Be specific and grounded only in what the user told you. Use placeholders for mi
 // path the frontend happened to call. This company→theme, role-type-tagged,
 // priority-ranked format is the one the downstream application-package bullet selection
 // expects.
-const BULLET_BANK_SYSTEM = (updatePrefix = '') => `${updatePrefix}You are generating a bullet-bank.md file for a job search automation system. This file is a curated library of strong, metric-backed achievement bullets the AI selects from verbatim when generating tailored resumes and outreach messages.
+//
+// THE VERBATIM RULE: this prompt used to instruct the model to "write 2-3 variant
+// bullets" per theme — i.e. to REWRITE the user's resume in their own bank, so the
+// bullets a generated resume used verbatim were the AI's sentences, not the user's.
+// That design is rejected. The bank's body is now the user's own resume language,
+// character for character. AI-written content is still valuable — an achievement the
+// user described in conversation but never put on their resume is worth surfacing —
+// so it goes in a clearly-flagged "Suggested Additions" section at the BOTTOM, each
+// bullet tagged [ai-suggested] with a one-line rationale. The action-verb / one-metric
+// / write-for-strength requirements apply ONLY to that section; they are never license
+// to touch a resume bullet. scanner/applicationPackage.mjs enforces the split at
+// generation time: suggestions can never reach the resume body.
+//
+// The `Tags:` legend line is a machine-readable contract, not decoration —
+// lib/bulletBank.mjs parses it so the Generate Package modal can show the user their
+// OWN role types instead of a hardcoded list. Keep the format stable.
+const BULLET_BANK_SYSTEM = (updatePrefix = '') => `${updatePrefix}You are generating a bullet-bank.md file for a job search automation system. This file is the library of resume bullets the AI selects from verbatim when generating tailored resumes and outreach messages.
+
+THE MOST IMPORTANT RULE: every bullet in the main body of this file must be taken VERBATIM from the user's resume — the user's exact wording, character for character. You are ORGANIZING and TAGGING the user's resume, not rewriting it. Do not paraphrase, tighten, strengthen, re-order words, swap a verb, add a metric, merge two bullets, or split one bullet into two. If a resume bullet is weak, wordy, or missing a number, it still goes in the body exactly as written. Copying is the entire job.
 
 FORMAT — organize by company, then by theme within each company:
 
-1. Define role-type tags based on the user's stated target roles (e.g. [ops], [strategy], [finance], [product], [sales] — choose tags that match what THIS user is targeting, not a fixed list)
-2. Group bullets under each company by theme (e.g. 'Theme: Cross-Functional Leadership', 'Theme: Financial Planning')
-3. Tag each bullet with the role types it applies to, plus a priority: [primary] (strongest, most broadly applicable phrasing for this theme), [alt] (use if primary doesn't fit the JD), [optional] (only if the JD specifically calls for it)
-4. Where the same achievement could be framed multiple ways for different role types, write 2-3 variant bullets for that theme rather than one generic version
-5. At the top of the file, include a short 'How to Use This File' section defining the role-type tags you chose and explaining the priority system, so the user understands the format
+1. Define role-type tags based on the user's stated target roles (e.g. ops, strategy, finance, product, sales — choose tags that match what THIS user is targeting, not a fixed list)
+2. Group the user's existing resume bullets under each company by theme (e.g. 'Theme: Cross-Functional Leadership', 'Theme: Financial Planning'). Grouping and ordering are yours to choose; the bullet TEXT is not.
+3. Tag each bullet with the role types it applies to, plus a priority: [primary] (strongest, most broadly applicable for this theme), [alt] (use if primary doesn't fit the JD), [optional] (only if the JD specifically calls for it)
+4. Every resume bullet the user has should appear exactly ONCE in the body. Do not create variants — a variant is a rewrite. If one bullet suits several role types, give it several role-type tags.
+5. At the top of the file, include a 'How to Use This File' section that explains the priority system and defines the role-type tags you chose. That section MUST contain one line in exactly this machine-readable format, on a single line:
 
-REQUIREMENTS for each bullet:
-- Start with a strong action verb
-- Include a specific metric or outcome where possible
-- Written in past tense
-- 1-2 lines maximum
-- Never fabricate metrics — use a placeholder like [ADD: specific number] if the user mentioned an achievement but not the number
+Tags: slug = Human readable label; slug = Human readable label
 
-If the input is thin (short resume, brief conversation), still use this format, but produce fewer bullets and fewer variants per theme rather than padding with weak or repetitive content. A sparse file in the correct format is better than a rich file with fabricated content.
+   Use lowercase slugs with no spaces (hyphens are fine), separate entries with semicolons, and list every role-type tag you used. This line is parsed by the app to build the user's role-type picker, so its format is fixed. Example:
+
+Tags: ops = Business Operations / Chief of Staff; finance = Strategic Finance & FP&A
+
+SUGGESTED ADDITIONS SECTION — the one place you may write:
+At the BOTTOM of the file, after all companies, add a final section with this exact heading:
+
+## Suggested Additions (AI-written — not from your resume)
+
+Put in it any achievement the user described in the conversation that does NOT appear on their resume. These are the only bullets you author. Each one must:
+- Carry the literal tag [ai-suggested] alongside its role-type tags, e.g. \`[ops][ai-suggested]\`
+- Be followed by an indented line starting with "Why:" giving ONE sentence on why adding this to the resume would help (what it proves, what gap it fills, which target roles it strengthens)
+- Follow these writing requirements — WHICH APPLY ONLY TO THIS SECTION, never to a resume bullet: start with a strong action verb, include exactly one specific metric or concrete outcome, past tense, 1-2 lines maximum, written for maximum strength
+- Never fabricate a metric. If the user mentioned an achievement but not the number, write [ADD: specific number] and leave it for them to fill in. The same rule holds everywhere in this file: no invented numbers, companies, titles, dates, or credentials.
+
+Open the section with one line telling the user these bullets are AI-written, are not used on generated resumes, and will only be suggested alongside a package until the user adds one to their own resume. That same line must carry the accuracy warning, in these words or very close to them: "These are AI-drafted from your conversation, not from your resume — they may not be 100% accurate. Review and edit each one before using it anywhere."
+If the conversation surfaced nothing that is missing from the resume, still emit the heading with a single line saying nothing was found.
+
+If no resume was provided at all and you must work from the conversation only, say so in one line under 'How to Use This File' and put EVERY bullet in the Suggested Additions section — none of it is the user's resume language, so none of it belongs in the body.
+
+If the input is thin, produce fewer bullets rather than padding with weak or repetitive content. A sparse file in the correct format is better than a rich file with invented content.
 
 Output clean markdown starting with # Bullet Bank. No preamble.`;
 
@@ -1218,22 +1280,12 @@ Be specific and grounded only in what the user told you. Use placeholders for mi
 // plus narrative sections the AI scoring/coaching read. Populated only from what
 // the user provided; anything missing is a [placeholder], never fabricated.
 
-async function handleGenerateProfile(req, res) {
-  const { anthropicKey, resumeText, transcriptText, existingFiles, updatePrefix } = buildOnboardingShared(req);
-  if (!anthropicKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
-  console.log('[coach] action=generate-profile');
-  try {
-    const existingBlock = existingFiles?.profileYml
-      ? `EXISTING config/profile.yml:\n${existingFiles.profileYml}\n\n`
-      : null;
-    const baseContent = resumeText
-      ? `RESUME:\n${resumeText}\n\nCONVERSATION:\n${transcriptText || '(No conversation yet.)'}`
-      : `CONVERSATION:\n${transcriptText || '(No conversation yet.)'}`;
-    const userContent = existingBlock ? `${existingBlock}${baseContent}` : baseContent;
-    const data = await anthropicFetch(anthropicKey, {
-      model: SONNET_MODEL,
-      max_tokens: 3000,
-      system: `${updatePrefix}You are generating a structured config/profile.yml file for a job search automation system. This file is read by the scanner at runtime to configure search keywords, locations, salary filters, and deal-breakers. It must be valid YAML.
+// Single source of truth for the profile.yml generation prompt. Used by the
+// onboarding path (handleGenerateProfile) AND by apply-memory-to-profile, which
+// re-runs the same generation with the user's memory as the conversation input.
+// Sharing it matters: the two paths write the same file, and a drift between them
+// would silently reshape the config the scanner reads at runtime.
+const PROFILE_SYSTEM = (updatePrefix = '') => `${updatePrefix}You are generating a structured config/profile.yml file for a job search automation system. This file is read by the scanner at runtime to configure search keywords, locations, salary filters, and deal-breakers. It must be valid YAML.
 
 Generate the file with exactly this structure — populate each field from the resume and conversation. Use placeholders like [ADD: value] for anything not provided. Never fabricate values.
 
@@ -1295,13 +1347,292 @@ deal_breakers: |
 nice_to_haves: |
   [nice-to-haves stated by the user, or 'None stated']
 
-Output valid YAML only. No preamble, no explanation, no markdown code fences. Start directly with # JobBud Profile.`,
+Output valid YAML only. No preamble, no explanation, no markdown code fences. Start directly with # JobBud Profile.`;
+
+async function handleGenerateProfile(req, res) {
+  const { anthropicKey, resumeText, transcriptText, existingFiles, updatePrefix } = buildOnboardingShared(req);
+  if (!anthropicKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  console.log('[coach] action=generate-profile');
+  try {
+    const existingBlock = existingFiles?.profileYml
+      ? `EXISTING config/profile.yml:\n${existingFiles.profileYml}\n\n`
+      : null;
+    const baseContent = resumeText
+      ? `RESUME:\n${resumeText}\n\nCONVERSATION:\n${transcriptText || '(No conversation yet.)'}`
+      : `CONVERSATION:\n${transcriptText || '(No conversation yet.)'}`;
+    const userContent = existingBlock ? `${existingBlock}${baseContent}` : baseContent;
+    const data = await anthropicFetch(anthropicKey, {
+      model: SONNET_MODEL,
+      max_tokens: 3000,
+      system: PROFILE_SYSTEM(updatePrefix),
       messages: [{ role: 'user', content: userContent }],
     });
     return res.status(200).json({ profileYml: data.content?.[0]?.text ?? '' });
   } catch (err) {
     console.error('[coach] generate-profile error:', err);
     return res.status(200).json({ error: 'Something went wrong. Please try again.' });
+  }
+}
+
+// ── Route: POST ?action=apply-memory-to-profile ──────────────────────────────
+//
+// THE GAP THIS CLOSES: the Memory page is titled "What JobBud knows about you",
+// so a user who wants different jobs surfaced edits their target roles there. It
+// changes nothing about what gets searched. The scanner reads config/profile.yml
+// — its target_roles drive both job scoring AND the JSearch/Adzuna search queries
+// (scanner/config.mjs resolveTargetRoles) — and nothing ever propagated memory
+// into it. The edit felt like it worked and quietly did not.
+//
+// This runs the SAME generation the onboarding refresh uses, with the saved
+// memory as the conversation input and the existing profile.yml as ground truth,
+// then reports back in plain English what actually changed about the search.
+//
+// It is deliberately EXPLICIT (a button on the Memory page) rather than fired
+// automatically on every memory save. profile.yml is user-editable config that
+// drives real API spend; regenerating it silently on each Save — including the
+// fire-and-forget saves the chat distillation makes — would be exactly the kind
+// of unannounced overwrite the update-mode prompt exists to prevent. One click,
+// and the user is told what moved.
+
+// Pull the search-relevant fields out of a profile.yml for before/after
+// comparison. Never throws: malformed YAML degrades to an empty summary rather
+// than failing the write the user asked for.
+export function summarizeSearchFields(yamlText) {
+  try {
+    const doc = parseYaml(yamlText || '') || {};
+    const list = v => (Array.isArray(v) ? v.filter(x => typeof x === 'string') : []);
+    return {
+      targetRoles: list(doc.target_roles),
+      locations: (Array.isArray(doc.target_locations) ? doc.target_locations : [])
+        .map(l => (l && typeof l === 'object' ? [l.city, l.region].filter(Boolean).join(', ') : String(l || '')))
+        .filter(Boolean),
+      includeRemote: doc.include_remote === true,
+      minSalary: Number.isFinite(doc.min_salary) ? doc.min_salary : null,
+    };
+  } catch {
+    return { targetRoles: [], locations: [], includeRemote: false, minSalary: null };
+  }
+}
+
+// Plain-English "here is what your search does now" lines. The first line always
+// states the search titles, because that is the thing users believe the Memory
+// page controls.
+export function describeProfileChange(before, after) {
+  const lines = [];
+  const same = (a, b) => a.join('|') === b.join('|');
+  lines.push(after.targetRoles.length
+    ? `Search titles are now: ${after.targetRoles.join(', ')}`
+    : 'No search titles are set — JobBud has nothing to search for yet.');
+  if (!same(before.targetRoles, after.targetRoles)) {
+    lines.push(before.targetRoles.length
+      ? `(they were: ${before.targetRoles.join(', ')})`
+      : '(there were none before)');
+  }
+  if (!same(before.locations, after.locations)) {
+    lines.push(`Locations searched: ${after.locations.join('; ') || 'none set'}`);
+  }
+  if (before.includeRemote !== after.includeRemote) {
+    lines.push(after.includeRemote ? 'Remote roles are now included.' : 'Remote roles are no longer included.');
+  }
+  if (before.minSalary !== after.minSalary) {
+    lines.push(after.minSalary ? `Minimum salary: ${after.minSalary.toLocaleString()}` : 'No minimum salary filter.');
+  }
+  const changed = !same(before.targetRoles, after.targetRoles)
+    || !same(before.locations, after.locations)
+    || before.includeRemote !== after.includeRemote
+    || before.minSalary !== after.minSalary;
+  if (!changed) lines.push('Nothing about your search changed — it already matched your memory.');
+  return { lines, changed };
+}
+
+async function handleApplyMemoryToProfile(req, res, githubToken, owner, repo) {
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  if (!anthropicKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  console.log('[coach] action=apply-memory-to-profile');
+
+  try {
+    const [existingProfile, memProfile] = await Promise.all([
+      readGithubText(githubToken, owner, repo, 'config/profile.yml'),
+      readGithubText(githubToken, owner, repo, MEMORY_PATHS.profile),
+    ]);
+
+    if (!memProfile.trim()) {
+      return res.status(400).json({
+        error: "There's nothing in your profile memory yet. Add what you're looking for above, save it, then apply it.",
+      });
+    }
+
+    // Update mode whenever a profile already exists: the existing file is ground
+    // truth, so hand-tuned values the memory does not mention are preserved.
+    const updatePrefix = existingProfile
+      ? `CRITICAL INSTRUCTION: You are UPDATING an existing file, not generating from scratch. The existing file content is the ground truth — treat it as fully accurate and complete. Your job is to:
+1. PRESERVE all existing content exactly as-is unless the new information explicitly contradicts or adds to it
+2. INCORPORATE any new information into the appropriate sections
+3. OUTPUT the complete updated file — not a summary, not a diff, not a description of changes. The full file, start to finish.
+If the new information says nothing relevant to a section, reproduce that section exactly from the existing file.
+Do NOT treat absence of information as a signal to clear or placeholder-ize existing content.
+
+`
+      : '';
+
+    const existingBlock = existingProfile ? `EXISTING config/profile.yml:\n${existingProfile}\n\n` : '';
+    const data = await anthropicFetch(anthropicKey, {
+      model: SONNET_MODEL,
+      max_tokens: 3000,
+      system: PROFILE_SYSTEM(updatePrefix),
+      messages: [{
+        role: 'user',
+        content: `${existingBlock}CONVERSATION:\nThe user maintains a memory file describing themselves and what they are looking for. This is its current content — treat it as things the user has told you directly:\n\n${memProfile}`,
+      }],
+    });
+    const profileYml = data.content?.[0]?.text ?? '';
+    if (!profileYml.trim() || !/target_roles/.test(profileYml)) {
+      console.warn('[coach] apply-memory-to-profile: generation returned no usable YAML — leaving profile.yml untouched');
+      // 502, not 200: nothing was written, so this is a failure. A 200 with an
+      // error body makes every non-browser caller (and any future retry logic)
+      // read the request as having succeeded.
+      return res.status(502).json({ error: "Couldn't rebuild your search profile just now. Please try again." });
+    }
+
+    const before = summarizeSearchFields(existingProfile);
+    const after = summarizeSearchFields(profileYml);
+
+    // profile.yml carries the user's real name, location, and salary floor.
+    await assertRepoPrivate(githubToken, owner, repo);
+    await writeGithubFile(
+      githubToken, owner, repo, 'config/profile.yml',
+      () => (profileYml.endsWith('\n') ? profileYml : profileYml + '\n'),
+      'chore: apply memory to search profile [skip ci]',
+      { logTag: 'coach', allowNoop: true },
+    );
+
+    const { lines, changed } = describeProfileChange(before, after);
+    console.log(`[coach] apply-memory-to-profile changed=${changed} titles=${after.targetRoles.length}`);
+    return res.status(200).json({ success: true, changed, summary: lines });
+  } catch (err) {
+    if (err instanceof RepoPublicError) {
+      console.warn(`[coach] apply-memory-to-profile refused: ${err.message}`);
+      return res.status(403).json({ error: err.message, code: 'REPO_PUBLIC' });
+    }
+    console.error('[coach] apply-memory-to-profile error:', err);
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
+  }
+}
+
+// ── Route: POST ?action=generate-portals ─────────────────────────────────────
+// Builds a personalized scanner/portals.yml from the companies the user gave
+// during onboarding. The starter portals.yml ships with the owner's 38-company
+// list, so without this every new user's first digests scan the wrong companies.
+//
+// This endpoint is fully DETERMINISTIC — no Anthropic call. Each company's ATS is
+// derived from its careers URL by lib/atsDetect.js (pure hostname/path parsing),
+// and the YAML is assembled from that. It returns the generated YAML plus the
+// per-entry detected ATS so the UI can show the user what was recognised.
+
+// The ATS values the scanner's router understands (scanner/portalScanner.mjs:99).
+// Anything else is dropped there with a warning, so we never emit it.
+const PORTAL_ATS = new Set(['greenhouse', 'ashby', 'lever', 'workday', 'custom']);
+
+// A portals entry is only usable if it has the id fields its ATS fetcher needs.
+// The scanner does no schema validation and fails silently on malformed entries
+// (portalScanner.mjs:105-107, :300-303, :348), so we validate here instead.
+function isUsablePortalEntry(entry) {
+  if (!PORTAL_ATS.has(entry.ats)) return false;
+  if (entry.ats === 'workday') return !!(entry.workday_tenant && entry.workday_site);
+  if (entry.ats === 'custom')  return !!entry.careers_url;
+  return !!entry.ats_id; // greenhouse | ashby | lever
+}
+
+// Comment header mirroring scanner/portals.yml's own docs block, so a user who
+// later hand-edits the generated file sees the same field reference.
+// The "Generated by JobBud onboarding" line is load-bearing, not decoration:
+// lib/portalsMeta.mjs reads it to tell a personalized watch-list apart from the
+// example one that ships with the repo. Keep that phrase if you reword this.
+const PORTALS_HEADER = `# Portal Scanner Configuration
+# Generated by JobBud onboarding from your target companies.
+# Change it any time from the dashboard: Radar → Edit Watch List.
+#
+# ats:         greenhouse | ashby | lever | workday | custom
+# ats_id:      slug used by the ATS (e.g. boards-api.greenhouse.io/v1/boards/{ats_id}/jobs)
+# keywords:    if non-empty, only roles whose title contains ≥1 keyword are returned
+#              (add some for broad companies like Google or Meta to cut noise)
+# stealth:     true = skip this company entirely (no public ATS yet)
+# category:    informational only — "user" for companies you added here
+#
+# Hand-edit this file any time to tune keywords, add Workday specifics, or mark
+# stealth companies. See scanner/portals.yml history for more examples.
+`;
+
+// Pure core, exported for tests: turn [{ name, careers_url }] into portals.yml
+// text + the normalized entries. Throws on invalid input so the handler can
+// translate it into a 400. Kept separate from the req/res wrapper so the smoke
+// test and unit tests can exercise it directly.
+export function buildPortalsYml(companies) {
+  if (!Array.isArray(companies) || companies.length === 0) {
+    throw new Error('Provide at least one company with a name and careers URL.');
+  }
+
+  const entries = companies.map((c, i) => {
+    const name = (c?.name || '').trim();
+    const careersUrl = (c?.careers_url || '').trim();
+    if (!name)       throw new Error(`Company #${i + 1} is missing a name.`);
+    if (!careersUrl) throw new Error(`"${name}" is missing a careers URL.`);
+
+    const detected = detectAts(careersUrl);
+
+    // Assemble in the same field order as the existing portals.yml entries.
+    const entry = { name, careers_url: detected.careers_url, ats: detected.ats };
+    if (detected.ats === 'workday') {
+      entry.workday_tenant = detected.workday_tenant;
+      entry.workday_site   = detected.workday_site;
+    } else if (detected.ats !== 'custom') {
+      entry.ats_id = detected.ats_id;
+    }
+    entry.keywords = [];
+    entry.stealth  = false;
+    entry.category = 'user';
+
+    if (!isUsablePortalEntry(entry)) {
+      throw new Error(`Could not build a valid scanner entry for "${name}" (${careersUrl}).`);
+    }
+    return entry;
+  });
+
+  const portalsYml = PORTALS_HEADER + '\n' + stringifyYaml({ companies: entries });
+  return { portalsYml, entries };
+}
+
+async function handleGeneratePortals(req, res) {
+  const { companies } = req.body || {};
+  console.log(`[coach] action=generate-portals count=${Array.isArray(companies) ? companies.length : 0}`);
+  try {
+    const { portalsYml, entries } = buildPortalsYml(companies);
+    return res.status(200).json({ portalsYml, entries });
+  } catch (err) {
+    // Validation failures are user-fixable — surface the message with a 400.
+    console.warn('[coach] generate-portals rejected:', err.message);
+    return res.status(400).json({ error: err.message });
+  }
+}
+
+// ── Route: GET ?action=get-portals ───────────────────────────────────────────
+// Returns the watch-list file the scanner is actually using right now, so the
+// dashboard's Watch List editor can prefill its rows from the truth in the repo
+// rather than from whatever onboarding happened to build in this browser session.
+//
+// Soft read: a missing or unreadable file comes back as '' and the editor opens
+// with a single blank row, which is a fine place to start. isStarterList tells
+// the editor whether to show the "you're still on the example list" banner.
+async function handleGetPortals(req, res, githubToken, owner, repo) {
+  try {
+    const portalsYml = await readGithubText(githubToken, owner, repo, 'scanner/portals.yml');
+    const isStarterList = isStarterPortalsList(portalsYml);
+    console.log(`[coach] action=get-portals bytes=${portalsYml.length} starter=${isStarterList}`);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json({ portalsYml, isStarterList });
+  } catch (err) {
+    console.error('[coach] get-portals error:', err);
+    return res.status(500).json({ error: 'Could not load your watch list. Please try again.' });
   }
 }
 
@@ -1319,6 +1650,11 @@ const ONBOARDING_FILE_MAP = [
   { path: 'bullet-bank.md',      key: 'bulletBankMd' },
   { path: 'article-digest.md',   key: 'articleDigestMd' },
   { path: 'config/profile.yml',  key: 'profileYml' },
+  // scanner/portals.yml is the company list the scanner monitors. Saving REPLACES
+  // the owner's starter list with the user's own — that is the whole point of
+  // generating it in onboarding. It carries only company names + public careers
+  // URLs (no personal history), but rides the same assertRepoPrivate write path.
+  { path: 'scanner/portals.yml', key: 'portalsYml' },
 ];
 
 async function handleSaveOnboarding(req, res, githubToken, owner, repo) {
@@ -1338,7 +1674,9 @@ async function handleSaveOnboarding(req, res, githubToken, owner, repo) {
     for (const f of toWrite) {
       await writeGithubFile(
         githubToken, owner, repo, f.path, files[f.key],
-        `chore: save ${f.path} from onboarding [skip ci]`, { logTag: 'coach' },
+        // Saving onboarding twice without regenerating writes identical files —
+        // a legitimate idempotent save, not a dropped write.
+        `chore: save ${f.path} from onboarding [skip ci]`, { logTag: 'coach', allowNoop: true },
       );
       saved.push(f.path);
     }
@@ -1367,8 +1705,9 @@ async function writeMockSessions(githubToken, owner, repo, content) {
 async function handleGetMockSessions(req, res, githubToken, owner, repo) {
   try {
     const raw = await readGithubFile(githubToken, owner, repo, 'data/mock-sessions.json');
-    const data = raw ? JSON.parse(raw) : { sessions: [] };
-    console.log(`[coach] action=get-mock-sessions count=${(data.sessions || []).length}`);
+    // The committed seed is the array `[]`; the model is { sessions: [] }.
+    const data = normalizeJsonDoc(raw ? JSON.parse(raw) : { sessions: [] }, { sessions: [] });
+    console.log(`[coach] action=get-mock-sessions count=${data.sessions.length}`);
     return res.status(200).json(data);
   } catch (err) {
     console.error('[coach] get-mock-sessions error:', err);
@@ -1382,8 +1721,10 @@ async function handleSaveMockSession(req, res, githubToken, owner, repo) {
     if (!session || !session.id) return res.status(400).json({ error: 'session with id is required' });
 
     const raw = await readGithubFile(githubToken, owner, repo, 'data/mock-sessions.json');
-    const data = raw ? JSON.parse(raw) : { sessions: [] };
-    data.sessions = [session, ...(data.sessions || [])].slice(0, 20);
+    // On a fresh install the seed is the array `[]`. Assigning .sessions to it would
+    // be dropped by JSON.stringify and the saved session would vanish on reload.
+    const data = normalizeJsonDoc(raw ? JSON.parse(raw) : { sessions: [] }, { sessions: [] });
+    data.sessions = [session, ...data.sessions].slice(0, 20);
 
     await writeMockSessions(githubToken, owner, repo, data);
     console.log(`[coach] action=save-mock-session sessionId=${session.id}`);
@@ -1432,7 +1773,10 @@ export default async function handler(req, res) {
     if (req.method === 'POST' && action === 'generate-bulletbank')     return handleGenerateBulletBank(req, res);
     if (req.method === 'POST' && action === 'generate-articledigest')  return handleGenerateArticleDigest(req, res);
     if (req.method === 'POST' && action === 'generate-profile')         return handleGenerateProfile(req, res);
+    if (req.method === 'POST' && action === 'generate-portals')         return handleGeneratePortals(req, res);
+    if (req.method === 'GET'  && action === 'get-portals')              return handleGetPortals(req, res, githubToken, owner, repo);
     if (req.method === 'POST' && action === 'save-onboarding')          return handleSaveOnboarding(req, res, githubToken, owner, repo);
+    if (req.method === 'POST' && action === 'apply-memory-to-profile')  return handleApplyMemoryToProfile(req, res, githubToken, owner, repo);
     if (req.method === 'GET'  && action === 'get-mock-sessions')       return handleGetMockSessions(req, res, githubToken, owner, repo);
     if (req.method === 'POST' && action === 'save-mock-session')   return handleSaveMockSession(req, res, githubToken, owner, repo);
     return res.status(400).json({ error: `Unknown action: ${action}` });

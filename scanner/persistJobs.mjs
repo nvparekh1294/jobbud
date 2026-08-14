@@ -1,4 +1,4 @@
-import { readGithubFile, writeGithubFile } from '../lib/github.js';
+import { readGithubFile, writeGithubFile, normalizeJsonDoc } from '../lib/github.js';
 
 // Build the job record persisted for a freshly-evaluated job.
 function buildJobRecord(job) {
@@ -62,11 +62,11 @@ export async function persistJobs(evaluatedJobs) {
   let jobStatus;
   try {
     const { exists, content } = await readGithubFile(githubToken, owner, repo, 'data/job-status.json');
-    jobStatus = exists ? JSON.parse(content) : { jobs: {} };
+    // The committed seed is the array `[]`; normalize it to the { jobs: {} } model.
+    jobStatus = normalizeJsonDoc(exists ? JSON.parse(content) : { jobs: {} }, { jobs: {} });
   } catch (err) {
     throw new Error(`Failed to load job-status.json: ${err.message}`);
   }
-  if (!jobStatus.jobs) jobStatus.jobs = {};
   const anyNew = candidates.some(job => !jobStatus.jobs[job._fingerprint]);
   if (!anyNew) {
     console.log('[persist] No new jobs to persist');
@@ -81,8 +81,10 @@ export async function persistJobs(evaluatedJobs) {
     await writeGithubFile(
       githubToken, owner, repo, 'data/job-status.json',
       (current) => {
-        const jobStatus = current ? JSON.parse(current) : { jobs: {} };
-        if (!jobStatus.jobs) jobStatus.jobs = {};
+        // On a fresh install `current` is the array seed `[]`. Patching .jobs onto an
+        // array would be dropped by JSON.stringify, so the whole first scan's jobs
+        // would silently vanish — normalize to a real { jobs: {} } document first.
+        const jobStatus = normalizeJsonDoc(current ? JSON.parse(current) : { jobs: {} }, { jobs: {} });
 
         added = 0;
         for (const job of candidates) {
@@ -95,7 +97,11 @@ export async function persistJobs(evaluatedJobs) {
         return JSON.stringify(jobStatus, null, 2);
       },
       'chore: persist scanned jobs [skip ci]',
-      { logTag: 'persist' },
+      // Predicate, not a blanket allow: this is the highest-value write in the
+      // system, so the guard must stay armed here. added === 0 means a concurrent
+      // writer added every candidate between the pre-check and this attempt —
+      // expected. added > 0 with nothing landing is the silent-loss bug itself.
+      { logTag: 'persist', allowNoop: () => added === 0 },
     );
   } catch (err) {
     // Re-throw so the caller (scanner/index.mjs) can gate markScored on success.

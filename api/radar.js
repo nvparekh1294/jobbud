@@ -7,7 +7,7 @@
 // everywhere else in this codebase (see api/action.js putJobStatus).
 
 import crypto from 'crypto';
-import { readGithubFile, writeGithubFile } from '../lib/github.js';
+import { readGithubFile, writeGithubFile, normalizeJsonDoc } from '../lib/github.js';
 import { safeEqual } from '../lib/auth.mjs';
 
 const GITHUB_API = 'https://api.github.com';
@@ -23,13 +23,36 @@ const CONTACT_STATUSES = ['not_contacted', 'contacted', 'replied', 'meeting_sche
 const ATS_BOARDS = ['', 'greenhouse', 'ashby', 'lever'];
 
 // ── Read radar.json (handles the >1MB download_url case via the shared helper) ──
-async function readRadar(githubToken, owner, repo) {
+//
+// SHAPE NORMALIZATION (fixes the "added company vanishes on refresh" bug).
+// The committed seed at data/radar.json is `[]` — an ARRAY — but the radar model
+// is an OBJECT: { companies: { <id>: {...} } }. The old code did
+// `parsed.companies = {}` on whatever JSON.parse returned. Setting a named
+// property on an array "works" in memory, but JSON.stringify serializes arrays by
+// INDEX and silently drops every non-index property — so the write re-serialized
+// to the literal `[]` it started from. A byte-identical blob makes the Git Data
+// API produce an EMPTY commit, the endpoint reports success, the UI shows the new
+// company, and the next read returns `[]` again. Radar has never persisted for any
+// fresh install.
+//
+// The fix: anything that is not a plain object is DISCARDED and replaced with a
+// fresh one. Never patch the parsed value in place. Existing user files that still
+// contain `[]` heal on their next successful write, which now serializes a real
+// object. Per CONTRIBUTING.md the committed seed itself must never be edited —
+// shape migrations belong here, at read time.
+//
+// The rule is shared with the other array-seeded files (job-status.json,
+// mock-sessions.json) via lib/github.js normalizeJsonDoc — one invariant, one
+// implementation. This wrapper just names the radar's document model.
+export function normalizeRadar(parsed) {
+  return normalizeJsonDoc(parsed, { companies: {} });
+}
+
+export async function readRadar(githubToken, owner, repo) {
   const { exists, content } = await readGithubFile(githubToken, owner, repo, RADAR_PATH);
   // First run before radar.json is committed — start from an empty model.
   if (!exists) return { companies: {} };
-  const parsed = JSON.parse(content);
-  if (!parsed.companies || typeof parsed.companies !== 'object') parsed.companies = {};
-  return parsed;
+  return normalizeRadar(JSON.parse(content));
 }
 
 // ── Write radar.json via the shared Git Data API helper (blob → tree → commit → ref, with retry) ──
@@ -38,7 +61,12 @@ async function writeRadar(githubToken, owner, repo, content, message) {
     githubToken, owner, repo, RADAR_PATH,
     JSON.stringify(content, null, 2) + '\n',
     message,
-    { logTag: 'radar' },
+    // Unchanged saves are routine here: the edit modal re-submits every field, and
+    // re-picking the status a company already has changes nothing. lastActivity is
+    // date-only, so a same-day no-change save is byte-identical. None of that is
+    // data loss — the array-seed bug it would otherwise catch is already prevented
+    // upstream, at the READ site, by normalizeRadar.
+    { logTag: 'radar', allowNoop: true },
   );
 }
 

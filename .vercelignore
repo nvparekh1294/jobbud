@@ -1,0 +1,52 @@
+# Allowlist for Vercel deployments: ship ONLY what the serverless functions
+# (api/*) and the dashboard need at runtime. Everything a user commits to their
+# own repo stays OUT of the public deployment — cv.md, config/profile.yml,
+# bullet-bank.md, story-bank.md, article-digest.md, CLAUDE.md, data/* (the
+# dashboard writes these back to the repo via "Save to my repo"),
+# linkedin-research/*, and any .env* file.
+#
+# Vercel bundles each function from the UPLOADED fileset, so anything a function
+# imports at runtime MUST be re-included below or the function breaks. The
+# included set was derived by tracing every transitive import of api/*.js.
+#
+# Uses git's anchored "/*" allowlist form (see gitignore docs): a bare "*"
+# matches at every depth and would re-exclude files inside re-included dirs, so
+# each level is handled explicitly.
+
+# 1. Ignore every top-level entry.
+/*
+
+# 2. Ship the api directory in full — every file under it is needed.
+!/api
+
+# 3. lib: ONLY the modules imported by api/*.js. ssrf.mjs is scanner-only (never
+#    reached from an api function), so it is left out. Re-include the dir,
+#    re-exclude its contents, then add back the traced files.
+!/lib
+/lib/*
+!/lib/atsDetect.js
+!/lib/bulletBank.mjs
+!/lib/auth.mjs
+!/lib/github.js
+!/lib/memory.mjs
+!/lib/portalsMeta.mjs
+!/lib/resumeParse.mjs
+!/lib/writingRules.mjs
+
+# 4. scanner: ONLY the modules imported by api/*.js at runtime.
+!/scanner
+/scanner/*
+!/scanner/applicationPackage.mjs
+!/scanner/config.mjs
+!/scanner/enrich.mjs
+!/scanner/evaluate.mjs
+!/scanner/html.mjs
+!/scanner/interviewPackage.mjs
+
+# 5. Ship the dashboard.
+!/dashboard
+
+# 6. Ship the manifests and the Vercel config.
+!/package.json
+!/package-lock.json
+!/vercel.json

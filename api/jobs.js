@@ -3,15 +3,23 @@
 // even though the repo is private.
 
 import { safeEqual } from '../lib/auth.mjs';
+import { normalizeJsonDoc, readGithubText } from '../lib/github.js';
+import { parseBulletBankTags, FALLBACK_ROLE_TAGS } from '../lib/bulletBank.mjs';
 
 export default async function handler(req, res) {
   const password = process.env.DASHBOARD_PASSWORD;
 
-  // ── Config probe — called by the frontend on load to decide whether to show the gate.
-  // No auth needed: it only reveals whether a password is required, not any data.
+  // ── Config probe — called by the frontend on load, before the gate is answered.
+  // No auth needed: it reveals which optional integrations are wired up, not any data.
+  //
+  // It used to also return `passwordRequired`, and the frontend used it to skip the
+  // gate entirely when no password was set — straight into a dashboard where every
+  // request 401'd, because the auth below fails closed. The gate is now
+  // unconditional and /api/health explains an unset DASHBOARD_PASSWORD properly, so
+  // nothing reads that field any more; publishing it would only invite the shortcut
+  // back. The probe stays because the Drive flag still has to be known pre-unlock.
   if (req.query.config === 'true') {
     return res.status(200).json({
-      passwordRequired: !!password,
       driveConfigured: !!process.env.GOOGLE_CLIENT_ID,
     });
   }
@@ -38,6 +46,27 @@ export default async function handler(req, res) {
   }
 
   const [owner, repo] = githubRepo.split('/');
+
+  // ── Role-type tags for the Generate Package modal ──────────────────────────
+  // The modal used to ship a hardcoded list of the original author's five
+  // categories, so every user filtered their bullets against tags that did not
+  // exist in their own bank — the selection silently matched nothing. The tags
+  // are the user's, defined in their bullet-bank.md legend, so we read them from
+  // there. Soft-read + defensive parse: a missing or unparseable bank yields the
+  // generic fallback set rather than an error, and the dashboard says where the
+  // real ones will come from.
+  if (req.query.resource === 'role-tags') {
+    const bank = await readGithubText(githubToken, owner, repo, 'bullet-bank.md');
+    const tags = parseBulletBankTags(bank);
+    const source = tags.length ? 'bullet-bank' : 'fallback';
+    console.log(`[jobs] resource=role-tags source=${source} count=${tags.length || FALLBACK_ROLE_TAGS.length}`);
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json({
+      tags: tags.length ? tags : FALLBACK_ROLE_TAGS,
+      source,
+    });
+  }
+
   const url = `https://api.github.com/repos/${owner}/${repo}/contents/data/job-status.json`;
 
   const ghRes = await fetch(url, {
@@ -75,10 +104,13 @@ export default async function handler(req, res) {
 
   let jobs;
   try {
-    jobs = JSON.parse(rawJson);
+    // The committed seed is the array `[]`; the dashboard reads `data.jobs`, so
+    // normalize to the { jobs: {} } model rather than serving a bare array.
+    jobs = normalizeJsonDoc(JSON.parse(rawJson), { jobs: {} });
   } catch (err) {
     console.error('[jobs] Failed to parse job-status.json:', err.message);
-    return res.status(200).json([]);
+    // Match the other failure paths above — an empty document, not a bare array.
+    return res.status(200).json({ jobs: {} });
   }
 
   // No CDN caching — status changes must be visible immediately on next load.

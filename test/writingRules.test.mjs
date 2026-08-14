@@ -194,8 +194,10 @@ test('applicationPackage keeps its cache breakpoint structure intact', () => {
   const src = read('scanner/applicationPackage.mjs');
   // Bullet bank block still carries the cache breakpoint, and the writing rules
   // were appended to the trailing (uncached) block via resumeFormatAndClosing.
-  assert.ok(src.includes("text: bulletBank,"));
-  assert.match(src, /text: bulletBank,\s*\n\s*cache_control: \{ type: 'ephemeral' \}/);
+  // v1.2 split the AI-suggested section out of the bank, so the cached text is
+  // now bankBody (the verbatim-source half) rather than the whole bulletBank.
+  assert.ok(src.includes("text: bankBody,"));
+  assert.match(src, /text: bankBody,\s*\n\s*cache_control: \{ type: 'ephemeral' \}/);
   assert.ok(src.includes('${bulletSelectionRules}${guidanceSection}${resumeFormatAndClosing}'));
 });
 

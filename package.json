@@ -15,7 +15,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.56.0",
     "mammoth": "^1.8.0",
-    "pdf-parse": "^1.1.1",
+    "unpdf": "^1.8.0",
     "yaml": "^2.9.0"
   }
 }

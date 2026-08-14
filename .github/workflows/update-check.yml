@@ -1,0 +1,185 @@
+name: JobBud update check
+
+# Weekly check for new upstream JobBud commits. When upstream is ahead of your copy,
+# this opens (or updates) a pull request in YOUR OWN repo listing the incoming changes,
+# so you can review and merge on your own terms. If the changes can't be merged cleanly
+# (usually because you edited JobBud's own tool files), it opens an issue pointing you at
+# the manual merge steps in the README instead.
+#
+# Safety: this never pushes to upstream. Upstream is only ever fetched read-only, and the
+# only remote it writes to is your own repo's `origin`. It writes nothing outside your
+# private repo. The job-level guard below stops it from ever running on the source repo.
+
+on:
+  # Quiet weekly slot. NOTE: the schedule only takes effect once this file is on your
+  # repo's default branch. You can also run it any time from the Actions tab.
+  schedule:
+    - cron: '0 14 * * 1'    # Every Monday at 14:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  update-check:
+    # Never run on the upstream source repo — only on downstream private copies.
+    if: github.repository != 'nvparekh1294/jobbud'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout with full history
+        uses: actions/checkout@v5
+        with:
+          # Must stay 0 (full history). The unrelated-history repair in the next step
+          # finds this repo's root commit and matches its tree against upstream's
+          # history; a shallow clone has neither the root commit nor enough of
+          # upstream to match it against. Do not shallow this checkout.
+          fetch-depth: 0
+
+      - name: Check upstream and open PR or issue
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM_URL: https://github.com/nvparekh1294/jobbud.git
+          DEFAULT_BRANCH: ${{ github.ref_name }}
+          UPDATE_BRANCH: jobbud-update
+          PR_TITLE: 'JobBud update: new upstream changes'
+          ISSUE_TITLE: 'JobBud update available — manual merge needed'
+        run: |
+          set -euo pipefail
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          BASE_SHA="$(git rev-parse HEAD)"
+
+          # 1. Add upstream as a read-only remote and fetch its main branch.
+          git remote add upstream "$UPSTREAM_URL"
+          git fetch --no-tags upstream main
+
+          # 1b. Repair the missing shared history, if there is none.
+          #
+          #     Copies made with Vercel's Deploy button start as a single fresh
+          #     "Initial commit" with no commit in common with upstream. Git then
+          #     refuses to merge at all ("refusing to merge unrelated histories"), and
+          #     even when forced with --allow-unrelated-histories it has no merge base,
+          #     so it diffs both sides against an *empty* tree and reports every file
+          #     that differs as an add/add conflict — i.e. every real update conflicts.
+          #
+          #     The fix is to give Git the merge base that genuinely exists but isn't
+          #     recorded: the copy's root commit is a byte-for-byte snapshot of some
+          #     upstream commit, so we find the upstream commit with an identical tree
+          #     and graft the root commit onto it. This is a local-only annotation
+          #     (refs/replace/*, never pushed) and it is needed exactly once — the merge
+          #     commit it enables permanently joins the two histories for real, so every
+          #     later run finds a true merge base with no graft required.
+          #     Note on merging the PR this workflow opens: use a normal merge commit,
+          #     not "Squash and merge". Squashing discards the merge commit, so the
+          #     histories never actually join and the graft has to be recomputed on every
+          #     later run. That still works, but the squashed commit is not recognised as
+          #     containing upstream's commits, so the next run re-opens a PR with an empty
+          #     diff.
+          UNRELATED_NO_MATCH=""
+          GRAFTED=""
+          if ! git merge-base HEAD upstream/main >/dev/null 2>&1; then
+            echo "No shared history with upstream (Deploy-button copy) — looking for the snapshot point."
+            ROOT_COMMIT="$(git rev-list --max-parents=0 HEAD | tail -n 1)"
+            ROOT_TREE="$(git rev-parse "$ROOT_COMMIT^{tree}")"
+            # awk must read git log to completion. Exiting early (or piping to `head -1`)
+            # closes the pipe while git is still writing, git dies of SIGPIPE with status
+            # 141, and `set -o pipefail` then aborts the whole step — non-deterministically,
+            # depending on how much git had buffered. The `!f` guard keeps the first match
+            # only while still draining the input.
+            GRAFT_ONTO="$(git log --format='%H %T' upstream/main \
+                          | awk -v t="$ROOT_TREE" '$2 == t && !f { print $1; f = 1 }')"
+            if [ -n "$GRAFT_ONTO" ]; then
+              echo "Root commit $ROOT_COMMIT matches upstream $GRAFT_ONTO — grafting for this run."
+              git replace --graft "$ROOT_COMMIT" "$GRAFT_ONTO"
+              GRAFTED=1
+            else
+              # No upstream commit matches the root tree (the copy was edited before its
+              # first commit, or predates the current upstream history). Fall through:
+              # the merge below still runs with --allow-unrelated-histories. Without a base
+              # every differing file conflicts, so flag this path — the issue it opens has
+              # to explain that, rather than blaming the user's own edits.
+              echo "No matching upstream snapshot found — merging without a base; conflicts are likely."
+              UNRELATED_NO_MATCH=1
+            fi
+          fi
+
+          # 2. If we already contain everything upstream has, there is nothing to do.
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "Up to date with upstream — no update needed."
+            exit 0
+          fi
+
+          # 2b. Idempotency: if a previous run already pushed an update branch that
+          #     contains these upstream commits on top of the current default branch,
+          #     the PR is already current — don't churn it or open a duplicate.
+          git fetch --no-tags origin "$UPDATE_BRANCH" 2>/dev/null || true
+          if git rev-parse --verify --quiet "refs/remotes/origin/$UPDATE_BRANCH" >/dev/null; then
+            if git merge-base --is-ancestor upstream/main "origin/$UPDATE_BRANCH" \
+               && git merge-base --is-ancestor "$BASE_SHA" "origin/$UPDATE_BRANCH"; then
+              echo "Update branch already includes these upstream changes — PR is current."
+              exit 0
+            fi
+          fi
+
+          # 3. Capture the incoming commit subjects BEFORE merging (used in the PR body).
+          INCOMING="$(git log --oneline --no-merges "HEAD..upstream/main")"
+          echo "Incoming upstream commits:"
+          echo "$INCOMING"
+
+          # 4. Rebuild the update branch from the current default branch and try to merge.
+          #
+          #    --allow-unrelated-histories stops Git objecting to the missing shared
+          #    ancestor on a Deploy-button copy. With the graft from step 1b in place the
+          #    merge also has a real base, so it behaves like any ordinary update: only
+          #    genuinely conflicting edits fail. Once the histories are joined the flag is
+          #    a harmless no-op on every later run. Real content conflicts (you edited
+          #    JobBud's own tool files) still fail and fall through to the issue path.
+          git checkout -B "$UPDATE_BRANCH"
+          if git merge --no-edit --allow-unrelated-histories -m "Merge upstream JobBud updates into $UPDATE_BRANCH" upstream/main; then
+            echo "Clean merge — pushing branch and opening/updating a PR."
+            git push --force origin "$UPDATE_BRANCH"
+
+            PR_BODY="$(printf 'This PR brings in new changes from the upstream JobBud repo (%s).\n\nIncoming commits:\n\n```\n%s\n```\n\nReview the diff and click **Merge** to update your copy. Nothing is applied until you approve.\n\n**Use "Merge pull request", not "Squash and merge".** Squashing throws away the merge commit that links your copy to upstream'"'"'s history, and without it the next update check will re-open a PR that appears to change nothing.' "$UPSTREAM_URL" "$INCOMING")"
+
+            EXISTING_PR="$(gh pr list --head "$UPDATE_BRANCH" --state open --json number --jq '.[0].number // empty')"
+            if [ -n "$EXISTING_PR" ]; then
+              gh pr edit "$EXISTING_PR" --title "$PR_TITLE" --body "$PR_BODY"
+              echo "Updated existing PR #$EXISTING_PR."
+            else
+              gh pr create --base "$DEFAULT_BRANCH" --head "$UPDATE_BRANCH" --title "$PR_TITLE" --body "$PR_BODY"
+              echo "Opened a new PR."
+            fi
+          else
+            echo "Merge conflict — aborting merge and opening/updating an issue."
+            git merge --abort
+
+            # Self-contained merge recipe — this issue must stand on its own, without
+            # sending the reader back to the README or to a workflow run.
+            MANUAL_RECIPE="$(printf '# 1. Point your clone at the upstream repo. Safe to re-run — if it is\n#    already set up, this does nothing.\ngit remote add upstream %s 2>/dev/null || true\n\n# 2. Get upstream'"'"'s latest commits (nothing is changed yet).\ngit fetch upstream\n\n# 3. Find your repo'"'"'s very first commit, and the snapshot of files it holds.\nROOT=$(git rev-list --max-parents=0 HEAD | tail -1)\nTREE=$(git rev-parse $ROOT^{tree})\n\n# 4. Tell Git which upstream commit your copy was made from, by finding the\n#    upstream commit holding that identical snapshot.\ngit replace --graft $ROOT $(git log --format='"'"'%%H %%T'"'"' upstream/main | awk -v t=$TREE '"'"'$2==t && !f {print $1; f=1}'"'"')\n\n# 5. Now merge normally. Only files you edited yourself can conflict.\ngit merge upstream/main' "$UPSTREAM_URL")"
+
+            if [ -n "$UNRELATED_NO_MATCH" ]; then
+              # No reference point exists, so the conflicts are an artefact of that, not
+              # of anything the user edited. Don't offer the graft recipe — its lookup is
+              # exactly what already failed.
+              ISSUE_BODY="$(printf 'Upstream JobBud has new changes, but they could not be merged automatically.\n\n**This is not because of anything you did.** Your copy'"'"'s starting snapshot could not be matched to any commit in upstream'"'"'s history, so Git has no reference point for comparing the two versions — and without one it treats *every* file that differs as a conflict, including files you have never opened. Expect a long list.\n\nMerge by hand in a local clone of this repo:\n\n```bash\n# Point your clone at the upstream repo. Safe to re-run — if it is already\n# set up, this does nothing.\ngit remote add upstream %s 2>/dev/null || true\n\n# Get upstream'"'"'s latest commits (nothing is changed yet).\ngit fetch upstream\n\n# Merge, accepting that Git cannot find a common starting point.\ngit merge --allow-unrelated-histories upstream/main\n```\n\nGit will stop and list the conflicting files. Work through them one at a time:\n\n- Anything under `api/`, `lib/`, `scanner/`, `dashboard/`, `.github/` — JobBud'"'"'s own tool files. Keep **upstream'"'"'s** version.\n- Anything under `data/` or `config/` — your job data and your profile. Keep **your** version.\n- Anything else at the top level (`README.md`, `SETUP.md`, `package.json`, `vercel.json`, and friends) — keep **upstream'"'"'s** version, unless you deliberately customised the file.\n\n`git add` each file as you finish it, then `git commit` to complete the merge and `git push`.\n\nYou only have to do this once. This merge links the two histories permanently, and future updates will merge normally.\n\nIncoming commits:\n\n```\n%s\n```' "$UPSTREAM_URL" "$INCOMING")"
+            elif [ -n "$GRAFTED" ]; then
+              ISSUE_BODY="$(printf 'Upstream JobBud has new changes, but they could not be merged automatically because you and upstream both changed the same lines in one of JobBud'"'"'s own tool files.\n\nMerge by hand in a local clone of this repo. Run these one at a time:\n\n```bash\n%s\n```\n\nGit will stop and list the conflicting files. Open each one, decide which version to keep, then `git add` it and run `git commit` to finish the merge. Finally, `git push`.\n\nIncoming commits:\n\n```\n%s\n```' "$MANUAL_RECIPE" "$INCOMING")"
+            else
+              # Ordinary related history — no graft needed, plain merge instructions.
+              ISSUE_BODY="$(printf 'Upstream JobBud has new changes, but they could not be merged automatically because you and upstream both changed the same lines in one of JobBud'"'"'s own tool files.\n\nMerge by hand in a local clone of this repo:\n\n```bash\n# Point your clone at the upstream repo. Safe to re-run — if it is already\n# set up, this does nothing.\ngit remote add upstream %s 2>/dev/null || true\n\ngit fetch upstream\ngit merge upstream/main\n```\n\nGit will stop and list the conflicting files. Open each one, decide which version to keep, then `git add` it and run `git commit` to finish the merge. Finally, `git push`.\n\nIncoming commits:\n\n```\n%s\n```' "$UPSTREAM_URL" "$INCOMING")"
+            fi
+
+            EXISTING_ISSUE="$(gh issue list --state open --json number,title --jq 'map(select(.title == env.ISSUE_TITLE)) | .[0].number // empty')"
+            if [ -n "$EXISTING_ISSUE" ]; then
+              gh issue edit "$EXISTING_ISSUE" --body "$ISSUE_BODY"
+              echo "Updated existing issue #$EXISTING_ISSUE."
+            else
+              gh issue create --title "$ISSUE_TITLE" --body "$ISSUE_BODY"
+              echo "Opened a new issue."
+            fi
+          fi

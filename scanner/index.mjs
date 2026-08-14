@@ -13,20 +13,21 @@ try {
   }
 } catch { /* .env not present — fine in CI */ }
 
-import { fetchJSearch } from './sources/jsearch.mjs';
-import { fetchAdzuna } from './sources/adzuna.mjs';
-import { fetchSerpApi, checkSerpApiBalance } from './sources/serpapi.mjs';
+import { fetchJSearch, jsearchStats } from './sources/jsearch.mjs';
+import { fetchAdzuna, adzunaStats, adzunaQueryCount } from './sources/adzuna.mjs';
+import { fetchSerpApi, checkSerpApiBalance, serpApiStats } from './sources/serpapi.mjs';
 import { fetchPortals } from './portalScanner.mjs';
 import { fetchRadar } from './radarSource.mjs';
 import { dedup, markScored } from './dedup.mjs';
 import { preFilter } from './filter.mjs';
 import { evaluateJobs, wasScoredOrFiltered } from './evaluate.mjs';
-import { sendDigest } from './notify.mjs';
+import { sendDigest, digestIsWorthSending } from './notify.mjs';
 import { sendDailyAlert } from './telegram.mjs';
 import { persistJobs } from './persistJobs.mjs';
-import { checkQuota, recordUsage } from './quota.mjs';
+import { checkQuota, recordUsage, callsPerRun, quotaNotice } from './quota.mjs';
 import { loadConfig } from './config.mjs';
 import { actionKeySource, actionKeyFingerprint } from '../lib/auth.mjs';
+import { isStarterPortalsList, STARTER_LIST_NOTICE } from '../lib/portalsMeta.mjs';
 
 const SCAN_MODE = process.env.SCAN_MODE || 'standard';
 const IS_DRY_RUN = process.argv.includes('--dry-run') || process.env.DRY_RUN === 'true';
@@ -86,24 +87,114 @@ async function run() {
     return;
   }
 
+  // ── Monthly API budgets ───────────────────────────────────────────────────
+  // Resolved by loadConfig from config/profile.yml, with a process.env override
+  // for local runs. They deliberately do NOT come straight from process.env
+  // here: the scheduled workflow passes a fixed env block and its file is
+  // frozen, so an Actions secret would never arrive. See numericSetting in
+  // config.mjs.
+  const ADZUNA_MONTHLY_LIMIT = config.adzunaMonthlyLimit;
+  const JSEARCH_MONTHLY_LIMIT = config.jsearchMonthlyLimit;
+  const SERPAPI_MONTHLY_LIMIT = config.serpapiMonthlyLimit;
+
   // ── Quota estimates (based on query builder counts in each source) ────────
   // jsearch: 4 roleGroups × locations + 2 remote = ~22 calls
-  // adzuna: 7 searchTerms × locations = ~35 calls
   // serpapi: 4 roleGroups × locations + 2 remote = ~22 calls
   const jsearchEstimate = config.locations.length * 4 + (config.includeRemote ? 2 : 0);
-  const adzunaEstimate = config.locations.length * 7;
   const serpApiEstimate = config.locations.length * 4 + (config.includeRemote ? 2 : 0);
 
+  // Adzuna is the one source whose full list may not fit in a single run: it
+  // searches one role in one city at a time, so the list is roles × searchable
+  // locations. That count comes from the source itself rather than a guess —
+  // `locations × 7` hardcoded one profile's role count, over-budgeting anyone
+  // with fewer roles and under-budgeting anyone with more, and the cap and the
+  // rotation are both sized from it.
+  //
+  // The projection asks for a RUN's worth, not the list's worth: a list that
+  // will never fit in one go must not block the source on every single run. The
+  // source rotates through the rest across later runs, so every search is made.
+  const adzunaWanted = adzunaQueryCount(config);
+  const adzunaPerRun = callsPerRun(ADZUNA_MONTHLY_LIMIT, config.adzunaCallsPerRun);
+  const adzunaEstimate = Math.min(adzunaWanted, adzunaPerRun);
+
   // ── Quota checks (API sources only) ───────────────────────────────────────
+  //
+  // Anything the quota system does to a source ends up in this list, and the
+  // list ends up in the digest. A scan that quietly dropped a source used to
+  // look exactly like a scan that found nothing, which is how one user went
+  // weeks without noticing Adzuna had stopped running.
+  const quotaNotices = [];
+
+  // The pause-class subset: sources the quota system STOPPED. Those are worth
+  // an email on their own, because the user can do something about them. The
+  // rotation line is not — a profile bigger than one run's slice rotates on
+  // every single run, so mailing an empty digest for it would put a "no new
+  // matches" email in the inbox every quiet week and teach the user to ignore
+  // the digest entirely. Both lists hold the same strings; only this one
+  // decides whether an otherwise-empty scan gets sent.
+  const pauseNotices = [];
+  const notePause = (line) => { quotaNotices.push(line); pauseNotices.push(line); };
+
+  // Attached NOW, before the first early return, and by reference — every later
+  // push lands in the same array the digest builder reads. Attaching it after
+  // the fetch block meant a scan that bailed early carried its notices nowhere.
+  config.quotaNotices = quotaNotices;
+
+  // Every exit from this scan goes through here, so a notice can never be
+  // stranded behind a return. A scan with a source paused and no matches used
+  // to send nothing at all — three separate gates each required jobs — which is
+  // the one scan the user most needs to hear about.
+  async function deliverDigest(digestJobs) {
+    for (const line of quotaNotices) console.warn(`[index] ${line}`);
+    if (!digestIsWorthSending(digestJobs, pauseNotices)) {
+      console.log('[index] Nothing to report — no matches and nothing the quota system had to say. No digest sent.');
+      return;
+    }
+    try {
+      await sendDigest(digestJobs, config);
+      console.log(`Digest sent — ${digestJobs.length} match${digestJobs.length === 1 ? '' : 'es'}, ${quotaNotices.length} quota notice${quotaNotices.length === 1 ? '' : 's'}.`);
+    } catch (err) {
+      console.error(`[index] sendDigest failed: ${err.message}`);
+    }
+  }
+
   let jsearchOk = false, adzunaOk = false, serpApiOk = false;
   if (runApi) {
-    [jsearchOk, adzunaOk] = await Promise.all([
-      checkQuota('jsearch', jsearchEstimate, 200),
-      checkQuota('adzuna', adzunaEstimate, 250),
-    ]);
+    // Sequential, not Promise.all: each check can write a repaired entry back to
+    // the single api-usage.json, and two concurrent writes would drop one of them.
+    const jsearchBudget = await checkQuota('jsearch', jsearchEstimate, JSEARCH_MONTHLY_LIMIT);
+
+    // JSearch keeps its all-or-nothing rule: its query list is small enough to
+    // fit whole, so a partial allowance means the month really is nearly spent.
+    jsearchOk = jsearchBudget.allowed >= jsearchEstimate;
+    // remaining/needed lets the notice tell "the month is spent" apart from
+    // "there is some left, just not a scan's worth" — two different sentences.
+    if (!jsearchOk) notePause(quotaNotice('JSearch', {
+      resetDate: jsearchBudget.resetDate,
+      remaining: jsearchBudget.allowed,
+      needed: jsearchEstimate,
+    }));
+
+    // A profile with nothing for Adzuna to search — no target roles, or no
+    // location in a country it covers — is not a quota problem and must not be
+    // reported as one. Checking quota for zero calls would also log a bogus
+    // "monthly limit reached". The source explains the real reason itself.
+    if (adzunaWanted > 0) {
+      const adzunaBudget = await checkQuota('adzuna', adzunaEstimate, ADZUNA_MONTHLY_LIMIT);
+
+      // Adzuna runs whatever fits, down to nothing. The source reads this cap
+      // and trims its query list to match.
+      config.adzunaMaxCallsPerRun = adzunaBudget.allowed;
+      adzunaOk = adzunaBudget.allowed > 0;
+
+      if (!adzunaOk) notePause(quotaNotice('Adzuna', { resetDate: adzunaBudget.resetDate }));
+    } else {
+      console.warn('[index] Adzuna has no searches to build from this profile (no target roles, or no location in a country it covers) — skipping it without touching quota.');
+    }
 
     if (SCAN_MODE === 'full') {
-      serpApiOk = await checkQuota('serpapi', serpApiEstimate, 250);
+      const serpApiBudget = await checkQuota('serpapi', serpApiEstimate, SERPAPI_MONTHLY_LIMIT);
+      serpApiOk = serpApiBudget.allowed >= serpApiEstimate;
       if (serpApiOk && config.serpApiKey) {
         try {
           const remaining = await checkSerpApiBalance(config.serpApiKey);
@@ -124,8 +215,27 @@ async function run() {
   }
 
   // ── Portal scanner — runs first, no quota needed ─────────────────────────
+  //
+  // Before scanning, answer the question a confused user can't: are these even
+  // my companies? Skipping onboarding's companies step leaves the maintainer's
+  // example scanner/portals.yml in place, and every digest after that is full of
+  // roles at companies the user never chose, with nothing saying why. When the
+  // file still has no sign of being personalized we say so in the log and add one
+  // line to the digest. Detection lives in lib/portalsMeta.mjs.
   let portalJobs = [];
   if (runPortals) {
+    try {
+      const portalsRaw = await fs.readFile(new URL('./portals.yml', import.meta.url), 'utf8');
+      if (isStarterPortalsList(portalsRaw)) {
+        config.usingStarterPortals = true;
+        console.warn(`[index] ${STARTER_LIST_NOTICE}`);
+      }
+    } catch (err) {
+      // A missing/unreadable portals.yml is the portal scanner's problem to
+      // report; never turn a read failure into a scary line in someone's digest.
+      console.warn(`[index] Could not check the watch list: ${err.message}`);
+    }
+
     try {
       portalJobs = await fetchPortals();
       console.log(`[index] Portal scanner: ${portalJobs.length} jobs fetched`);
@@ -151,17 +261,23 @@ async function run() {
   }
 
   // ── API source fetches ────────────────────────────────────────────────────
+  //
+  // Each source carries its per-run stats object. Quota is recorded from
+  // stats.attempts — the requests actually sent, which count against the
+  // provider's quota whether they succeeded or 404'd — never from the estimate
+  // above. The estimates exist only for the pre-flight checkQuota projection.
   const sources = [];
-  if (jsearchOk) sources.push({ name: 'jsearch', fn: () => fetchJSearch(config), estimate: jsearchEstimate });
+  if (jsearchOk) sources.push({ name: 'jsearch', fn: () => fetchJSearch(config), stats: jsearchStats });
   else console.warn('[index] JSearch skipped (quota check failed)');
 
-  if (adzunaOk) sources.push({ name: 'adzuna', fn: () => fetchAdzuna(config), estimate: adzunaEstimate });
+  if (adzunaOk) sources.push({ name: 'adzuna', fn: () => fetchAdzuna(config), stats: adzunaStats });
   else console.warn('[index] Adzuna skipped (quota check failed)');
 
-  if (serpApiOk) sources.push({ name: 'serpapi', fn: () => fetchSerpApi(config), estimate: serpApiEstimate });
+  if (serpApiOk) sources.push({ name: 'serpapi', fn: () => fetchSerpApi(config), stats: serpApiStats });
 
   if (sources.length === 0 && portalJobs.length === 0) {
-    console.warn('[index] All sources skipped and no portal jobs — nothing to process. Exiting.');
+    console.warn('[index] All sources skipped and no portal jobs — nothing to process.');
+    await deliverDigest([]);
     return;
   }
 
@@ -169,13 +285,31 @@ async function run() {
   if (sources.length > 0) {
     const fetchResults = await Promise.allSettled(sources.map(s => s.fn()));
 
-    // Record usage for sources that completed successfully
+    // Record what each source actually spent, and say so when a source came
+    // back with nothing because every one of its queries failed. The old code
+    // recorded the estimate on any fulfilled promise, and the sources swallow
+    // per-query errors — so a scan where all 22 calls 404'd logged "recorded 22
+    // calls", returned 0 jobs, and the Action went green.
     for (let i = 0; i < sources.length; i++) {
-      if (fetchResults[i].status === 'fulfilled') {
-        await recordUsage(sources[i].name, sources[i].estimate);
-      } else {
-        console.error(`[index] ${sources[i].name} fetch failed:`, fetchResults[i].reason?.message);
+      const { name, stats } = sources[i];
+      await recordUsage(name, stats.attempts);
+
+      if (fetchResults[i].status === 'rejected') {
+        console.error(`[index] ${name} fetch failed:`, fetchResults[i].reason?.message);
+      } else if (stats.queries > 0 && stats.failures === stats.queries) {
+        console.error(`[index] ${name}: ALL ${stats.queries} quer${stats.queries === 1 ? 'y' : 'ies'} failed — 0 jobs from this source this scan. Last error: ${stats.lastError}`);
       }
+    }
+
+    // A source that ran a rotating window did not search everything the user
+    // asked for, and the digest has to say so — otherwise a scan that covered
+    // eight of thirty-five searches reads as the whole web having nothing.
+    //
+    // quotaNotices, NOT notePause: rotation is the normal state of a big
+    // profile, so this line appears on every run and must never be the reason
+    // an otherwise-empty digest is sent. It rides along when one goes out.
+    if (adzunaStats.window && adzunaStats.window.ran > 0) {
+      quotaNotices.push(quotaNotice('Adzuna', adzunaStats.window));
     }
 
     apiJobs = fetchResults
@@ -196,7 +330,8 @@ async function run() {
   console.log(`${filtered.length} jobs passed pre-filter`);
 
   if (filtered.length === 0) {
-    console.log('No new jobs to evaluate. Exiting.');
+    console.log('No new jobs to evaluate.');
+    await deliverDigest([]);
     return;
   }
 
@@ -247,19 +382,10 @@ async function run() {
       }
     }
 
-    // Send digest for jobs above score threshold
-    try {
-      const digestJobs = evaluated.filter(j => j.score !== null && j.score >= config.minScoreToIncludeInDigest);
-      console.log(`${evaluated.filter(j => j.score !== null).length} scored; ${digestJobs.length} at or above threshold (${config.minScoreToIncludeInDigest})`);
-      if (digestJobs.length > 0) {
-        await sendDigest(digestJobs, config);
-        console.log('Digest sent.');
-      } else {
-        console.log(`No jobs at or above score threshold (${config.minScoreToIncludeInDigest}). No digest sent.`);
-      }
-    } catch (err) {
-      console.error(`[index] sendDigest failed: ${err.message}`);
-    }
+    // Send digest for jobs above score threshold (or for a quota notice alone)
+    const digestJobs = evaluated.filter(j => j.score !== null && j.score >= config.minScoreToIncludeInDigest);
+    console.log(`${evaluated.filter(j => j.score !== null).length} scored; ${digestJobs.length} at or above threshold (${config.minScoreToIncludeInDigest})`);
+    await deliverDigest(digestJobs);
 
     // Telegram: daily summary after scan
     try {
@@ -269,7 +395,8 @@ async function run() {
       console.error(`[index] Telegram notify failed: ${err.message}`);
     }
   } else {
-    console.log('[index] No evaluated jobs — skipping persist and digest.');
+    console.log('[index] No evaluated jobs — nothing to persist.');
+    await deliverDigest([]);
   }
 
   console.log('Scan complete.');

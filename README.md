@@ -22,7 +22,7 @@
 - [Getting Started](#getting-started)
 - [Optional Integrations](#optional-integrations)
 - [LinkedIn Research](#linkedin-research--mutual-connection-lookup)
-- [Upgrading](#upgrading)
+- [Keeping your copy up to date](#keeping-your-copy-up-to-date)
 - [Known Limitations](#known-limitations)
 - [Contributing](#contributing)
 - [License](#license)
@@ -120,7 +120,126 @@ JobBud is built to run on free tiers, with one paid piece: the Anthropic API.
 - **Vercel** — free. The dashboard and API fit within Vercel's free Hobby plan.
 - **Persistent memory** — a small add-on to your Anthropic bill, roughly **$1–3/month** for an active user. Memory rides in the model's cached prompt prefix, so re-reading it each conversation is billed at about 10% of the normal input price, and each learning event (an onboarding seed, a "remember…", or a **Remember this** click) is around a cent on the cheaper Haiku model.
 
-### 1. Get your own private copy of this repo
+### 1. Deploy to Vercel
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/nvparekh1294/jobbud&env=ANTHROPIC_API_KEY,GH_TOKEN,GH_REPO,DASHBOARD_PASSWORD&envDescription=Required%20API%20keys%20for%20JobBud%20-%20see%20README%20for%20setup%20instructions&envLink=https://github.com/nvparekh1294/jobbud%23getting-started)
+
+Clicking **Deploy** starts Vercel's clone flow: it creates your **own** copy of this repo in your GitHub account — **private by default** — and deploys that copy. Keep it private: your job data and personal profile files live inside it, and JobBud's "Save to my repo" refuses to write to a public repo. (Prefer to create the repo yourself, or already have one? See [Setting up without the deploy button](#setting-up-without-the-deploy-button) below.)
+
+During deploy, Vercel will prompt for four required environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `ANTHROPIC_API_KEY` | Your Anthropic API key |
+| `GH_TOKEN` | GitHub personal access token with `repo` scope |
+| `GH_REPO` | Your GitHub repo in the format `username/jobbud` |
+| `DASHBOARD_PASSWORD` | Password gate for the dashboard. The dashboard fails closed — it will not serve your job data unless this is set, so choose a strong value. It is also the default signing key for the Apply/Reject buttons in your digest emails, so [step 3](#3-configure-github-actions--yes-the-same-keys-again) has you add the **same value** to GitHub Actions secrets — the scanner signs those links and the dashboard verifies them. |
+
+> **Adding or editing a variable by hand? Two things to get right.** The Deploy button sets all of this up for you, but if you ever add or change a variable yourself in Vercel → **Settings → Environment Variables**:
+>
+> 1. **Tick "Production" for every variable.** Vercel lets you scope a variable to Production, Preview, and Development separately. Your live site reads **Production** only — a variable ticked for Development alone does nothing for it. (Ticking **Preview** as well is recommended.)
+> 2. **Redeploy afterwards.** Variable changes do not reach a site that is already live. Go to **Deployments → ⋯ → Redeploy** on the latest deployment.
+>
+> **The symptom to watch for:** if your dashboard loads without ever asking for a password, but nothing actually works — uploads come back "Unauthorized", the chat stays silent — your variables are almost certainly missing from Production.
+
+When the deploy finishes, your app lives at `https://<your-deployment>.vercel.app/dashboard` — that `/dashboard` at the end matters. If you open the bare root URL (`https://<your-deployment>.vercel.app` with nothing after it), Vercel shows a `404: NOT_FOUND` page. That is expected and does **not** mean your deploy failed — JobBud simply lives under `/dashboard`. Bookmark the `/dashboard` URL and use that.
+
+### 2. Configure your profile
+
+JobBud reads five personal files to score jobs and generate applications: `CLAUDE.md`, `cv.md`, `bullet-bank.md`, `article-digest.md`, and `config/profile.yml`. The easiest way to create them is the built-in onboarding — open your dashboard, go to the **Coach** tab, and follow **Onboarding**. It generates all five from your resume and a few short questions, then offers two ways to keep them:
+
+- **Save to my repo** — JobBud commits the five files straight into your GitHub repo through the API. It does this **only if your repo is private**; a public repo is refused, because these files contain your real background.
+- **Download** — review each file first, then add them yourself: `CLAUDE.md`, `cv.md`, `bullet-bank.md`, and `article-digest.md` at the repo root, `config/profile.yml` in `config/`. Commit all five.
+
+Either way, these files live **in your private repo** — that is how the scanner (which runs from a fresh checkout in GitHub Actions) and the dashboard read them. The `.gitignore` lists them for a different reason: if you also work in a local clone, it stops you from hand-committing a second, stale copy — JobBud keeps the canonical versions in your repo for you. (This is also why your repo must be private: it holds these files.)
+
+**Your company watch-list.** Onboarding also asks which companies you want JobBud to watch and builds a personalized `scanner/portals.yml` from their careers-page URLs — this **replaces** the example company list that ships with the repo, so your scans target *your* companies from day one instead of the maintainer's. You can **Skip** that step and set your companies later.
+
+**Where the watch list lives, and how to change it any time.** The list is one file in your repo, `scanner/portals.yml`, and it is the only thing that decides which companies get checked on every scan. Three ways to edit it:
+
+- **The dashboard — Radar tab → "⚙ Edit Watch List".** The everyday way, and the one to use if you skipped the onboarding step. It shows the companies currently being scanned, lets you add, edit, or remove them, works out each company's job board from its careers URL, and saves the whole list back to your repo. Saving **replaces** the list with exactly what's on screen. It also offers any company on your **Radar** that isn't being scanned yet as a one-click add — Radar and the watch list are two separate lists, and this is how you connect them.
+- **Onboarding's companies step** (Coach tab → Onboarding), which builds the list from scratch as part of first-time setup.
+- **Hand-editing `scanner/portals.yml`**, still the power-user path for tuning per-company keywords, marking stealth companies, or filling in Workday tenant/site details; see the comments at the top of that file.
+
+If you never set your own list, every scan runs on the example companies and your digests say so, with one line at the top pointing you back here.
+
+Prefer to start from templates instead of onboarding? Copy the examples and fill them in by hand:
+
+```bash
+cp config/profile.yml.example config/profile.yml
+cp CLAUDE.md.example CLAUDE.md
+cp story-bank.md.example story-bank.md
+```
+
+`config/profile.yml` is the one that matters most — it tells the scanner what roles to target and drives how every job is scored against your profile. See the inline comments in the example file for guidance on each field.
+
+### 3. Configure GitHub Actions — yes, the same keys again
+
+**This step is not optional, and it is the one people miss.** JobBud runs in two
+places that cannot see each other's settings:
+
+- the **dashboard**, which runs on Vercel and reads Vercel's environment variables, and
+- the **scanner**, which runs on GitHub Actions and reads GitHub's repository secrets.
+
+Setting a key in Vercel does **not** make it available to the scanner, and vice
+versa. Each key you need in both places has to be entered **twice, under the same
+name, in both settings screens.** Nothing warns you when only one is set — the
+half that has the key works, the half that doesn't fails quietly.
+
+In your GitHub repo, go to **Settings → Secrets and variables → Actions**, open
+the **Secrets** tab, and click **New repository secret** for each of these:
+
+| Secret name | Value | Why the scanner needs it |
+|-------------|-------|--------------------------|
+| `ANTHROPIC_API_KEY` | the same key you gave Vercel | Scoring every job it finds |
+| `GH_TOKEN` | the same token you gave Vercel | Reading your profile files and committing results back |
+| `DASHBOARD_PASSWORD` | **must match Vercel exactly** | Signs the Apply/Reject buttons in your digest emails — see below |
+| `VERCEL_URL` | your deployment URL **including the scheme**, e.g. `https://your-app.vercel.app` | Builds the links in your emails. Without it they point at `localhost` and go nowhere |
+
+You do **not** need to add `GH_REPO` here — GitHub Actions fills it in
+automatically from the repo the workflow is running in.
+
+Include the `https://` on `VERCEL_URL`. Some parts of the scanner use the value
+exactly as you give it, so a bare `your-app.vercel.app` produces links with no
+scheme — they look right in the email and go nowhere when clicked.
+
+> **`DASHBOARD_PASSWORD` must be identical in both places, and here's why.**
+> The Apply / Reject / Save buttons in your digest emails are signed links. The
+> scanner (GitHub Actions) **signs** them; the dashboard (Vercel) **verifies**
+> them — and both derive the signing key the same way: `ACTION_TOKEN_SECRET` if
+> it is set, otherwise `DASHBOARD_PASSWORD` (`lib/auth.mjs`). So the two halves
+> must arrive at the *same* key or no signature will ever match.
+>
+> **The symptom:** every button in every digest email fails, usually as an
+> "invalid or expired link" — while the dashboard itself works perfectly. That
+> means the two vaults disagree: `DASHBOARD_PASSWORD` is set in Vercel but
+> missing from (or different in) GitHub Actions secrets.
+>
+> Setting a dedicated `ACTION_TOKEN_SECRET` is the cleaner option — it stops
+> your dashboard password from doubling as a signing key. If you do, it has to
+> be in **both** vaults too, with the same value. Setting it in only one place
+> breaks the links in exactly the same way.
+
+**Which symptom means which vault is missing the key:**
+
+| What you see | What's missing |
+|--------------|----------------|
+| A scan run finishes but says the API key is not set, or it finds jobs and none of them ever get scored | `ANTHROPIC_API_KEY` is missing from **GitHub Actions secrets** |
+| The dashboard's Coach chat stays silent, or onboarding never produces your files | `ANTHROPIC_API_KEY` is missing from **Vercel** environment variables (and check it's ticked for **Production**) |
+| The dashboard works fine, but every Apply/Reject button in your emails fails as an invalid or expired link | The two vaults disagree on the signing key — `DASHBOARD_PASSWORD` (or `ACTION_TOKEN_SECRET`) differs between **Vercel** and **GitHub Actions secrets** |
+| Email buttons point at `localhost` and go nowhere | `VERCEL_URL` is missing from **GitHub Actions secrets** |
+
+The same two-places rule applies to every optional integration you add later —
+Google Drive, SendGrid, Telegram, Firecrawl. [SETUP.md](SETUP.md) repeats it for
+each one.
+
+The scanner runs automatically on a cron schedule once secrets are set. To trigger a manual scan, go to the **Actions** tab and trigger the workflow from there — if a key is missing, that run's log is where it will say so.
+
+That's it — you're set up. Open your dashboard at `https://<your-deployment>.vercel.app/dashboard` (remember the `/dashboard` — the bare root URL returns a Vercel `404: NOT_FOUND`, which is expected) and start with the **Coach** tab's onboarding if you haven't configured your profile yet.
+
+### Setting up without the deploy button
+
+The Deploy button above creates your private repo for you, so most people can skip this. Use it only if you'd rather create the repo yourself first, or you already have one you want to use.
 
 Your copy must be **private** — JobBud stores your job data and personal profile files inside it. **Do not fork.** A fork of a public repo is itself public and cannot be made private, and JobBud's "Save to my repo" would then publish your personal data.
 
@@ -133,47 +252,7 @@ Your copy must be **private** — JobBud stores your job data and personal profi
   git push --mirror https://github.com/YOUR-USERNAME/jobbud.git
   ```
 
-### 2. Deploy to Vercel
-
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/nvparekh1294/jobbud&env=ANTHROPIC_API_KEY,GH_TOKEN,GH_REPO,DASHBOARD_PASSWORD&envDescription=Required%20API%20keys%20for%20JobBud%20-%20see%20README%20for%20setup%20instructions&envLink=https://github.com/nvparekh1294/jobbud%23getting-started)
-
-During deploy, Vercel will prompt for four required environment variables:
-
-| Variable | Description |
-|----------|-------------|
-| `ANTHROPIC_API_KEY` | Your Anthropic API key |
-| `GH_TOKEN` | GitHub personal access token with `repo` scope |
-| `GH_REPO` | Your GitHub repo in the format `username/jobbud` |
-| `DASHBOARD_PASSWORD` | Password gate for the dashboard. The dashboard fails closed — it will not serve your job data unless this is set, so choose a strong value. (The GitHub Actions scanner pipeline runs without it; this one is needed only by the Vercel dashboard.) |
-
-### 3. Configure your profile
-
-JobBud reads five personal files to score jobs and generate applications: `CLAUDE.md`, `cv.md`, `bullet-bank.md`, `article-digest.md`, and `config/profile.yml`. The easiest way to create them is the built-in onboarding — open your dashboard, go to the **Coach** tab, and follow **Onboarding**. It generates all five from your resume and a few short questions, then offers two ways to keep them:
-
-- **Save to my repo** — JobBud commits the five files straight into your GitHub repo through the API. It does this **only if your repo is private**; a public repo is refused, because these files contain your real background.
-- **Download** — review each file first, then add them yourself: `CLAUDE.md`, `cv.md`, `bullet-bank.md`, and `article-digest.md` at the repo root, `config/profile.yml` in `config/`. Commit all five.
-
-Either way, these files live **in your private repo** — that is how the scanner (which runs from a fresh checkout in GitHub Actions) and the dashboard read them. The `.gitignore` lists them for a different reason: if you also work in a local clone, it stops you from hand-committing a second, stale copy — JobBud keeps the canonical versions in your repo for you. (This is also why your repo must be private: it holds these files.)
-
-Prefer to start from templates instead of onboarding? Copy the examples and fill them in by hand:
-
-```bash
-cp config/profile.yml.example config/profile.yml
-cp CLAUDE.md.example CLAUDE.md
-cp story-bank.md.example story-bank.md
-```
-
-`config/profile.yml` is the one that matters most — it tells the scanner what roles to target and drives how every job is scored against your profile. See the inline comments in the example file for guidance on each field.
-
-### 4. Configure GitHub Actions
-
-In your GitHub repo, go to **Settings → Secrets and variables → Actions** and add the same three variables:
-
-- `ANTHROPIC_API_KEY`
-- `GH_TOKEN`
-- `GH_REPO`
-
-The scanner runs automatically on a cron schedule once secrets are set. To trigger a manual scan, go to the **Actions** tab and trigger the workflow from there.
+Then import your private `jobbud` repo into Vercel (Vercel dashboard → **Add New… → Project** → import the repo) and set the same four environment variables from step 1 — tick **Production** for each one, as described there. Continue with **Configure your profile** and **Configure GitHub Actions** above.
 
 ---
 
@@ -181,13 +260,25 @@ The scanner runs automatically on a cron schedule once secrets are set. To trigg
 
 All optional integrations fail silently when not configured. The dashboard works without any of them.
 
+Every variable below is one you add by hand in Vercel → **Settings → Environment Variables**, so the same two rules from [Deploy to Vercel](#1-deploy-to-vercel) apply: tick **Production** (Development alone does nothing for your live site), then **redeploy** so the change takes effect.
+
+**One exception:** the API job sources below are read by the scanner, not by the dashboard, so their keys go in **GitHub Actions secrets only** — the both-vaults rule does *not* apply to them.
+
+### API job sources — jobs from across the web
+
+Without them: JobBud only sees jobs on the companies in your watch list (`scanner/portals.yml`). With them: the weekly API scan also pulls listings from across the web — roles at companies you have never heard of, matched against the same profile and scored by the same pipeline. Each source is independent; set only the ones you have.
+
+The three secret names are `JSEARCH_API_KEY`, `ADZUNA_APP_ID`, and `ADZUNA_API_KEY`, and they belong in your repo's **Settings → Secrets and variables → Actions** — *not* in Vercel, because only the GitHub Actions scanner reads them. Each service has its own signup and pricing, usually with a small free tier. The step-by-step walkthrough — which service is which, where to sign up, and how to tell a missing key from a misplaced one — is in **[SETUP.md](SETUP.md#optional-api-job-sources-jsearch-adzuna)**.
+
+(A third source, SerpApi, is not currently wired to scheduled scans, so there is no secret to add for it yet.)
+
 ### Google Drive — automatic prep doc saving
 
 Without it: application packages and prep docs are generated and available in a popup window to copy or reference. You can regenerate them anytime. With it: prep docs save automatically to a folder in your Google Drive, with a persistent link on the job card.
 
 This one needs a few steps — creating a Google Cloud project, enabling the Docs and Drive APIs, creating an OAuth client, and minting a refresh token with the included `get-google-token.mjs` helper. The full, followable walkthrough is in **[SETUP.md](SETUP.md#optional-auto-save-prep-docs-to-google-drive)**.
 
-> **Important:** Google OAuth apps start in "Testing" mode, where refresh tokens expire after 7 days. To prevent this, go to your OAuth consent screen in Google Cloud Console and click **Publish App** to switch to Production mode. Production mode tokens do not expire.
+> **Important:** Google OAuth apps start in "Testing" mode, where refresh tokens expire after 7 days. To prevent this, go to your OAuth consent screen in Google Cloud Console and click **Publish App** to switch to Production mode. Production mode tokens do not expire — but publishing does not rescue a token that was already minted in Testing mode, so mint yours *after* publishing (or re-run the helper once you have published). SETUP.md walks through both.
 
 ### SendGrid — email digests
 
@@ -219,13 +310,119 @@ With it: the dashboard identifies mutual LinkedIn connections at target companie
 
 ### Dashboard password
 
-`DASHBOARD_PASSWORD` is **required**, not optional — it is listed with the other required variables in [Deploy to Vercel](#2-deploy-to-vercel) above. The dashboard fails closed: without it set, the API returns 401 and serves no job data, so the dashboard cannot work. Set `DASHBOARD_PASSWORD` in your Vercel environment variables and use a strong value.
+`DASHBOARD_PASSWORD` is **required**, not optional — it is listed with the other required variables in [Deploy to Vercel](#1-deploy-to-vercel) above. The dashboard fails closed: without it set, the API returns 401 and serves no job data, so the dashboard cannot work. Set `DASHBOARD_PASSWORD` in your Vercel environment variables, ticked for **Production**, and use a strong value. If your dashboard opens with no password prompt at all, that variable is not reaching Production — see the note in [Deploy to Vercel](#1-deploy-to-vercel).
+
+Once you unlock it, the dashboard remembers your password on that computer so you are not asked again every visit. The **Log out** link in the header clears it. On a shared or public computer, log out when you are done.
 
 (The GitHub Actions scanner pipeline does not use this variable — it runs without it. Only the Vercel dashboard needs it.)
 
+### What your deployment serves (and what it doesn't)
+
+`DASHBOARD_PASSWORD` gates the **API** (job data, memory, generation), but it does **not** gate static files. By default Vercel uploads your whole repo, so any personal file you committed — `cv.md`, `config/profile.yml`, `CLAUDE.md`, `bullet-bank.md`, `story-bank.md`, `article-digest.md`, and the `data/*.json` the dashboard writes back — would have been fetchable at your deployment URL (e.g. `https://<your-deployment>.vercel.app/cv.md`) with no password. A `.vercelignore` now ships **only** the app code the functions and dashboard need at runtime, so those files are no longer uploaded to the deployment at all. Your personal files still live safely in your private GitHub repo, where the scanner and dashboard read them via the GitHub API. **If you deployed before this change, pull the update and redeploy** (a fresh deploy re-uploads with the new `.vercelignore`) so the previously exposed files are removed from your live deployment.
+
 ---
 
-## Upgrading
+## Keeping your copy up to date
+
+Your copy of JobBud is a **snapshot** — the state of this project at the moment you
+made your private mirror. When bugs are fixed or features are added upstream, those
+changes do **not** reach your copy automatically. You have to pull them in. There are
+two ways to do that, and you only need one.
+
+### The automatic path (recommended)
+
+Your repo ships with a bundled update-check workflow (`.github/workflows/update-check.yml`).
+Once a week it looks at the upstream JobBud repo, and if there are new commits it opens
+a **pull request** in your own repo with those changes. You just review the PR and click
+**Merge**. Nothing is applied until you approve it.
+
+Updates deliver vetted **releases** — the newest tagged version, not whatever is
+mid-flight on upstream's main branch.
+
+It needs one one-time setting to be allowed to open PRs for you. In your repo, go to
+**Settings → Actions → General**, scroll to **Workflow permissions**, and enable
+**"Allow GitHub Actions to create and approve pull requests."** Without this, the
+workflow can't open the PR.
+
+You don't have to wait for the weekly run — you can trigger a check anytime from the
+**Actions** tab: pick **JobBud update check** and click **Run workflow**.
+
+### The manual path
+
+If you'd rather pull updates yourself — or the automatic PR ever runs into a conflict —
+do it from a local clone.
+
+**The first update needs some extra steps.** A copy made with the Deploy button starts
+its own brand-new Git history, so Git has no idea the two repos are related and no
+reference point for comparing them — and without a reference point it flags *every*
+file that differs as a conflict, even files you've never opened. The fix is to tell Git
+which upstream commit your copy was made from. Run these once, one line at a time:
+
+```bash
+# Point your clone at the upstream repo. Safe to re-run — if it is already set
+# up, this does nothing.
+git remote add upstream https://github.com/nvparekh1294/jobbud.git 2>/dev/null || true
+
+# Get upstream's latest commits. Nothing on your machine changes yet.
+git fetch upstream
+
+# Find your repo's very first commit, and the exact snapshot of files it holds.
+ROOT=$(git rev-list --max-parents=0 HEAD | tail -1)
+TREE=$(git rev-parse $ROOT^{tree})
+
+# Look through upstream's history for the commit holding that identical snapshot,
+# and record it as your copy's starting point.
+git replace --graft $ROOT $(git log --format='%H %T' upstream/main | awk -v t=$TREE '$2==t && !f {print $1; f=1}')
+
+# Merge. Now that Git has a reference point, this behaves like any normal update.
+git merge upstream/main
+git push
+```
+
+You only do that once. The merge links the two histories for good, so from then on
+updating is just:
+
+```bash
+git fetch upstream
+git merge upstream/main
+git push
+```
+
+If the `git replace` line fails with this:
+
+```
+error: new commit is the same as the old one: '<a long string of letters and numbers>'
+```
+
+then no upstream snapshot matches your starting point — usually because files were
+changed before your copy's first commit. In that case run `git merge
+--allow-unrelated-histories upstream/main` and expect to resolve a long list of
+conflicts by hand:
+
+- Anything under `api/`, `lib/`, `scanner/`, `dashboard/`, `.github/` — JobBud's own
+  tool files. Keep **upstream's** version.
+- Anything under `data/` or `config/` — your job data and your profile. Keep **your**
+  version.
+- Anything else at the top level (`README.md`, `SETUP.md`, `package.json`,
+  `vercel.json`, and friends) — keep **upstream's** version, unless you deliberately
+  customised the file.
+
+### Will this clobber my data?
+
+No. Your personal files — `config/profile.yml`, your profile/CV markdown, and
+everything under `data/` — are yours, and upstream never changes them, so a merge
+leaves them exactly as they are.
+
+Conflicts are a separate thing from data loss, and there are two reasons you might see
+one. The ordinary reason is that you edited JobBud's own tool files (code, workflows,
+configuration) and upstream changed the same lines; Git flags those files and you
+resolve them by hand before finishing the merge. If you never edited the tool code, you
+won't hit this. The other reason is the missing starting point described above, which
+makes Git report conflicts in files nobody edited — the `git replace --graft` step
+prevents those, and the update-check workflow does the same thing for you
+automatically.
+
+### Breaking change: signed action links
 
 If you deployed an earlier version of JobBud, note one breaking change: the action
 links embedded in digest and reminder emails (the one-click "mark applied",

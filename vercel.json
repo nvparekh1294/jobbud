@@ -2,6 +2,9 @@
   "github": { "silent": true },
   "ignoreCommand": "if git rev-parse -q --verify HEAD^ >/dev/null 2>&1; then git diff --quiet HEAD^ HEAD -- ':!data' ':!*.md'; else exit 1; fi",
   "cleanUrls": true,
+  "redirects": [
+    { "source": "/", "destination": "/dashboard", "permanent": false }
+  ],
   "rewrites": [
     { "source": "/dashboard",  "destination": "/dashboard/index.html" },
     { "source": "/dashboard/", "destination": "/dashboard/index.html" }

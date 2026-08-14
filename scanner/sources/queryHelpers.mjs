@@ -26,6 +26,18 @@ export function buildRoleGroups(roles, perGroup = 4) {
   return groups;
 }
 
+// Country codes arrive from config/profile.yml exactly as the user (or the
+// onboarding AI) wrote them: "US", " us ", "USA", "UK". Sources look countries
+// up in lowercase ISO-code maps, so an uppercase value used to match nothing and
+// the location was skipped without a word. Normalize before every lookup.
+const COUNTRY_ALIASES = { usa: 'us', uk: 'gb' };
+
+export function normalizeCountry(country) {
+  if (typeof country !== 'string') return '';
+  const cleaned = country.trim().toLowerCase();
+  return COUNTRY_ALIASES[cleaned] || cleaned;
+}
+
 // Build a SerpAPI / Google Jobs location string from a configured location entry,
 // mapping only what the profile actually declares (city, plus region when present).
 // No fixed city map is baked in — the strings come from config.locations.
