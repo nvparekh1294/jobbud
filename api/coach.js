@@ -212,19 +212,31 @@ async function getOAuthAccessToken() {
 
 // ── Route: GET ?action=get-assets ─────────────────────────────────────────────
 // Replaces api/claude-md.js + api/story-bank.js in a single round trip.
-// Returns { claudeMd: string, storyBank: string }.
+// Returns { claudeMd, storyBank, cvMd, bulletBankMd, articleDigestMd, profileYml }
+// — every durable profile file, so the dashboard can tell a returning user from a
+// brand-new one without a second round trip. Absent files come back as ''.
+// The response is a SUPERSET of the old two-key shape; existing callers that
+// destructure { claudeMd, storyBank } are unaffected.
 
 async function handleGetAssets(req, res, githubToken, owner, repo) {
   try {
-    const [claudeMd, storyBank] = await Promise.all([
-      readGithubFile(githubToken, owner, repo, 'CLAUDE.md'),
-      readGithubFile(githubToken, owner, repo, 'story-bank.md'),
+    // Every read is individually soft: one missing or unreadable file must not
+    // blank out the others, or a returning user would look brand new.
+    const [claudeMd, storyBank, cvMd, bulletBankMd, articleDigestMd, profileYml] = await Promise.all([
+      readGithubFile(githubToken, owner, repo, 'CLAUDE.md').catch(() => ''),
+      readGithubFile(githubToken, owner, repo, 'story-bank.md').catch(() => ''),
+      readGithubFile(githubToken, owner, repo, 'cv.md').catch(() => ''),
+      readGithubFile(githubToken, owner, repo, 'bullet-bank.md').catch(() => ''),
+      readGithubFile(githubToken, owner, repo, 'article-digest.md').catch(() => ''),
+      readGithubFile(githubToken, owner, repo, 'config/profile.yml').catch(() => ''),
     ]);
     res.setHeader('Cache-Control', 'no-store');
-    return res.status(200).json({ claudeMd, storyBank });
+    return res.status(200).json({ claudeMd, storyBank, cvMd, bulletBankMd, articleDigestMd, profileYml });
   } catch (err) {
     console.error('[coach] get-assets error:', err);
-    return res.status(200).json({ claudeMd: '', storyBank: '' });
+    return res.status(200).json({
+      claudeMd: '', storyBank: '', cvMd: '', bulletBankMd: '', articleDigestMd: '', profileYml: '',
+    });
   }
 }
 
