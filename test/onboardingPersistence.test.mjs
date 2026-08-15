@@ -257,6 +257,25 @@ test('a persisted run comes back whole', () => {
   assert.equal(loaded.transcript[1].content, 'Ops roles');
 });
 
+test('a saved run stops being written back once it is in the repo', () => {
+  // The envelope is cleared on a successful save. Any later write-through point
+  // on the download step — clicking a download button afterwards — would
+  // otherwise put the whole profile straight back into storage.
+  const storage = makeStorage();
+  const { api } = makeSandbox({ storage, state: {
+    step: 'download', resumeText: 'Alex Doe', result: { claudeMd: '# Alex' }, saved: true,
+  } });
+  api.persist();
+  assert.equal(storage.getItem(STORAGE_KEY), null, 'a saved run must not be resurrected');
+  // And the same run before the save still persists normally.
+  const storage2 = makeStorage();
+  const b = makeSandbox({ storage: storage2, state: {
+    step: 'download', resumeText: 'Alex Doe', result: { claudeMd: '# Alex' }, saved: false,
+  } });
+  b.api.persist();
+  assert.ok(storage2.getItem(STORAGE_KEY));
+});
+
 test('a storage failure is swallowed, not thrown at the user', () => {
   const full = makeStorage();
   full.setItem = () => { throw new Error('QuotaExceededError'); };
@@ -420,6 +439,47 @@ test('the run is cleared once it is safely somewhere, and kept when it is not', 
   // Exiting while the prompt is still up decides nothing — the saved run stays.
   assert.match(done, /if \(onboardingPendingRestore\) \{[\s\S]*onboardingLeaveOnboarding\(\);\s*\n\s*return;/);
   assert.ok(done.indexOf('onboardingPendingRestore') < done.indexOf('onboardingClearPersisted'));
+});
+
+test('logging out takes the saved profile with it', () => {
+  // The envelope holds parsed resume text, the existing profile files (real name,
+  // employers, history) and the generated profile. A browser that just lost its
+  // password must not keep a plaintext copy — this covers the header's Log out
+  // and both revoke paths in verifyAndUnlock, which all route through here.
+  const forget = extractFunction(html, 'forgetPassword');
+  assert.match(forget, /localStorage\.removeItem\(PW_KEY\);/);
+  assert.match(forget, /onboardingClearPersisted\(\);/);
+  // Both stale-password paths still go through forgetPassword rather than
+  // clearing PW_KEY directly, so the profile cannot be left behind on either.
+  const verify = extractFunction(html, 'verifyAndUnlock');
+  assert.equal((verify.match(/forgetPassword\(\);/g) || []).length, 2);
+  assert.doesNotMatch(verify, /removeItem\(/);
+});
+
+test('the onboarding key is declared before the log-out path that reads it', () => {
+  // onboardingClearPersisted reads ONBOARDING_STATE_KEY, and forgetPassword can
+  // run from the boot path. A const read before its declaration is a
+  // ReferenceError, which would abort a log-out part-way through.
+  const keyIdx = html.indexOf('const ONBOARDING_STATE_KEY');
+  const forgetIdx = html.search(/function forgetPassword\b/);
+  assert.ok(keyIdx > 0 && forgetIdx > 0);
+  assert.ok(keyIdx < forgetIdx, 'the key must be declared above forgetPassword');
+  // Declared exactly once — a second copy is a drift hazard.
+  assert.equal((html.match(/const ONBOARDING_STATE_KEY/g) || []).length, 1);
+});
+
+test('a stale run is swept on load even if onboarding is never opened', () => {
+  // The loader only clears as a side effect of someone opening onboarding. A
+  // user who never opens it again would keep a day-old resume in storage.
+  assert.match(
+    html,
+    /DOMContentLoaded', function\(\) \{\s*\n\s*onboardingLoadPersisted\(\);\s*\n\s*\}\);/,
+  );
+  // Sweep only: it must not prompt or touch state, so the return value is unused.
+  const sweep = /DOMContentLoaded', function\(\) \{([\s\S]*?)\}\);/.exec(
+    html.slice(html.indexOf('Lazy expiry')),
+  )[1];
+  assert.doesNotMatch(sweep, /onboardingShowResumePrompt|onboardingResumeSaved|onboardingPendingRestore|=/);
 });
 
 test('the write-through points cover every place progress is created', () => {

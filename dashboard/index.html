@@ -2365,6 +2365,13 @@
   // the moment it stops matching. Nothing here relaxes that.
   const PW_KEY = 'co_pw';
 
+  // The saved onboarding run (see "Onboarding persistence" further down). The key
+  // lives up here, next to PW_KEY, because forgetPassword() below has to clear it
+  // too and the persistence block is thousands of lines later — a const read
+  // before its declaration is a ReferenceError, and a log-out that throws
+  // half-way is the last thing this path should be able to do.
+  const ONBOARDING_STATE_KEY = 'jobbud_onboarding_v1';
+
   // Reads the saved password, migrating a session-era one across on first sight
   // so an open tab does not get logged out by this change.
   function storedPassword() {
@@ -2382,9 +2389,16 @@
 
   // Clears both vaults: the session-era copy may still exist on a browser that
   // has not been through storedPassword() yet.
+  //
+  // The saved onboarding run goes with it. It holds the parsed resume text, the
+  // existing profile files (real name, employers, history) and the generated
+  // profile — so leaving it behind on a manual Log out, or on either of the
+  // revoke paths in verifyAndUnlock, would keep a plaintext copy of the user's
+  // background on a browser that just lost its right to be here.
   function forgetPassword() {
     localStorage.removeItem(PW_KEY);
     sessionStorage.removeItem(PW_KEY);
+    onboardingClearPersisted();
   }
 
   function unlock(pw) {
@@ -6579,7 +6593,10 @@
   // written through to localStorage (same surface as the saved password, which
   // survives a restart where sessionStorage does not) and offered back the next
   // time the user opens onboarding.
-  const ONBOARDING_STATE_KEY = 'jobbud_onboarding_v1';
+  //
+  // ONBOARDING_STATE_KEY is declared up beside PW_KEY, because forgetPassword()
+  // clears this envelope too and runs long before this point in the file.
+  //
   // Older than this and the run is almost certainly abandoned; offering it back
   // is noise. Discarded silently rather than prompted.
   const ONBOARDING_STATE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -6632,6 +6649,11 @@
   // an unserializable value must never take down the flow the user is in the
   // middle of — they simply continue unpersisted.
   function onboardingPersist() {
+    // Once the run is committed to the repo the envelope is cleared, and there is
+    // nothing left worth keeping. Without this, any later write-through point on
+    // the download step — clicking a download button after saving — would write
+    // the whole profile straight back into storage that was just emptied.
+    if (onboardingSaved) return;
     try {
       const envelope = { savedAt: Date.now(), state: onboardingSnapshot() };
       localStorage.setItem(ONBOARDING_STATE_KEY, JSON.stringify(envelope));
@@ -6675,6 +6697,15 @@
     if (!onboardingStateHasProgress(state)) { onboardingClearPersisted(); return null; }
     return state;
   }
+
+  // Lazy expiry: the loader clears anything stale, corrupt or empty as a side
+  // effect, but only ever runs when someone opens onboarding. A user who never
+  // opens it again would keep a day-old copy of their resume and profile in
+  // storage indefinitely. Sweep once per load. The return value is deliberately
+  // ignored — this must not prompt, restore, or touch any onboarding state.
+  document.addEventListener('DOMContentLoaded', function() {
+    onboardingLoadPersisted();
+  });
 
   function startOnboarding(isRefresh) {
     // Offer the earlier run back BEFORE resetting anything — the reset below is
