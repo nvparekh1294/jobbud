@@ -375,11 +375,71 @@ test('no onboarding copy describes bullet-bank.md as optional', () => {
 });
 
 test('the download step says the profile files must be committed together', () => {
-  // "all of them", not "all five": v1.2 added a sixth downloadable file
-  // (scanner/portals.yml) that appears only when the user built a watch-list.
-  assert.match(html, /Updating an existing profile\? Commit all of them\./);
-  assert.match(html, /applications are written from <strong>bullet-bank\.md<\/strong>, not cv\.md/);
+  // One instruction for both situations. The copy used to fork into "updating"
+  // and "first time" advice, and the first-time half ranked the files — which is
+  // exactly what teaches a partial commit.
+  assert.match(html, /They work as a set — commit all of them, whether this is your first setup or an update\./);
+  assert.match(html, /applications in particular are written from <strong>bullet-bank\.md<\/strong>, not cv\.md/);
   assert.match(html, /leaves every future application running on your old resume/);
+  // No count, either: v1.2 added a sixth downloadable file (scanner/portals.yml)
+  // that appears only when the user built a watch-list.
+  assert.doesNotMatch(html, /Commit all five/);
+  // And no fork into per-situation advice, which is where the ranking lived.
+  assert.doesNotMatch(html, /Setting up for the first time\?/);
+  assert.doesNotMatch(html, /Updating an existing profile\?/);
+});
+
+test('no onboarding copy ranks the profile files against each other', () => {
+  // Nikita's rule: never tell a user some of these files are optional. Ranking
+  // them is how you get a partial commit, which is the stale-file bug class.
+  //
+  // Scoped to the MARKUP — everything above the inline <script> — because this is
+  // a rule about what users read. Code comments below legitimately describe which
+  // generation steps block and which do not.
+  //
+  // The bullet-bank TAGGING step is a genuinely optional exercise, not a file, so
+  // its panel is exempt by id.
+  const markup = html.slice(0, html.indexOf('<script>'));
+  assert.ok(markup.includes('onboarding-step-download'), 'markup slice must cover the onboarding view');
+  const panelStart = markup.indexOf('id="onboarding-step-bulletbank"');
+  const panelEnd = markup.indexOf('id="onboarding-step-bulletbankchat"');
+  const FILE_RE = /CLAUDE\.md|cv\.md|bullet.?bank\.md|article-digest\.md|profile\.yml/i;
+  const RANKING_RE = /\boptional\b|\bsharpen(s|ing)?\b|when you can|nice.to.have|\brequired\b|priority order|are the three/i;
+  const WINDOW = 3;
+  const lines = markup.split('\n');
+  let offset = 0;
+  const offsets = lines.map(l => { const o = offset; offset += l.length + 1; return o; });
+  const hits = [];
+  for (let i = 0; i < lines.length; i++) {
+    const at = offsets[i];
+    if (panelStart > 0 && at >= panelStart && at < panelEnd) continue;
+    const block = lines.slice(i, i + WINDOW).join(' ');
+    if (FILE_RE.test(block) && RANKING_RE.test(block)) {
+      hits.push(`line ${i + 1}: ${block.replace(/\s+/g, ' ').trim().slice(0, 200)}`);
+    }
+  }
+  assert.deepEqual(hits, [], `profile files still ranked as optional:\n${hits.join('\n')}`);
+});
+
+test('the retired ranking phrases are gone from the whole file', () => {
+  // Unambiguous copy phrases — none of these would ever be a code comment, so
+  // they can be checked against the file as a whole rather than the markup slice.
+  for (const phrase of [/add them when you can/i, /sharpen the output/i, /are the three the scanner/i, /Priority order:/i]) {
+    assert.doesNotMatch(html, phrase, `retired copy phrase is back: ${phrase}`);
+  }
+});
+
+test('the download step points at the Memory tab instead of hand-editing', () => {
+  // Verified against the code, not assumed: the Memory tab's own Save button
+  // (saveMemoryFile) POSTs /api/memory?action=save-memory, which writeGithubFile's
+  // the edit to data/memory/*.md — so "committed to your repo for you" is true of
+  // the tab's edits, not just chat-driven updates.
+  assert.match(html, /<strong>article-digest\.md<\/strong> starts as a baseline, and you don't have to hand-edit it\./);
+  assert.match(html, /Anything you add or correct in the <strong>Memory<\/strong> tab/);
+  assert.match(html, /is committed to your repo for you, and JobBud reads it alongside article-digest\.md on every job\./);
+  // The instruction it replaced is gone.
+  assert.doesNotMatch(html, /enrich it over time by adding role context/);
+  assert.doesNotMatch(html, /is a starter file/);
 });
 
 test('the input step tells a returning user we already found their profile', () => {
