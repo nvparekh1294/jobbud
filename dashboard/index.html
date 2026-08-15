@@ -1688,6 +1688,20 @@
           <button class="draft-discard-btn" onclick="exitOnboarding()">Exit</button>
         </div>
 
+        <!-- Resume-earlier-progress prompt. Shown INSTEAD of the step panels when
+             a saved run is found, because startOnboarding would otherwise wipe the
+             state it is offering to restore. Same inline-confirm styling as the
+             discard warning at the bottom of this view. -->
+        <div id="onboarding-resume-confirm" style="display:none;margin-bottom:14px;max-width:520px">
+          <div class="story-delete-confirm" style="flex-direction:column;align-items:flex-start">
+            <span id="onboarding-resume-confirm-msg">You have onboarding progress from earlier — pick up where you left off?</span>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <button class="story-delete-confirm-btn no" onclick="onboardingResumeSaved()">Resume</button>
+              <button class="story-delete-confirm-btn yes" onclick="onboardingStartOver()">Start over</button>
+            </div>
+          </div>
+        </div>
+
         <!-- Step: input -->
         <div id="onboarding-step-input">
           <div id="onboarding-checking-note" style="display:none;font-size:13px;color:var(--muted);margin-bottom:16px">Checking your profile…</div>
@@ -2064,6 +2078,16 @@
   // list — so "Skip" on the companies step preserves THEIR companies, and the
   // copy has to say that instead of offering to keep an example list.
   let onboardingHasCustomPortals = false;
+  // Every message actually RENDERED in the onboarding chat, in order. This is a
+  // superset of onboardingTranscript: the opening assistant question is displayed
+  // but deliberately never entered into the transcript (the model is not shown its
+  // own greeting), so a rebuild driven by the transcript alone would silently drop
+  // it. Kept separate rather than folded into the transcript so what gets sent to
+  // the API is unchanged.
+  let onboardingChatLog = [];
+  // A saved run found at entry, held while the user decides Resume vs Start over.
+  let onboardingPendingRestore = null;
+  let onboardingPendingIsRefresh = false;
   // Coach tab — personalized portals.yml (company watch-list) built in the
   // 'companies' step. Null when the user skips it (starter list left untouched).
   let onboardingPortalsYml = null;
@@ -6542,7 +6566,252 @@
 
   // ── Onboarding ────────────────────────────────────────────────────────────
 
+  // Every step panel, in flow order. Shared by switchOnboardingStep and the
+  // resume prompt (which has to hide all of them) so the list cannot drift.
+  const ONBOARDING_STEPS = ['input', 'conversation', 'refresh-notes', 'companies', 'generating', 'bulletbank', 'bulletbankchat', 'download'];
+
+  // ── Onboarding persistence ──
+  //
+  // All onboarding state used to live only in JS memory, so any reload — crash,
+  // accidental refresh, browser restart — silently threw away the whole run. The
+  // beforeunload guard only ever warned, and only for generated-but-unsaved
+  // files; it could not help a run that ended without asking. So the state is
+  // written through to localStorage (same surface as the saved password, which
+  // survives a restart where sessionStorage does not) and offered back the next
+  // time the user opens onboarding.
+  const ONBOARDING_STATE_KEY = 'jobbud_onboarding_v1';
+  // Older than this and the run is almost certainly abandoned; offering it back
+  // is noise. Discarded silently rather than prompted.
+  const ONBOARDING_STATE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+  // The current run as a plain JSON-safe object. Textarea drafts are read LIVE
+  // from the DOM rather than from their globals: onboardingChangeNotes is only
+  // assigned when the user submits the refresh-notes step, so a reload while they
+  // were still typing would otherwise lose exactly the text they had not
+  // submitted yet.
+  function onboardingSnapshot() {
+    const readVal = id => {
+      const el = document.getElementById(id);
+      return el ? (el.value || '') : '';
+    };
+    const notesDraft = readVal('onboarding-change-notes');
+    const genWrap = document.getElementById('onboarding-gen-wrap');
+    return {
+      step: onboardingStep,
+      isRefresh: onboardingIsRefresh,
+      resumeText: onboardingResumeText,
+      transcript: onboardingTranscript,
+      chatLog: onboardingChatLog,
+      // The submitted notes if there are any, otherwise whatever is in the box.
+      changeNotes: onboardingChangeNotes || notesDraft,
+      refreshResumeDraft: readVal('onboarding-refresh-resume-input'),
+      existingFiles: onboardingExistingFiles,
+      foundRepoProfile: onboardingFoundRepoProfile,
+      hasCustomPortals: onboardingHasCustomPortals,
+      portalsYml: onboardingPortalsYml,
+      result: onboardingResult,
+      saved: onboardingSaved,
+      downloaded: onboardingDownloaded,
+      // Rebuilt from the live rows, so an edit the user never submitted survives.
+      companies: onboardingStep === 'companies' ? companyRowsCollect('onboarding-companies-rows') : [],
+      // Whether the conversation had already earned its Generate button.
+      genReady: !!(genWrap && genWrap.style.display !== 'none'),
+    };
+  }
+
+  // Is there anything in this state worth offering back? A run that only ever
+  // opened the input step is not progress, and prompting about it would be noise.
+  function onboardingStateHasProgress(state) {
+    if (!state) return false;
+    if (state.result) return true;
+    if ((state.resumeText || '').trim()) return true;
+    return (state.transcript || []).some(m => m && m.content !== '__init__');
+  }
+
+  // Write-through. Deliberately fails SOFT: a full quota, a private-mode throw or
+  // an unserializable value must never take down the flow the user is in the
+  // middle of — they simply continue unpersisted.
+  function onboardingPersist() {
+    try {
+      const envelope = { savedAt: Date.now(), state: onboardingSnapshot() };
+      localStorage.setItem(ONBOARDING_STATE_KEY, JSON.stringify(envelope));
+    } catch (err) {
+      console.warn('[onboarding] could not save progress — continuing unpersisted:', err);
+    }
+  }
+
+  function onboardingClearPersisted() {
+    try {
+      localStorage.removeItem(ONBOARDING_STATE_KEY);
+    } catch (err) {
+      console.warn('[onboarding] could not clear saved progress:', err);
+    }
+  }
+
+  // The saved state, or null when there is nothing worth restoring. Anything
+  // unreadable, unparseable, stale or empty is cleared and treated as absent, so
+  // a corrupt entry can never wedge a user out of onboarding.
+  function onboardingLoadPersisted() {
+    let raw;
+    try {
+      raw = localStorage.getItem(ONBOARDING_STATE_KEY);
+    } catch (err) {
+      console.warn('[onboarding] could not read saved progress:', err);
+      return null;
+    }
+    if (!raw) return null;
+    let envelope;
+    try {
+      envelope = JSON.parse(raw);
+    } catch (err) {
+      console.warn('[onboarding] saved progress was unreadable — discarding:', err);
+      onboardingClearPersisted();
+      return null;
+    }
+    const savedAt = envelope && Number(envelope.savedAt);
+    const state = envelope && envelope.state;
+    if (!state || !savedAt || !Number.isFinite(savedAt)) { onboardingClearPersisted(); return null; }
+    if (Date.now() - savedAt > ONBOARDING_STATE_MAX_AGE_MS) { onboardingClearPersisted(); return null; }
+    if (!onboardingStateHasProgress(state)) { onboardingClearPersisted(); return null; }
+    return state;
+  }
+
   function startOnboarding(isRefresh) {
+    // Offer the earlier run back BEFORE resetting anything — the reset below is
+    // exactly what would destroy it.
+    const saved = onboardingLoadPersisted();
+    if (saved) {
+      onboardingPendingRestore = saved;
+      onboardingPendingIsRefresh = !!isRefresh;
+      onboardingShowResumePrompt();
+      switchCoachView('onboarding');
+      return;
+    }
+    onboardingFreshStart(isRefresh);
+  }
+
+  // The resume prompt replaces the step panels rather than sitting above them:
+  // the panels still hold the previous run's DOM, and showing it underneath a
+  // question about restoring it is confusing.
+  function onboardingShowResumePrompt() {
+    ONBOARDING_STEPS.forEach(s => {
+      const el = document.getElementById(`onboarding-step-${s}`);
+      if (el) el.style.display = 'none';
+    });
+    onboardingHideDiscardConfirm();
+    const el = document.getElementById('onboarding-resume-confirm');
+    if (el) el.style.display = '';
+  }
+
+  function onboardingHideResumePrompt() {
+    const el = document.getElementById('onboarding-resume-confirm');
+    if (el) el.style.display = 'none';
+  }
+
+  // "Start over": the saved run is what the user just declined, so it goes now
+  // rather than lingering to be offered again on the next entry.
+  function onboardingStartOver() {
+    onboardingClearPersisted();
+    onboardingPendingRestore = null;
+    onboardingHideResumePrompt();
+    onboardingFreshStart(onboardingPendingIsRefresh);
+  }
+
+  // "Resume": put the saved run back and drop the user where they left off.
+  function onboardingResumeSaved() {
+    const state = onboardingPendingRestore;
+    onboardingPendingRestore = null;
+    onboardingHideResumePrompt();
+    if (!state) { onboardingFreshStart(onboardingPendingIsRefresh); return; }
+
+    onboardingIsRefresh = !!state.isRefresh;
+    onboardingResumeText = state.resumeText || '';
+    onboardingTranscript = Array.isArray(state.transcript) ? state.transcript : [];
+    onboardingChatLog = Array.isArray(state.chatLog) ? state.chatLog : [];
+    onboardingChangeNotes = state.changeNotes || '';
+    onboardingExistingFiles = state.existingFiles || null;
+    onboardingFoundRepoProfile = !!state.foundRepoProfile;
+    onboardingHasCustomPortals = !!state.hasCustomPortals;
+    onboardingPortalsYml = state.portalsYml || null;
+    onboardingResult = state.result || null;
+    onboardingSaved = !!state.saved;
+    onboardingDownloaded = state.downloaded || {};
+    // Nothing is in flight after a reload, and the user has not abandoned
+    // anything by resuming.
+    onboardingLoading = false;
+    onboardingGenerationInProgress = false;
+    onboardingAbandoned = false;
+    onboardingHideDiscardConfirm();
+
+    // Textareas are DOM state, not globals — put the drafts back by hand.
+    const notesEl = document.getElementById('onboarding-change-notes');
+    if (notesEl) notesEl.value = state.changeNotes || '';
+    const refreshResumeEl = document.getElementById('onboarding-refresh-resume-input');
+    if (refreshResumeEl) refreshResumeEl.value = state.refreshResumeDraft || '';
+    const resumePane = document.getElementById('onboarding-resume-paste-pane');
+    if (resumePane) resumePane.style.display = state.refreshResumeDraft ? '' : 'none';
+
+    onboardingRebuildChat();
+    const genWrap = document.getElementById('onboarding-gen-wrap');
+    if (genWrap) genWrap.style.display = state.genReady ? '' : 'none';
+    // The rest of the conversation chrome, which onboardingStartConversation sets
+    // on the way in and a restore never passes through.
+    const ctxEl = document.getElementById('onboarding-conv-context');
+    if (ctxEl) {
+      ctxEl.textContent = onboardingResumeText
+        ? `Resume loaded (${onboardingResumeText.length.toLocaleString()} characters). Answering a few questions will make your profile more accurate.`
+        : 'No resume — answer a few questions to build your profile.';
+    }
+    const sendBtn = document.getElementById('onboarding-send-btn');
+    if (sendBtn) sendBtn.disabled = false;
+
+    // A run interrupted mid-generation cannot be resumed where it stopped: the
+    // request died with the page and the per-file results were never assembled.
+    // Send those users back to the step they can act from instead of a spinner
+    // that will never finish.
+    let step = ONBOARDING_STEPS.includes(state.step) ? state.step : 'input';
+    if (step === 'generating') step = onboardingGenFallbackStep();
+
+    if (step === 'companies') onboardingRestoreCompanies(state.companies);
+    onboardingRenderInputNotes();
+    switchOnboardingStep(step);
+    switchCoachView('onboarding');
+
+    // Fresh repo data, exactly as on a normal entry. The round-2 guard inside the
+    // probe (`if (onboardingExistingFiles) return;`) is what stops it overwriting
+    // the files just restored.
+    onboardingProfileProbe = onboardingProbeExistingProfile();
+  }
+
+  // Replay the rendered messages into an empty chat pane. appendOnboardingMessage
+  // re-appends to onboardingChatLog as it goes, so the log is rebuilt identically
+  // rather than doubled.
+  function onboardingRebuildChat() {
+    const container = document.getElementById('onboarding-chat-messages');
+    if (container) container.innerHTML = '';
+    const log = onboardingChatLog.slice();
+    onboardingChatLog = [];
+    log.forEach(m => appendOnboardingMessage(m.role, m.text));
+  }
+
+  function onboardingRestoreCompanies(companies) {
+    const container = document.getElementById('onboarding-companies-rows');
+    if (container) container.innerHTML = '';
+    const rows = Array.isArray(companies) ? companies : [];
+    if (rows.length) {
+      rows.forEach(c => onboardingAddCompanyRow(c.name || '', c.careers_url || ''));
+    } else {
+      onboardingAddCompanyRow();
+    }
+    onboardingRenderCompaniesSkipCopy();
+    // Always back to the edit phase: the review phase shows ATS results from a
+    // generate-portals call this page never made.
+    onboardingCompaniesEdit();
+  }
+
+  // The original startOnboarding body, unchanged except for the name — reached
+  // either directly (nothing saved) or via "Start over".
+  function onboardingFreshStart(isRefresh) {
     onboardingIsRefresh = !!isRefresh;
     onboardingResumeText = '';
     onboardingTranscript = [];
@@ -6557,7 +6826,16 @@
     onboardingAbandoned = false;
     onboardingPortalsYml = null;
     onboardingHasCustomPortals = false;
+    onboardingChatLog = [];
     onboardingHideDiscardConfirm();
+    onboardingHideResumePrompt();
+
+    // The chat pane is plain DOM, so a second run in the same session would
+    // otherwise open on the previous run's messages.
+    const chatEl = document.getElementById('onboarding-chat-messages');
+    if (chatEl) chatEl.innerHTML = '';
+    const genWrap = document.getElementById('onboarding-gen-wrap');
+    if (genWrap) genWrap.style.display = 'none';
 
     // Reset the refresh-notes inputs too. They are plain DOM textareas, so a
     // second run in the same session inherits the first run's text — and because
@@ -6755,8 +7033,7 @@
     // it (generation finishing while the "still generating" warning is up) would
     // otherwise leave stale copy on screen.
     onboardingHideDiscardConfirm();
-    const steps = ['input', 'conversation', 'refresh-notes', 'companies', 'generating', 'bulletbank', 'bulletbankchat', 'download'];
-    steps.forEach(s => {
+    ONBOARDING_STEPS.forEach(s => {
       const el = document.getElementById(`onboarding-step-${s}`);
       if (el) el.style.display = s === step ? '' : 'none';
     });
@@ -6776,6 +7053,10 @@
       const profBtn = document.getElementById('onboarding-dl-profile');
       if (profBtn) profBtn.style.display = hasProfile ? '' : 'none';
     }
+    // Every step transition is a write-through point. Because the snapshot reads
+    // the refresh-notes textareas LIVE, this also captures notes the user typed
+    // but never submitted, on the way out of that step.
+    onboardingPersist();
   }
 
   // ── Companies step (personalized scanner/portals.yml) ──
@@ -6913,6 +7194,9 @@
         return;
       }
       onboardingPortalsYml = data.portalsYml || null;
+      // Rows validated and the watch-list built — the step does not change here,
+      // so this is its own write-through point.
+      onboardingPersist();
       onboardingRenderDetected(data.entries || []);
       document.getElementById('onboarding-companies-edit').style.display = 'none';
       document.getElementById('onboarding-companies-review').style.display = '';
@@ -6953,6 +7237,7 @@
   // Skip: leave portals.yml untouched (the starter list stays) and generate.
   function onboardingCompaniesSkip() {
     onboardingPortalsYml = null;
+    onboardingPersist();
     onboardingGenerateProfile();
   }
 
@@ -7276,6 +7561,8 @@
           return;
         }
         onboardingResumeText = data.text || '';
+        // The upload is gone with the page, but the parsed text does not have to be.
+        onboardingPersist();
         statusEl.className = 'onboarding-file-status ok';
         // Returning user: skip the first-time conversation entirely and ask only
         // what's changed. Generation then runs the sequential update path with
@@ -7305,6 +7592,7 @@
     }
     switchCoachView('onboarding');
     onboardingResumeText = text;
+    onboardingPersist();
     // Same routing as the upload path: existing profile means "what's changed",
     // not the full first-time conversation.
     await onboardingProfileProbeSettled();
@@ -7403,6 +7691,7 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
     } finally {
       onboardingLoading = false;
       document.getElementById('onboarding-send-btn').disabled = false;
+      onboardingPersist();
     }
   }
 
@@ -7415,6 +7704,9 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
 
     appendOnboardingMessage('user', text);
     onboardingTranscript.push({ role: 'user', content: text });
+    // Saved before the request goes out: the answer they just typed is the thing
+    // a crash mid-reply would otherwise cost them.
+    onboardingPersist();
 
     const pw = storedPassword() || '';
     onboardingLoading = true;
@@ -7449,6 +7741,8 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
     if (userTurns >= 6) {
       document.getElementById('onboarding-gen-wrap').style.display = '';
     }
+    // After the assistant turn landed and the Generate button state settled.
+    onboardingPersist();
   }
 
   function onboardingHandleReply(reply) {
@@ -7467,6 +7761,9 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
     div.textContent = text;
     container.appendChild(div);
     container.scrollTop = container.scrollHeight;
+    // Recorded here, at the single point every rendered message passes through,
+    // so a restore can rebuild the pane exactly as the user last saw it.
+    onboardingChatLog.push({ role, text });
   }
 
   function appendOnboardingTyping() {
@@ -7526,6 +7823,9 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
         return;
       }
       onboardingResult = data;
+      // The generated files are the most expensive thing in the run — saved the
+      // moment they exist, before the optional profile.yml call that follows.
+      onboardingPersist();
       // generate-onboarding does NOT produce config/profile.yml, so fetch it
       // separately here (the sequential/refresh path already does this). Without
       // it a brand-new user's scanner runs with no profile. Non-blocking, exactly
@@ -7682,6 +7982,8 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
       // Attach the personalized portals.yml (if the user built one) so it rides
       // the same download + save-to-repo path as the generated profile files.
       if (onboardingPortalsYml) onboardingResult.portalsYml = onboardingPortalsYml;
+      // Five API calls' worth of output — saved before anything else can go wrong.
+      onboardingPersist();
       // Trigger (a): seed/refresh persistent memory from the resume + conversation.
       fireMemoryUpdate('onboarding', { resumeText: onboardingResumeText, transcript: transcriptText });
       switchOnboardingStep('download');
@@ -7712,6 +8014,7 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
     // Downloading every generated file is the other way to not lose them, so it
     // counts toward "saved" for the discard warning below.
     onboardingDownloaded[key] = true;
+    onboardingPersist();
     if (!onboardingHasUnsavedFiles()) onboardingHideDiscardConfirm();
   }
 
@@ -7773,6 +8076,9 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
       if (r.ok && d.success) {
         onboardingSaved = true;
         onboardingHideDiscardConfirm();
+        // The files are in the repo now, which is the whole goal of the run —
+        // there is nothing left worth offering back on the next entry.
+        onboardingClearPersisted();
         showToast(`Saved to your repo: ${(d.saved || []).join(', ')}`);
       } else {
         showToast(d.error || 'Could not save to your repo. Use the download buttons instead.');
@@ -7787,6 +8093,15 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
   // "Done" must never silently discard generated files — before this, leaving
   // here threw away the new profile while the repo kept serving the old one.
   function onboardingDone() {
+    // Exiting while the resume prompt is still up is not a decision about the
+    // saved run — and the globals here still belong to this page's (empty)
+    // session, so the progress check below would read "nothing" and clear the
+    // very run the user was just offered. Leave it untouched for next time.
+    if (onboardingPendingRestore) {
+      onboardingPendingRestore = null;
+      onboardingLeaveOnboarding();
+      return;
+    }
     // Mid-generation there is no onboardingResult yet, so the unsaved check below
     // sees nothing to lose and would wave the user straight out — while the run
     // finishes ~90s later on a hidden view and the files are thrown away.
@@ -7797,6 +8112,16 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
     if (onboardingHasUnsavedFiles()) {
       onboardingShowDiscardConfirm('unsaved');
       return;
+    }
+    // Nothing is at risk at this point, which means one of two things. Either the
+    // run finished (files exist and are saved or fully downloaded) or it never
+    // produced files at all. A finished run has nothing left to offer back; an
+    // unfinished one might — Exit mid-conversation is exactly the case this
+    // feature exists for, so that progress is kept rather than cleared.
+    if (onboardingResult || !onboardingStateHasProgress(onboardingSnapshot())) {
+      onboardingClearPersisted();
+    } else {
+      onboardingPersist();
     }
     onboardingLeaveOnboarding();
   }
@@ -7813,11 +8138,15 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
     // which would silently re-arm the beforeunload prompt for the rest of the
     // session. The user already said leave, so keep it disarmed.
     onboardingAbandoned = true;
+    // An explicit "leave it behind" covers the saved copy too — otherwise the run
+    // the user just threw away would be offered back on the next entry.
+    onboardingClearPersisted();
     onboardingLeaveOnboarding();
   }
 
   function onboardingLeaveOnboarding() {
     onboardingHideDiscardConfirm();
+    onboardingHideResumePrompt();
     switchCoachView('library');
     loadStories();
   }

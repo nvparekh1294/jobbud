@@ -417,7 +417,9 @@ test('leaving mid-generation warns instead of silently losing the profile', () =
   // Leaving anyway disarms the prompt so a late-landing result cannot re-arm it.
   assert.match(extractFunction(html, 'onboardingDiscardAnyway'), /onboardingAbandoned = true/);
   assert.match(extractFunction(html, 'onboardingHasUnsavedFiles'), /if \(onboardingAbandoned\) return false;/);
-  assert.match(extractFunction(html, 'startOnboarding'), /onboardingAbandoned = false;/);
+  // The per-run reset moved into onboardingFreshStart when startOnboarding grew
+  // its resume-earlier-progress branch; the reset itself is unchanged.
+  assert.match(extractFunction(html, 'onboardingFreshStart'), /onboardingAbandoned = false;/);
 });
 
 test('the leave confirmation renders outside the step panels', () => {
@@ -445,10 +447,11 @@ test('generation failure returns a conversation user to their conversation', () 
   assert.match(helper, /onboardingExistingFiles \? 'refresh-notes' : 'conversation'/);
 });
 
-test('startOnboarding clears the refresh-notes inputs from a previous run', () => {
+test('a fresh start clears the refresh-notes inputs from a previous run', () => {
   // Stale textarea content is invisible (the resume pane starts collapsed) but
   // onboardingStartGenerateFromNotes prefers it over the freshly parsed resume.
-  const start = extractFunction(html, 'startOnboarding');
+  // Lives in onboardingFreshStart since startOnboarding gained the resume branch.
+  const start = extractFunction(html, 'onboardingFreshStart');
   assert.match(start, /getElementById\('onboarding-change-notes'\)/);
   assert.match(start, /getElementById\('onboarding-refresh-resume-input'\)/);
   assert.match(start, /getElementById\('onboarding-resume-paste-pane'\)/);
