@@ -5642,6 +5642,12 @@
     loadEl.style.display = '';
     emptyEl.style.display = 'none';
     listEl.innerHTML = '';
+    // Take down any delete failure from a previous visit. It lives in
+    // #coach-library-view, which switchCoachView shows and hides WITHOUT
+    // clearing — so leaving the library and coming back used to re-show the old
+    // reason beside a list that has since been rebuilt. Before the fetch, not
+    // inside the try: a load that fails must not leave the stale line up either.
+    clearSaveFailureAt('story-delete-error');
     try {
       const res = await fetch('/api/coach?action=get-assets', { headers: { 'X-Dashboard-Password': pw } });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

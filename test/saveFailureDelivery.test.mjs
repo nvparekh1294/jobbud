@@ -509,3 +509,71 @@ test('RESUMING a run clears the previous attempt\'s save failure', () => {
       `#${id} still holds the previous attempt's reason after a resume`);
   }
 });
+
+// ── The story-delete failure, likewise ───────────────────────────────────────
+//
+// THE BUG. #story-delete-error lives inside #coach-library-view, and
+// switchCoachView only flips `display` on that container — it never clears what
+// is inside it. So after a failed delete the only thing that ever took the panel
+// down was the NEXT delete attempt: leave the library view, come back, and the
+// old reason is on screen again beside a story that is still there.
+//
+// loadStories is the natural clear point: it is what re-entering the library
+// runs, and it rebuilds the very list the message refers to.
+
+function storyLibraryStubs(panel) {
+  const els = {
+    'story-delete-error': panel,
+    'coach-loading': { style: { display: 'none' } },
+    'coach-empty': { style: { display: 'none' } },
+    'coach-stories-list': { style: { display: '' }, innerHTML: '' },
+    'onboarding-banner': { style: { display: 'none' } },
+  };
+  return { getElementById: (id) => (els[id] !== undefined ? els[id] : null) };
+}
+
+function loadStoriesFactory() {
+  const body = [
+    extractFunction(html, 'clearSaveFailure'),
+    extractFunction(html, 'clearSaveFailureAt'),
+    extractFunction(html, 'loadStories'),
+  ].join('\n\n');
+  return new Function('document', 'fetch', 'console', `
+    'use strict';
+    let claudeMdContent = '', storyBankContent = '';
+    const storedPassword = () => 'pw';
+    const renderStories = () => {};
+    ${body}
+    return () => loadStories();
+  `);
+}
+
+const QUIET = { error: () => {}, log: () => {}, warn: () => {} };
+
+test('loadStories clears a previous delete failure', async () => {
+  const panel = populatedFailureEl('The story could not be deleted, so it is still in your repo.', null);
+  const run = loadStoriesFactory()(
+    storyLibraryStubs(panel),
+    async () => ({ ok: true, status: 200, json: async () => ({ claudeMd: '# x', storyBank: '' }) }),
+    QUIET,
+  );
+  await run();
+  assert.equal(panel.style.display, 'none',
+    '#story-delete-error survived a return to the library view — a stale delete reason is on screen');
+  assert.equal(panel.textContent, '',
+    '#story-delete-error still holds the previous failure\'s reason');
+});
+
+test('a delete failure is cleared even when loadStories itself FAILS', async () => {
+  // The clear must not sit behind the fetch. If the assets request fails, the
+  // list renders empty and a leftover "could not be deleted" line is doubly wrong.
+  const panel = populatedFailureEl('The story could not be deleted, so it is still in your repo.', null);
+  const run = loadStoriesFactory()(
+    storyLibraryStubs(panel),
+    async () => ({ ok: false, status: 500, json: async () => ({}) }),
+    QUIET,
+  );
+  await run();
+  assert.equal(panel.style.display, 'none',
+    '#story-delete-error survives when loadStories fails — the clear is sitting behind the fetch');
+});
