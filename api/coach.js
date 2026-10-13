@@ -4,7 +4,7 @@
 
 import { stringify as stringifyYaml, parse as parseYaml } from 'yaml';
 import { generateInterviewPrepDoc } from '../scanner/interviewPackage.mjs';
-import { readGithubText, writeGithubFile, assertRepoPrivate, RepoPublicError, normalizeJsonDoc } from '../lib/github.js';
+import { readGithubText, writeGithubFile, assertRepoPrivate, RepoPublicError, githubWriteErrorResponse, normalizeJsonDoc } from '../lib/github.js';
 import { detectAts } from '../lib/atsDetect.js';
 import { safeEqual } from '../lib/auth.mjs';
 import { isStarterPortalsList } from '../lib/portalsMeta.mjs';
@@ -376,6 +376,13 @@ async function handleSaveStory(req, res, githubToken, owner, repo) {
       return res.status(403).json({ error: err.message, code: 'REPO_PUBLIC' });
     }
     console.error('[coach] save-story error:', err);
+    // A GitHub write failure knows WHY it failed — the token is read-only, the
+    // token is dead, the repo is invisible, the branch is missing. Say which,
+    // instead of the generic sentence below that sent the user back to retry
+    // something retrying can never fix. Only curated copy crosses this line; the
+    // raw GitHub body stays in the console.error above (lib/github.js).
+    const gh = githubWriteErrorResponse(err);
+    if (gh) return res.status(gh.status).json(gh.body);
     return res.status(500).json({ status: 500, message: 'Something went wrong. Please try again.' });
   }
 }
@@ -444,6 +451,13 @@ async function handleDeleteStory(req, res, githubToken, owner, repo) {
       return res.status(403).json({ error: err.message, code: 'REPO_PUBLIC' });
     }
     console.error('[coach] delete-story error:', err);
+    // A GitHub write failure knows WHY it failed — the token is read-only, the
+    // token is dead, the repo is invisible, the branch is missing. Say which,
+    // instead of the generic sentence below that sent the user back to retry
+    // something retrying can never fix. Only curated copy crosses this line; the
+    // raw GitHub body stays in the console.error above (lib/github.js).
+    const gh = githubWriteErrorResponse(err);
+    if (gh) return res.status(gh.status).json(gh.body);
     return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }
@@ -479,6 +493,13 @@ async function handleUpdateStory(req, res, githubToken, owner, repo) {
       return res.status(403).json({ error: err.message, code: 'REPO_PUBLIC' });
     }
     console.error('[coach] update-story error:', err);
+    // A GitHub write failure knows WHY it failed — the token is read-only, the
+    // token is dead, the repo is invisible, the branch is missing. Say which,
+    // instead of the generic sentence below that sent the user back to retry
+    // something retrying can never fix. Only curated copy crosses this line; the
+    // raw GitHub body stays in the console.error above (lib/github.js).
+    const gh = githubWriteErrorResponse(err);
+    if (gh) return res.status(gh.status).json(gh.body);
     return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }
@@ -1515,6 +1536,13 @@ Do NOT treat absence of information as a signal to clear or placeholder-ize exis
       return res.status(403).json({ error: err.message, code: 'REPO_PUBLIC' });
     }
     console.error('[coach] apply-memory-to-profile error:', err);
+    // A GitHub write failure knows WHY it failed — the token is read-only, the
+    // token is dead, the repo is invisible, the branch is missing. Say which,
+    // instead of the generic sentence below that sent the user back to retry
+    // something retrying can never fix. Only curated copy crosses this line; the
+    // raw GitHub body stays in the console.error above (lib/github.js).
+    const gh = githubWriteErrorResponse(err);
+    if (gh) return res.status(gh.status).json(gh.body);
     return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }
@@ -1687,6 +1715,13 @@ async function handleSaveOnboarding(req, res, githubToken, owner, repo) {
       return res.status(403).json({ error: err.message, code: 'REPO_PUBLIC' });
     }
     console.error('[coach] save-onboarding error:', err);
+    // A GitHub write failure knows WHY it failed — the token is read-only, the
+    // token is dead, the repo is invisible, the branch is missing. Say which,
+    // instead of the generic sentence below that sent the user back to retry
+    // something retrying can never fix. Only curated copy crosses this line; the
+    // raw GitHub body stays in the console.error above (lib/github.js).
+    const gh = githubWriteErrorResponse(err);
+    if (gh) return res.status(gh.status).json(gh.body);
     return res.status(500).json({ error: 'Could not save your files. Please try again, or use the download buttons.' });
   }
 }
@@ -1731,6 +1766,13 @@ async function handleSaveMockSession(req, res, githubToken, owner, repo) {
     return res.status(200).json({ success: true });
   } catch (err) {
     console.error('[coach] save-mock-session error:', err);
+    // A GitHub write failure knows WHY it failed — the token is read-only, the
+    // token is dead, the repo is invisible, the branch is missing. Say which,
+    // instead of the generic sentence below that sent the user back to retry
+    // something retrying can never fix. Only curated copy crosses this line; the
+    // raw GitHub body stays in the console.error above (lib/github.js).
+    const gh = githubWriteErrorResponse(err);
+    if (gh) return res.status(gh.status).json(gh.body);
     return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }
