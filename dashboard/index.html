@@ -717,7 +717,12 @@
     .story-modal-textarea { flex: 1; width: 100%; min-height: 300px; font-family: 'SF Mono', 'Fira Mono', ui-monospace, monospace; font-size: 12px; line-height: 1.6; padding: 12px; border: 1px solid var(--border); border-radius: 8px; resize: vertical; color: var(--text); background: var(--bg); box-sizing: border-box; }
     .story-modal-footer { padding: 12px 20px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
     /* No longer the footer's flex spacer — it is a block in the modal body now,
-       so a multi-sentence write failure wraps instead of being squeezed. */
+       so a multi-sentence write failure wraps instead of being squeezed.
+       `color: var(--red)` was dropped here deliberately, not by accident: the
+       only user of this class, #story-edit-error, now also carries
+       `setup-check bad`, so it signals the error through that rule's red BORDER
+       like every other save-failure panel. Red body text on top of it made this
+       one panel louder than the rest for no reason. */
     .story-modal-error { font-size: 12px; flex-shrink: 0; }
     /* Chat interface */
     .coach-chat-wrap { display: flex; flex-direction: column; height: calc(100vh - 220px); min-height: 400px; max-height: 680px; }
