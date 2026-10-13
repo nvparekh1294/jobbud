@@ -332,6 +332,35 @@ test('githubWriteErrorResponse sends ONLY curated copy, never the raw body or st
   assert.ok(!serialized.includes('blob create'), 'internal step names must never reach the browser');
 });
 
+test('NO code leaks the raw body, and that includes the separately-sent parts', () => {
+  // A sweep rather than one spot check, so a new code (GH_REPO_UNREADABLE was
+  // the latest) cannot be added with the raw body interpolated into its copy,
+  // and so the `userMessage`/`fix` fields added for the two-part inline render
+  // are covered by the same rule as `error`/`message`.
+  const cases = [
+    ['repo get', 401], ['repo get', 403], ['repo get', 404], ['repo get', 422], ['repo get', 500],
+    ['ref get', 404], ['ref get', 403], ['commit get', 404],
+    ['blob create', 403], ['blob create', 422], ['blob create', 404],
+    ['tree create', 422], ['tree create', 404], ['tree create', 500], ['tree create', 502],
+    ['commit create', 422], ['commit create', 409],
+    ['ref patch', 422], ['ref patch', 409], ['ref patch', 404], ['ref patch', 403],
+    ['blob create', 429],
+  ];
+  for (const [step, status] of cases) {
+    const body = ghBody(`Resource not accessible — ${step} ${status}`);
+    const err = writeFailure(step, status, body, undefined, `${step} failed: ${status} — ${body}`);
+    const out = githubWriteErrorResponse(err);
+    const serialized = JSON.stringify(out.body);
+    const label = `${step} ${status} → ${err.code}`;
+    assert.ok(!serialized.includes(SENTINEL), `raw GitHub body leaked: ${label}`);
+    assert.ok(!serialized.includes('Resource not accessible'), `GitHub wording leaked: ${label}`);
+    assert.ok(!serialized.includes(step), `internal step name leaked: ${label}`);
+    assert.ok(!serialized.includes(String(status)), `the raw GitHub status leaked: ${label}`);
+    // And the shape is the same for every code — no code gets extra fields.
+    assert.deepEqual(Object.keys(out.body).sort(), ['code', 'error', 'fix', 'message', 'userMessage'], label);
+  }
+});
+
 test('githubWriteErrorResponse maps config faults to 403 and transient ones to 503', () => {
   const statusFor = (step, status, body) => githubWriteErrorResponse(writeFailure(step, status, body, undefined, 'd')).status;
   assert.equal(statusFor('blob create', 401, ''), 403);
