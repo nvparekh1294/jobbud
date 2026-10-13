@@ -318,10 +318,14 @@ test('githubWriteErrorResponse sends ONLY curated copy, never the raw body or st
     `blob create failed: 403 — ${ghBody('Resource not accessible by personal access token')}`);
   const out = githubWriteErrorResponse(err);
   assert.equal(out.status, 403);
-  assert.deepEqual(Object.keys(out.body).sort(), ['code', 'error', 'fix', 'message']);
+  assert.deepEqual(Object.keys(out.body).sort(), ['code', 'error', 'fix', 'message', 'userMessage']);
   assert.equal(out.body.code, 'GH_WRITE_FORBIDDEN');
   // `message` mirrors `error` because the Story Bank client reads data.message.
   assert.equal(out.body.message, out.body.error);
+  // The cause and the steps are also sent apart, for the inline panel that
+  // renders them as two parts; together they reconstruct the joined string.
+  assert.equal(out.body.error, `${out.body.userMessage} ${out.body.fix}`);
+  assert.ok(!out.body.userMessage.includes(out.body.fix), 'userMessage is the cause alone');
   const serialized = JSON.stringify(out.body);
   assert.ok(!serialized.includes(SENTINEL), 'raw GitHub body must never reach the browser');
   assert.ok(!serialized.includes('Resource not accessible'), 'GitHub wording must never reach the browser');
