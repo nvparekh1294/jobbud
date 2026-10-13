@@ -400,3 +400,112 @@ test('githubWriteErrorResponse sends userMessage and fix separately for the two-
   // And the joined form is still there for anything with room for one string.
   assert.equal(FORBIDDEN.error, `${FORBIDDEN.userMessage} ${FORBIDDEN.fix}`);
 });
+
+// ── A failure panel must not outlive the attempt that produced it ─────────────
+//
+// Persistence was the whole point of moving these off toasts — but a panel that
+// persists has to be taken DOWN deliberately, and there were two places where
+// nothing ever did.
+//
+// Both are executed against stub DOM rather than pattern-matched on source, so
+// what is asserted is "the panel is actually hidden and empty afterwards", not
+// "the file mentions a clear call somewhere".
+
+// A save-failure element as it sits AFTER a failed attempt: displayed, with the
+// cause and the fix rendered into it.
+function populatedFailureEl(cause, fix) {
+  const kids = [{ className: '', textContent: cause || 'Your GitHub token can read your repo but cannot write to it.' }];
+  if (fix !== null) kids.push({ className: 'setup-fix', textContent: fix || 'Give the token Contents: Read and write.' });
+  const el = {
+    className: 'setup-check bad save-failure',
+    style: { display: 'block' },
+    children: kids,
+    appendChild(node) { el.children.push(node); return node; },
+    set textContent(v) { if (!v) el.children.length = 0; },
+    get textContent() { return el.children.map(c => c.textContent).join('\n'); },
+  };
+  return el;
+}
+
+test('RESUMING a run clears the previous attempt\'s save failure', () => {
+  // THE BUG. A save fails on the download step, leaving #onboarding-save-error
+  // populated. The user clicks "Done" — which preserves the DOM, and keeps the
+  // persisted run, because only a SUCCESSFUL save calls onboardingClearPersisted.
+  // They reopen onboarding and choose Resume, which restores them to the step the
+  // run was saved on: the download step, with the dead failure still on it. If
+  // they fixed their token in between, the dashboard is now asserting a write
+  // failure about a token that works — the exact mis-diagnosis this whole change
+  // exists to remove.
+  //
+  // onboardingFreshStart already cleared these; the resume path never did.
+
+  // Read the real ids out of the dashboard so this test tracks the constant
+  // instead of a copy of it.
+  const idsSrc = /const ONBOARDING_SAVE_ERROR_IDS = \[([^\]]+)\]/.exec(html);
+  assert.ok(idsSrc, 'ONBOARDING_SAVE_ERROR_IDS not found in the dashboard');
+  const IDS = idsSrc[1].split(',').map(s => s.trim().replace(/^'|'$/g, ''));
+  // Both the download step's notice and the leave-confirmation's, matching what
+  // onboardingSaveToRepo clears at the start of every attempt.
+  assert.deepEqual(IDS, ['onboarding-save-error', 'onboarding-confirm-save-error']);
+
+  const panels = {};
+  IDS.forEach(id => { panels[id] = populatedFailureEl(); });
+  // Sanity: they start as a failed attempt leaves them.
+  IDS.forEach(id => {
+    assert.equal(panels[id].style.display, 'block');
+    assert.ok(panels[id].textContent.length > 0);
+  });
+
+  // Every other element the restore touches is an inert stub; the clear path
+  // itself runs for real.
+  const other = () => ({ style: { display: '' }, value: '', textContent: '', innerHTML: '', disabled: false });
+  const document = {
+    getElementById: (id) => (panels[id] !== undefined ? panels[id] : other()),
+    createElement: () => ({ className: '', textContent: '', style: {}, appendChild() {} }),
+  };
+
+  const body = [
+    extractFunction(html, 'clearSaveFailure'),
+    extractFunction(html, 'clearSaveFailureAt'),
+    extractFunction(html, 'onboardingResumeSaved'),
+  ].join('\n\n');
+
+  const factory = new Function('document', 'ONBOARDING_SAVE_ERROR_IDS', 'savedState', `
+    'use strict';
+    const ONBOARDING_STEPS = ['input', 'conversation', 'refresh-notes', 'companies',
+      'generating', 'bulletbank', 'bulletbankchat', 'download'];
+    let onboardingPendingRestore = savedState;
+    let onboardingPendingIsRefresh = false;
+    let onboardingIsRefresh = false, onboardingResumeText = '', onboardingTranscript = [];
+    let onboardingChatLog = [], onboardingChangeNotes = '', onboardingExistingFiles = null;
+    let onboardingFoundRepoProfile = false, onboardingHasCustomPortals = false;
+    let onboardingPortalsYml = null, onboardingResult = null, onboardingSaved = false;
+    let onboardingDownloaded = {}, onboardingLoading = false;
+    let onboardingGenerationInProgress = false, onboardingAbandoned = false;
+    let onboardingProfileProbe = null;
+    const onboardingHideResumePrompt = () => {};
+    const onboardingHideDiscardConfirm = () => {};
+    const onboardingFreshStart = () => { throw new Error('freshStart must not run: a saved state was supplied'); };
+    const onboardingRebuildChat = () => {};
+    const onboardingRestoreCompanies = () => {};
+    const onboardingRenderInputNotes = () => {};
+    const onboardingRenderWriteNotice = () => {};
+    const onboardingGenFallbackStep = () => 'download';
+    const switchOnboardingStep = () => {};
+    const switchCoachView = () => {};
+    const onboardingProbeExistingProfile = () => null;
+    ${body}
+    return () => onboardingResumeSaved();
+  `);
+
+  // The decisive case: the run was saved ON the download step, which is both
+  // where the failed save happened and where the dead panel lives.
+  factory(document, IDS, { step: 'download', result: { 'config/profile.yml': 'x' } })();
+
+  for (const id of IDS) {
+    assert.equal(panels[id].style.display, 'none',
+      `#${id} is still displayed after a resume — the previous attempt's failure is being shown again`);
+    assert.equal(panels[id].textContent, '',
+      `#${id} still holds the previous attempt's reason after a resume`);
+  }
+});

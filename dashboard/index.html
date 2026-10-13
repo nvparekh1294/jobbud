@@ -7120,6 +7120,14 @@
     // ever is. (The notice itself lives outside the step panels now, which is
     // what makes it visible on a non-input step at all.)
     onboardingRenderWriteNotice();
+    // And take down the PREVIOUS attempt's save failure, exactly as
+    // onboardingFreshStart does. A save that failed leaves its panel populated;
+    // "Done" preserves the DOM and keeps the persisted run (only a SUCCESSFUL
+    // save calls onboardingClearPersisted), so resuming lands the user back on
+    // the download step still being told their token cannot write — about a
+    // token they may have fixed in the meantime. Both ids, matching what
+    // onboardingSaveToRepo clears at the start of every attempt.
+    ONBOARDING_SAVE_ERROR_IDS.forEach(clearSaveFailureAt);
     switchOnboardingStep(step);
     switchCoachView('onboarding');
 
