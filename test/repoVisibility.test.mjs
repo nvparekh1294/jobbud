@@ -35,6 +35,39 @@ test('getRepoInfo reports private:true for a private repo', async () => {
   );
 });
 
+// getRepoInfo is the ONLY GET /repos/{owner}/{repo} in the codebase, so the
+// write-access signal has to come out of it rather than from a second identical
+// round-trip. These two tests pin that it is passed through and that a response
+// without it degrades to null rather than to a confident wrong answer.
+test('getRepoInfo passes GitHub\'s permissions object and default branch through', async () => {
+  await withFetch(
+    async () => jsonRes({
+      private: true,
+      full_name: 'acme/jobs',
+      default_branch: 'trunk',
+      permissions: { admin: false, maintain: false, push: true, triage: false, pull: true },
+    }),
+    async () => {
+      const info = await getRepoInfo('tok', 'acme', 'jobs');
+      assert.equal(info.permissions.push, true);
+      assert.equal(info.defaultBranch, 'trunk');
+    },
+  );
+});
+
+test('getRepoInfo reports permissions as null when GitHub omits or malforms it', async () => {
+  for (const body of [{ private: true }, { private: true, permissions: null }, { private: true, permissions: [] }, { private: true, permissions: 'push' }]) {
+    await withFetch(
+      async () => jsonRes(body),
+      async () => {
+        const info = await getRepoInfo('tok', 'acme', 'jobs');
+        assert.equal(info.permissions, null, `expected null for ${JSON.stringify(body)}`);
+        assert.equal(info.private, true, 'visibility must still be read correctly');
+      },
+    );
+  }
+});
+
 test('assertRepoPrivate resolves for a private repo', async () => {
   await withFetch(
     async () => jsonRes({ private: true, full_name: 'acme/jobs' }),

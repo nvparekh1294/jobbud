@@ -18,6 +18,10 @@ import handler, {
   checkApiQuota,
   checkGithubToken,
   checkGithubRepo,
+  checkGithubWrite,
+  parseRepoPushAccess,
+  WRITE_FAIL_MESSAGE,
+  WRITE_FAIL_FIX,
   checkDataFile,
   findInvalidTokenChar,
   optionalSourcesCheck,
@@ -85,7 +89,14 @@ const HEALTHY_ROUTES = [
   ['/repos/nikita/jobbud/contents/data/radar.json', contentsRes('{"companies":{}}')],
   ['/repos/nikita/jobbud/contents/data/job-status.json', contentsRes('{"jobs":{}}')],
   ['/repos/nikita/jobbud/contents/data/api-usage.json', contentsRes('{"adzuna":{"callsThisMonth":143,"monthResetDate":"2026-09-07"}}')],
-  ['/repos/nikita/jobbud', jsonRes(200, { private: true, full_name: 'nikita/jobbud' })],
+  // `permissions` is what a real authenticated GET /repos returns, and the
+  // github:write check reads it — so the healthy fixture carries a write-capable
+  // one, exactly as GitHub answers for a token that can push.
+  ['/repos/nikita/jobbud', jsonRes(200, {
+    private: true,
+    full_name: 'nikita/jobbud',
+    permissions: { admin: true, maintain: true, push: true, triage: true, pull: true },
+  })],
 ];
 
 const byName = (checks, name) => checks.find(c => c.check === name);
@@ -469,6 +480,150 @@ test('a private repo the token can see passes', async () => {
   const c = await withFetch(routeFetch([['/repos/a/b', jsonRes(200, { private: true, full_name: 'a/b' })]]),
     () => checkGithubRepo('ghp_x', 'a/b'));
   assert.equal(c.ok, true);
+});
+
+// ── GitHub WRITE access ───────────────────────────────────────────────────────
+//
+// The whole value of this check is that it is never wrong in the dangerous
+// direction. A false "your token can't write" sends a user with a working setup
+// to replace a perfectly good token, so every ambiguous input below must come
+// back informational (ok:true) rather than failing.
+
+test('parseRepoPushAccess reads an explicit push:true as write access', () => {
+  const r = parseRepoPushAccess({ admin: false, maintain: false, push: true, triage: false, pull: true });
+  assert.deepEqual(r, { known: true, canPush: true });
+});
+
+test('parseRepoPushAccess reads an explicit push:false as read-only', () => {
+  const r = parseRepoPushAccess({ admin: false, maintain: false, push: false, triage: false, pull: true });
+  assert.deepEqual(r, { known: true, canPush: false });
+});
+
+test('parseRepoPushAccess treats admin or maintain as write even if push is missing', () => {
+  // Widening the PASS set can only ever suppress a false failure, never create one.
+  assert.deepEqual(parseRepoPushAccess({ admin: true }), { known: true, canPush: true });
+  assert.deepEqual(parseRepoPushAccess({ maintain: true }), { known: true, canPush: true });
+  // ...and an explicit admin:true outranks a push:false, rather than failing.
+  assert.deepEqual(parseRepoPushAccess({ admin: true, push: false }), { known: true, canPush: true });
+});
+
+test('parseRepoPushAccess reports UNKNOWN for anything that is not a usable answer', () => {
+  // GitHub omits `permissions` entirely on an unauthenticated request (verified
+  // against the live API), and nothing stops a future shape change either.
+  for (const input of [undefined, null, {}, [], 'push', 42, { push: 'true' }, { push: 1 }, { pull: true }]) {
+    assert.deepEqual(
+      parseRepoPushAccess(input),
+      { known: false, canPush: false },
+      `expected UNKNOWN (never a failure) for ${JSON.stringify(input)}`,
+    );
+  }
+});
+
+test('checkGithubWrite fails with the exact fix copy when the token cannot push', async () => {
+  const c = await checkGithubWrite('ghp_x', 'nikita/jobbud', { push: false, pull: true });
+  assert.equal(c.check, 'github:write');
+  assert.equal(c.ok, false);
+  assert.equal(c.informational, false);
+  assert.equal(c.message, WRITE_FAIL_MESSAGE);
+  assert.equal(c.fix, WRITE_FAIL_FIX);
+  // The copy has to name the setting and both places it has to be changed.
+  assert.match(c.message, /Save to my repo after onboarding/);
+  assert.match(c.fix, /Contents: Read and write/);
+  assert.match(c.fix, /classic token with the `repo` scope/);
+  assert.match(c.fix, /Redeploy/);
+});
+
+test('checkGithubWrite passes when the token can push', async () => {
+  const c = await checkGithubWrite('ghp_x', 'nikita/jobbud', { push: true, pull: true });
+  assert.equal(c.ok, true);
+  assert.equal(c.informational, false);
+  assert.match(c.message, /can write to nikita\/jobbud/);
+});
+
+test('checkGithubWrite degrades to an INFORMATIONAL note when permissions are absent', async () => {
+  const c = await checkGithubWrite('ghp_x', 'nikita/jobbud', null);
+  assert.equal(c.ok, true, 'an unreadable answer must never be reported as a failure');
+  assert.equal(c.informational, true, 'and must never raise the "Setup needs attention" banner');
+  assert.match(c.message, /could not determine/i);
+  // It still has to be actionable if the user is here because a Save failed.
+  assert.equal(c.fix, WRITE_FAIL_FIX);
+});
+
+test('checkGithubWrite fetches for itself when no permissions are supplied', async () => {
+  const fn = routeFetch([['/repos/a/b', jsonRes(200, { private: true, permissions: { push: false } })]]);
+  const c = await withFetch(fn, () => checkGithubWrite('ghp_x', 'a/b'));
+  assert.equal(c.ok, false);
+  assert.equal(c.message, WRITE_FAIL_MESSAGE);
+  assert.equal(fn.calls.length, 1);
+});
+
+test('checkGithubWrite stays informational when its own fetch fails or errors', async () => {
+  const boom = async () => { throw new Error('socket hang up'); };
+  const netErr = await withFetch(boom, () => checkGithubWrite('ghp_x', 'a/b'));
+  assert.equal(netErr.ok, true);
+  assert.equal(netErr.informational, true);
+  assert.match(netErr.message, /socket hang up/);
+
+  const http500 = await withFetch(routeFetch([['/repos/a/b', jsonRes(500, {})]]),
+    () => checkGithubWrite('ghp_x', 'a/b'));
+  assert.equal(http500.ok, true);
+  assert.equal(http500.informational, true);
+  assert.match(http500.message, /500/);
+});
+
+test('a healthy run reports github:write as passing and makes no extra repo GET', async () => {
+  const fn = routeFetch(HEALTHY_ROUTES);
+  const checks = await withFetch(fn, () => runHealthChecks(HEALTHY_ENV));
+  const w = byName(checks, 'github:write');
+  assert.ok(w, 'github:write must be registered in the full run');
+  assert.equal(w.ok, true);
+  // Exactly ONE GET /repos/{owner}/{repo} for the whole run: checkGithubRepo's
+  // response is handed to the write check rather than re-fetched. The contents/
+  // reads share the prefix, so count only the bare repo URL.
+  const repoGets = fn.calls.filter(u => /\/repos\/nikita\/jobbud(\?|$)/.test(u));
+  assert.equal(repoGets.length, 1, `expected 1 repo GET, got ${repoGets.length}: ${repoGets.join(', ')}`);
+});
+
+test('a read-only token fails the full run instead of passing it green', async () => {
+  // This is the bug: before github:write existed, this exact setup reported
+  // "everything checks out" while every Save button in the app failed.
+  const routes = [
+    ...HEALTHY_ROUTES.filter(([needle]) => needle !== '/repos/nikita/jobbud'),
+    ['/repos/nikita/jobbud', jsonRes(200, {
+      private: true,
+      full_name: 'nikita/jobbud',
+      permissions: { admin: false, maintain: false, push: false, triage: false, pull: true },
+    })],
+  ];
+  const checks = await withFetch(routeFetch(routes), () => runHealthChecks(HEALTHY_ENV));
+  assert.equal(byName(checks, 'github:token').ok, true);
+  assert.equal(byName(checks, 'github:repo').ok, true);
+  assert.equal(byName(checks, 'github:write').ok, false);
+  assert.ok(checks.some(c => !c.ok && !c.informational), 'the run must now surface a real failure');
+});
+
+test('github:write is not run when the repo itself could not be reached', async () => {
+  // One root cause, one sentence. "Can it write?" on top of "it cannot see the
+  // repo" would bury the line the user needs.
+  const routes = [
+    ['/user', jsonRes(200, { login: 'nikita' })],
+    ['/repos/nikita/jobbud', jsonRes(404, {})],
+  ];
+  const checks = await withFetch(routeFetch(routes), () => runHealthChecks(HEALTHY_ENV));
+  assert.equal(byName(checks, 'github:repo').ok, false);
+  assert.equal(byName(checks, 'github:write'), undefined);
+});
+
+test('github:write is not run when the token is dead', async () => {
+  const checks = await withFetch(routeFetch([['/user', jsonRes(401, {})]]), () => runHealthChecks(HEALTHY_ENV));
+  assert.equal(byName(checks, 'github:write'), undefined);
+});
+
+test('github:write never leaks the raw permissions object into the response', async () => {
+  const checks = await withFetch(routeFetch(HEALTHY_ROUTES), () => runHealthChecks(HEALTHY_ENV));
+  const w = byName(checks, 'github:write');
+  assert.deepEqual(Object.keys(w).sort(), ['check', 'fix', 'informational', 'message', 'ok']);
+  assert.doesNotMatch(JSON.stringify(w), /triage|maintain/);
 });
 
 // ── Data files ────────────────────────────────────────────────────────────────
