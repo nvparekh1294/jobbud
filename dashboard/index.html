@@ -1729,6 +1729,29 @@
           <button class="draft-discard-btn" onclick="exitOnboarding()">Exit</button>
         </div>
 
+        <!-- Write-access warning. Filled in and shown by
+             onboardingRenderWriteNotice() when /api/health reports that the
+             GitHub token cannot write to the repo, which is the one thing that
+             makes the LAST step of this flow ("Save to my repo") fail. It is a
+             NOTICE, not a gate: onboarding runs exactly as before either way,
+             and the Download buttons are unaffected. Reuses the Setup Check
+             panel's own styles so the wording and the look match. Empty and
+             hidden until the probe answers; populated with textContent only.
+
+             It sits OUTSIDE the step panels, like #onboarding-discard-confirm
+             below and #onboarding-resume-confirm beneath this, because it is not
+             a property of any one step. It used to live INSIDE
+             #onboarding-step-input, and onboardingResumeSaved() restores to the
+             step the run was saved on — conversation, companies, download — so
+             on every resumed run the probe fired, the notice was populated, and
+             its parent panel was hidden. The user who was CLOSEST to the save
+             button was the one guaranteed not to be warned. Above the panels it
+             shows on every step and on the resume prompt itself.
+
+             Inside the header's max-width:680px wrapper, so it inherits the
+             column width rather than stating its own. -->
+        <div id="onboarding-write-warning" class="setup-check bad save-failure" style="display:none;margin-bottom:16px"></div>
+
         <!-- Resume-earlier-progress prompt. Shown INSTEAD of the step panels when
              a saved run is found, because startOnboarding would otherwise wipe the
              state it is offering to restore. Same inline-confirm styling as the
@@ -1745,15 +1768,6 @@
 
         <!-- Step: input -->
         <div id="onboarding-step-input">
-          <!-- Write-access warning. Filled in and shown by
-               onboardingRenderWriteNotice() when /api/health reports that the
-               GitHub token cannot write to the repo, which is the one thing that
-               makes the LAST step of this flow ("Save to my repo") fail. It is a
-               NOTICE, not a gate: onboarding runs exactly as before either way,
-               and the Download buttons are unaffected. Reuses the Setup Check
-               panel's own styles so the wording and the look match. Empty and
-               hidden until the probe answers; populated with textContent only. -->
-          <div id="onboarding-write-warning" class="setup-check bad" style="display:none;margin-bottom:16px"></div>
           <div id="onboarding-checking-note" style="display:none;font-size:13px;color:var(--muted);margin-bottom:16px">Checking your profile…</div>
           <div id="onboarding-found-note" style="display:none;font-size:13px;color:var(--muted);margin-bottom:16px">We found your existing profile — we'll just ask what's changed. Upload or paste an updated resume, or skip straight to the questions. Your profile files get updated together.</div>
           <div id="onboarding-refresh-note" style="display:none;font-size:13px;color:var(--muted);margin-bottom:16px">Updating your profile? Upload your existing files and answer a few questions about what's changed for the best results.</div>
@@ -7078,6 +7092,14 @@
 
     if (step === 'companies') onboardingRestoreCompanies(state.companies);
     onboardingRenderInputNotes();
+    // Re-assert the write-access notice against the current state, exactly as
+    // onboardingFreshStart does. The probe fired in startOnboarding may already
+    // have answered while the resume prompt was up, and a resumed run lands on
+    // whatever step it was saved on — so this is the path where the notice
+    // matters MOST: the user is closer to "Save to my repo" than a fresh start
+    // ever is. (The notice itself lives outside the step panels now, which is
+    // what makes it visible on a non-input step at all.)
+    onboardingRenderWriteNotice();
     switchOnboardingStep(step);
     switchCoachView('onboarding');
 

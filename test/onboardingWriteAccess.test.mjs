@@ -203,11 +203,14 @@ test('the probe is fired from startOnboarding and NOT awaited', () => {
   const start = extractFunction(html, 'startOnboarding');
   assert.match(start, /onboardingProbeWriteAccess\(\);/, 'the probe must run when onboarding is entered');
   assert.doesNotMatch(start, /await onboardingProbeWriteAccess/, 'awaiting it would stall the entry path');
-  // It must come before the early return for the resume prompt, so a user
-  // resuming a saved run is warned too.
+  // It must come before the early return for the resume prompt, so the probe
+  // RUNS on that path too. Whether the result is ever SEEN is a different
+  // question, and the "visible on a resumed run" tests below are the ones that
+  // answer it — this assertion on its own used to be the only coverage of the
+  // resume path, and it passed happily while the notice was never displayed.
   assert.ok(
     start.indexOf('onboardingProbeWriteAccess()') < start.indexOf('onboardingShowResumePrompt'),
-    'the probe must also cover the resume-prompt path',
+    'the probe must also run on the resume-prompt path',
   );
 });
 
@@ -248,13 +251,142 @@ test('the notice reuses /api/health rather than a new endpoint', () => {
 
 test('the warning markup exists, starts hidden, and is empty until the probe answers', () => {
   const m = /<div id="onboarding-write-warning"([^>]*)>([\s\S]*?)<\/div>/.exec(html);
-  assert.ok(m, 'the warning div must exist in the input step');
+  assert.ok(m, 'the warning div must exist');
   assert.match(m[1], /display:none/);
   assert.equal(m[2].trim(), '', 'it must ship empty — no hardcoded accusation');
-  // Inside the first onboarding screen, where someone entering the flow sees it.
-  const stepStart = html.indexOf('<div id="onboarding-step-input">');
-  assert.ok(stepStart !== -1);
-  assert.ok(html.indexOf('<div id="onboarding-write-warning"') > stepStart);
+});
+
+// ── It has to be visible on the step the user is actually ON ─────────────────
+//
+// THE BUG. The notice lived INSIDE #onboarding-step-input. onboardingResumeSaved
+// restores to the step the run was SAVED on — conversation, companies,
+// download — and switchOnboardingStep hides every other panel. So on a resumed
+// run the probe fired, onboardingRenderWriteNotice() set display on the element,
+// and nothing appeared, because its parent panel was hidden. The user CLOSEST to
+// the save button was the one guaranteed never to be warned.
+//
+// The test that was supposed to cover this asserted only that
+// onboardingProbeWriteAccess() was CALLED before the resume prompt. It passed
+// throughout. Ordering is not visibility, so these assert visibility.
+
+test('the notice lives OUTSIDE the step panels, like the discard confirmation', () => {
+  // #onboarding-discard-confirm is outside the panels for exactly this reason:
+  // it belongs to the view, not to one step.
+  const noticeIdx = html.indexOf('<div id="onboarding-write-warning"');
+  assert.notEqual(noticeIdx, -1);
+  const viewIdx = html.indexOf('<div id="coach-onboarding-view"');
+  assert.notEqual(viewIdx, -1);
+  assert.ok(noticeIdx > viewIdx, 'it must be inside the onboarding view');
+
+  // No step panel may enclose it. Walk the panels and check the notice is not
+  // between a panel's opening tag and the start of the next one.
+  const ONBOARDING_STEPS = ['input', 'conversation', 'refresh-notes', 'companies',
+    'generating', 'bulletbank', 'bulletbankchat', 'download'];
+  const panelStarts = ONBOARDING_STEPS.map(s => {
+    const i = html.indexOf(`<div id="onboarding-step-${s}"`);
+    assert.notEqual(i, -1, `step panel ${s} not found`);
+    return { s, i };
+  }).sort((a, b) => a.i - b.i);
+  // Everything from the first panel to the last panel's end is step territory.
+  assert.ok(
+    noticeIdx < panelStarts[0].i,
+    `the notice sits inside/after the step panels (first panel: ${panelStarts[0].s})`,
+  );
+});
+
+test('the notice is above the resume prompt, so it shows while that prompt is up', () => {
+  // onboardingShowResumePrompt hides every step panel and shows only
+  // #onboarding-resume-confirm — the notice must not be inside that either.
+  const noticeIdx = html.indexOf('<div id="onboarding-write-warning"');
+  const resumeIdx = html.indexOf('<div id="onboarding-resume-confirm"');
+  assert.notEqual(resumeIdx, -1);
+  assert.ok(noticeIdx < resumeIdx, 'the notice must precede, not nest inside, the resume prompt');
+});
+
+test('a RESUMED run on a non-input step actually DISPLAYS the notice', () => {
+  // The real failure, reproduced: render the notice, then run the step switch a
+  // resume performs, and assert the notice is still displayed afterwards.
+  // Parent visibility is modelled, which is the thing the old test could not see.
+  const body = [
+    extractFunction(html, 'onboardingRenderWriteNotice'),
+    extractFunction(html, 'switchOnboardingStep'),
+  ].join('\n\n');
+
+  const ONBOARDING_STEPS = ['input', 'conversation', 'refresh-notes', 'companies',
+    'generating', 'bulletbank', 'bulletbankchat', 'download'];
+
+  // Which panel, if any, encloses the notice in the real markup.
+  const noticeIdx = html.indexOf('<div id="onboarding-write-warning"');
+  let enclosing = null;
+  for (const s of ONBOARDING_STEPS) {
+    const open = html.indexOf(`<div id="onboarding-step-${s}"`);
+    if (open === -1 || open > noticeIdx) continue;
+    // Walk div depth from the panel's opening tag to the notice; depth > 0 means
+    // the notice is still inside that panel.
+    const seg = html.slice(open, noticeIdx);
+    let depth = 0;
+    for (const tok of seg.match(/<div\b|<\/div>/g) || []) depth += tok === '</div>' ? -1 : 1;
+    if (depth > 0) enclosing = s;
+  }
+
+  for (const restored of ['conversation', 'companies', 'download', 'bulletbank']) {
+    const notice = { style: { display: 'none' }, children: [], className: '',
+      appendChild(n) { this.children.push(n); },
+      set textContent(v) { if (!v) this.children.length = 0; },
+      get textContent() { return this.children.map(c => c.textContent).join(' '); } };
+    const panels = {};
+    ONBOARDING_STEPS.forEach(s => { panels[s] = { style: { display: '' } }; });
+
+    const document = {
+      getElementById: (id) => {
+        if (id === 'onboarding-write-warning') return notice;
+        const m = /^onboarding-step-(.+)$/.exec(id);
+        if (m && panels[m[1]]) return panels[m[1]];
+        return null;
+      },
+      createElement: () => ({ className: '', textContent: '' }),
+    };
+
+    const factory = new Function('document', 'ONBOARDING_STEPS', `
+      'use strict';
+      let onboardingWriteNotice = { message: 'Your token cannot write.', fix: 'Fix it in Vercel.' };
+      // The bits of the real switchOnboardingStep that are not about panel
+      // visibility, stubbed so the panel-hiding behaviour runs for real.
+      let onboardingStep = null;
+      let onboardingResult = null;
+      const onboardingHideDiscardConfirm = () => {};
+      const onboardingPersist = () => {};
+      ${body}
+      return {
+        render: () => onboardingRenderWriteNotice(),
+        step: (s) => switchOnboardingStep(s),
+      };
+    `);
+    const api = factory(document, ONBOARDING_STEPS);
+
+    // What a resume does: restore the saved step, then re-assert the notice.
+    api.step(restored);
+    api.render();
+
+    assert.equal(notice.style.display, '', `notice hidden on resumed step ${restored}`);
+    assert.ok(notice.children.length >= 2, `notice empty on resumed step ${restored}`);
+    // And the decisive part: whatever panel encloses it (if any) must not be the
+    // one switchOnboardingStep just hid.
+    const parentVisible = enclosing === null || panels[enclosing].style.display === '';
+    assert.ok(
+      parentVisible,
+      `the notice is inside #onboarding-step-${enclosing}, which is hidden when the run resumes on "${restored}" — it would render into an invisible panel`,
+    );
+  }
+});
+
+test('onboardingResumeSaved re-asserts the notice, as onboardingFreshStart does', () => {
+  // The probe may have answered while the resume prompt was on screen; without
+  // this the DOM keeps whatever it had rather than the current state.
+  const resume = extractFunction(html, 'onboardingResumeSaved');
+  assert.match(resume, /onboardingRenderWriteNotice\(\)/,
+    'a resumed run must re-render the notice against current state');
+  assert.match(extractFunction(html, 'onboardingFreshStart'), /onboardingRenderWriteNotice\(\)/);
 });
 
 test('the server\'s sentences are rendered as DATA, never as markup', () => {
