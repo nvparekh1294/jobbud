@@ -1704,6 +1704,15 @@
 
         <!-- Step: input -->
         <div id="onboarding-step-input">
+          <!-- Write-access warning. Filled in and shown by
+               onboardingRenderWriteNotice() when /api/health reports that the
+               GitHub token cannot write to the repo, which is the one thing that
+               makes the LAST step of this flow ("Save to my repo") fail. It is a
+               NOTICE, not a gate: onboarding runs exactly as before either way,
+               and the Download buttons are unaffected. Reuses the Setup Check
+               panel's own styles so the wording and the look match. Empty and
+               hidden until the probe answers; populated with textContent only. -->
+          <div id="onboarding-write-warning" class="setup-check bad" style="display:none;margin-bottom:16px"></div>
           <div id="onboarding-checking-note" style="display:none;font-size:13px;color:var(--muted);margin-bottom:16px">Checking your profile…</div>
           <div id="onboarding-found-note" style="display:none;font-size:13px;color:var(--muted);margin-bottom:16px">We found your existing profile — we'll just ask what's changed. Upload or paste an updated resume, or skip straight to the questions. Your profile files get updated together.</div>
           <div id="onboarding-refresh-note" style="display:none;font-size:13px;color:var(--muted);margin-bottom:16px">Updating your profile? Upload your existing files and answer a few questions about what's changed for the best results.</div>
@@ -6706,7 +6715,94 @@
     onboardingLoadPersisted();
   });
 
+  // ── Write-access warning at the DOOR, not at the save button ───────────────
+  //
+  // Onboarding ends in "Save to my repo". If the GitHub token can read the repo
+  // but not write to it, that button fails — AFTER the user has answered the
+  // interview questions and spent five AI generations getting there. Twenty
+  // minutes to learn a fact that was knowable before they typed anything.
+  //
+  // So the check runs when onboarding OPENS and says so up front. Three rules
+  // make it safe:
+  //   1. NON-BLOCKING. Fired and NOT awaited, so the entry path is exactly as
+  //      fast as before. The notice appears a moment later, while the user is
+  //      still reading the first screen.
+  //   2. NON-GATING. It is a sentence on the page. Nothing is disabled, no step
+  //      is withheld, and the Download buttons were never affected — so a user
+  //      who cannot write to their repo can still complete the whole flow and
+  //      take the files away by hand. That is the point of saying it early.
+  //   3. FAILS SOFT. Any network error, auth failure, missing endpoint, or
+  //      unreadable response leaves the notice hidden and onboarding behaving
+  //      precisely as it did before this existed. A diagnostic must never be the
+  //      reason a flow breaks.
+  //
+  // It reuses /api/health rather than inventing an endpoint: github:write is
+  // already a check there, with the message and fix written for a human. The
+  // dashboard renders the server's sentences and never invents its own.
+  let onboardingWriteNotice = null;   // { message, fix } while a real failure is known
+
+  function onboardingRenderWriteNotice() {
+    const el = document.getElementById('onboarding-write-warning');
+    if (!el) return;
+    el.textContent = '';
+    if (!onboardingWriteNotice) { el.style.display = 'none'; return; }
+
+    const msg = document.createElement('div');
+    // textContent, not innerHTML — these strings come over the wire and are
+    // rendered as data, exactly as the Setup Check panel treats them.
+    msg.textContent = onboardingWriteNotice.message;
+    el.appendChild(msg);
+
+    if (onboardingWriteNotice.fix) {
+      const fix = document.createElement('div');
+      fix.className = 'setup-fix';
+      fix.textContent = onboardingWriteNotice.fix;
+      el.appendChild(fix);
+    }
+
+    // The reassurance the health endpoint has no way to know: this flow still
+    // works, and there is a way to finish it.
+    const carryOn = document.createElement('div');
+    carryOn.className = 'setup-fix';
+    carryOn.textContent =
+      'You can carry on with onboarding either way — every step works. '
+      + 'Only "Save to my repo" at the end will fail, and the Download buttons '
+      + 'next to it let you save the files yourself.';
+    el.appendChild(carryOn);
+
+    el.style.display = '';
+  }
+
+  // Fire-and-forget. Never awaited by a caller, never throws.
+  async function onboardingProbeWriteAccess() {
+    try {
+      // fetchHealth de-dupes concurrent runs for the same password, so opening
+      // onboarding while the ⚙ panel is checking shares that one request.
+      const data = await fetchHealth(storedPassword() || '');
+      const w = (data.checks || []).find(c => c.check === 'github:write');
+      // ONLY a real failure speaks. github:write reports `informational: true`
+      // when GitHub did not give a usable answer, and an unknown must stay
+      // silent — warning someone whose setup is fine would be worse than saying
+      // nothing. Same rule for a missing check (an older deployment).
+      if (w && !w.ok && !w.informational) {
+        onboardingWriteNotice = { message: w.message, fix: w.fix || '' };
+      } else {
+        onboardingWriteNotice = null;
+      }
+    } catch (_) {
+      // Fail soft: no notice, no toast, no console noise, onboarding untouched.
+      onboardingWriteNotice = null;
+    }
+    onboardingRenderWriteNotice();
+  }
+
   function startOnboarding(isRefresh) {
+    // Kick the write-access probe off at the door rather than inside the
+    // fresh-start reset below, so it covers the resume-prompt path too — a user
+    // resuming a saved run is just as close to the save button as a user
+    // starting over. Deliberately NOT awaited.
+    onboardingProbeWriteAccess();
+
     // Offer the earlier run back BEFORE resetting anything — the reset below is
     // exactly what would destroy it.
     const saved = onboardingLoadPersisted();
@@ -6880,6 +6976,11 @@
     if (resumePane) resumePane.style.display = 'none';
 
     onboardingRenderInputNotes({ checking: true });
+    // Re-assert the write-access notice against the current state. The probe
+    // started in startOnboarding may already have answered (a second run in the
+    // same session), or may still be in flight — either way this keeps the DOM
+    // and `onboardingWriteNotice` in agreement instead of relying on leftovers.
+    onboardingRenderWriteNotice();
     switchOnboardingStep('input');
     switchCoachView('onboarding');
 
