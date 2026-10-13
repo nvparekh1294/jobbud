@@ -97,6 +97,79 @@ test('403 on any write step is a write-permission refusal', () => {
   }
 });
 
+// ── A 403 on the REPO READ is not a write problem ─────────────────────────────
+//
+// `repo get` is GET /repos/{owner}/{repo} — the first call every guarded save
+// makes, and a READ. GitHub answers 403 there when SAML/SSO has not been
+// authorised for the token, when an org IP allow-list blocks the request, or when
+// an org policy bans personal access tokens. All three are common on org-owned
+// repos and none of them is "can read but can't write". Telling that user to set
+// Contents: Read and write and redeploy is a confidently wrong cause: they do it,
+// nothing changes, and the real reason stays invisible. The baseline here was a
+// generic 500, which was at least honest.
+
+test('a 403 on the REPO read never claims a write-permission problem', () => {
+  const headers = res(403, '', { 'x-ratelimit-remaining': '4982' }).headers;
+  const code = classifyWriteFailure('repo get', 403, ghBody('Resource protected by organization SAML enforcement'), headers);
+  assert.notEqual(code, 'GH_WRITE_FORBIDDEN', 'the repo read has not tested write access at all');
+  assert.equal(code, 'GH_REPO_UNREADABLE');
+});
+
+test('the unreadable-repo copy names SSO and does not assert one single cause', () => {
+  const err = writeFailure('repo get', 403, ghBody('Resource protected by organization SAML enforcement'), undefined, 'd');
+  assert.equal(err.code, 'GH_REPO_UNREADABLE');
+  assert.match(err.userMessage, /read this repo/);
+  assert.match(err.userMessage, /not about write permission/i);
+  assert.match(err.fix, /SAML\/SSO/);
+  assert.match(err.fix, /Configure SSO/);
+  assert.match(err.fix, /IP allow-list/);
+  // It must NOT hand out the read-only-token instruction, which is the wrong fix.
+  assert.doesNotMatch(err.userMessage, /can read your repo but can't write/);
+  assert.doesNotMatch(err.fix, /Contents: Read and write/);
+});
+
+test('a RATE LIMIT on the repo read still wins over the unreadable-repo cause', () => {
+  // Both arrive as 403, and a rate limit is transient — sending that user off to
+  // chase SSO settings would be the same class of mistake in a new place.
+  const headers = res(403, '', { 'x-ratelimit-remaining': '0' }).headers;
+  assert.equal(classifyWriteFailure('repo get', 403, ghBody('API rate limit exceeded'), headers), 'GH_RATE_LIMITED');
+  assert.equal(classifyWriteFailure('repo get', 429, '', undefined), 'GH_RATE_LIMITED');
+});
+
+test('getRepoInfo surfaces an SSO-blocked repo as unreadable, and still fails CLOSED', async () => {
+  await withFetch(async () => res(403, ghBody('Resource protected by organization SAML enforcement')), async () => {
+    await assert.rejects(
+      () => getRepoInfo('tok', 'acme', 'jobs'),
+      (err) => err instanceof GithubWriteError
+        && err.code === 'GH_REPO_UNREADABLE'
+        && err.step === 'repo get',
+    );
+  });
+});
+
+test('an SSO-blocked save answers 403 with the unreadable-repo copy, not the read-only-token copy', async () => {
+  baseEnv();
+  const { default: handler } = await import('../api/coach.js');
+  const mock = async (url) => {
+    if (/\/repos\/[^/]+\/[^/]+$/.test(url)) {
+      return res(403, ghBody('Resource protected by organization SAML enforcement'), { 'x-ratelimit-remaining': '4900' });
+    }
+    throw new Error(`the save must stop at the repo read: ${url}`);
+  };
+  await withFetch(mock, async () => {
+    const res_ = makeRes();
+    await handler({
+      method: 'POST', query: { action: 'save-onboarding' },
+      headers: { 'x-dashboard-password': 'pw' }, body: { claudeMd: '# Alex Doe' },
+    }, res_);
+    assert.equal(res_.statusCode, 403);
+    assert.equal(res_.body.code, 'GH_REPO_UNREADABLE');
+    assert.match(res_.body.error, /Configure SSO/);
+    assert.doesNotMatch(res_.body.error, /Contents: Read and write/);
+    assert.ok(!JSON.stringify(res_.body).includes(SENTINEL));
+  });
+});
+
 test('a 404 on the REF read is a missing branch, not a missing repo', () => {
   // writeGithubFile targets GITHUB_REF_NAME || 'main'. A repo whose default is
   // master has no `main`, so the ref read 404s and every save in the app fails.
@@ -142,7 +215,7 @@ test('GithubWriteError keeps the raw detail on .message for the server log', () 
 
 test('every code has curated user copy that names a setting and a place to change it', () => {
   const codes = ['GH_TOKEN_INVALID', 'GH_WRITE_FORBIDDEN', 'GH_RATE_LIMITED', 'GH_BRANCH_MISSING',
-    'GH_REPO_NOT_FOUND', 'GH_NOT_FOUND', 'GH_CONFLICT', 'GH_WRITE_FAILED'];
+    'GH_REPO_NOT_FOUND', 'GH_REPO_UNREADABLE', 'GH_NOT_FOUND', 'GH_CONFLICT', 'GH_WRITE_FAILED'];
   const seen = new Set();
   for (const code of codes) {
     // Drive each code through a status/step that produces it.
@@ -152,6 +225,7 @@ test('every code has curated user copy that names a setting and a place to chang
       GH_RATE_LIMITED: ['blob create', 429, '', undefined],
       GH_BRANCH_MISSING: ['ref get', 404, '', undefined],
       GH_REPO_NOT_FOUND: ['repo get', 404, '', undefined],
+      GH_REPO_UNREADABLE: ['repo get', 403, ghBody('Resource protected by organization SAML enforcement'), undefined],
       GH_NOT_FOUND: ['tree create', 404, '', undefined],
       GH_CONFLICT: ['ref patch', 422, '', undefined],
       GH_WRITE_FAILED: ['tree create', 500, '', undefined],
