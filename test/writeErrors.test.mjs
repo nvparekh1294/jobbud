@@ -334,10 +334,33 @@ test('githubWriteErrorResponse maps config faults to 403 and transient ones to 5
   assert.equal(statusFor('blob create', 403, ghBody('Resource not accessible by personal access token')), 403);
   assert.equal(statusFor('blob create', 429, ''), 503);
   assert.equal(statusFor('ref patch', 422, ''), 503);
-  // Everything else keeps the 500 these paths answered before.
-  assert.equal(statusFor('ref get', 404, ''), 500);
-  assert.equal(statusFor('repo get', 404, ''), 500);
+  // A missing branch and an invisible repo are caller configuration too — they
+  // were left out of the status table by oversight and answered 500, which
+  // contradicted the comment sitting right above them.
+  assert.equal(statusFor('ref get', 404, ''), 403);
+  assert.equal(statusFor('repo get', 404, ''), 403);
+  assert.equal(statusFor('repo get', 403, ghBody('Resource protected by organization SAML enforcement')), 403);
+  // Everything JobBud genuinely cannot name keeps the 500 these paths answered.
   assert.equal(statusFor('tree create', 500, ''), 500);
+  assert.equal(statusFor('tree create', 422, ''), 500);
+  assert.equal(statusFor('tree create', 404, ''), 500);
+});
+
+test('every code that names a setting the user must change answers 403, not 500', () => {
+  // The rule the table encodes: if the fix is in GitHub or Vercel, it is the
+  // caller's configuration and the status should say so.
+  const configFaults = {
+    GH_TOKEN_INVALID: ['blob create', 401, ''],
+    GH_WRITE_FORBIDDEN: ['blob create', 403, ghBody('Resource not accessible by personal access token')],
+    GH_REPO_UNREADABLE: ['repo get', 403, ghBody('Resource protected by organization SAML enforcement')],
+    GH_REPO_NOT_FOUND: ['repo get', 404, ''],
+    GH_BRANCH_MISSING: ['ref get', 404, ''],
+  };
+  for (const [code, args] of Object.entries(configFaults)) {
+    const out = githubWriteErrorResponse(writeFailure(...args, undefined, 'd'));
+    assert.equal(out.body.code, code);
+    assert.equal(out.status, 403, `${code} is a configuration fault and must answer 403`);
+  }
 });
 
 // ── Thrown from every failure point in writeGithubFile ────────────────────────
