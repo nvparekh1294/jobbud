@@ -187,11 +187,60 @@ test('a 404 elsewhere stays generic rather than guessing', () => {
   assert.equal(classifyWriteFailure('tree create', 404, ghBody('Not Found'), undefined), 'GH_NOT_FOUND');
 });
 
-test('422 and 409 are concurrency, and 5xx is the unknown fallback', () => {
+test('422 on the ref PATCH is concurrency, 409 is concurrency anywhere, and 5xx is the unknown fallback', () => {
   assert.equal(classifyWriteFailure('ref patch', 422, '', undefined), 'GH_CONFLICT');
   assert.equal(classifyWriteFailure('ref patch', 409, '', undefined), 'GH_CONFLICT');
+  // A 409 from any step genuinely is a conflict.
+  for (const step of ['repo get', 'ref get', 'commit get', 'blob create', 'tree create', 'commit create']) {
+    assert.equal(classifyWriteFailure(step, 409, '', undefined), 'GH_CONFLICT', step);
+  }
   assert.equal(classifyWriteFailure('tree create', 500, '', undefined), 'GH_WRITE_FAILED');
   assert.equal(classifyWriteFailure('tree create', 502, '', undefined), 'GH_WRITE_FAILED');
+});
+
+// ── 422 means "HEAD moved" ONLY on the ref PATCH ──────────────────────────────
+//
+// POST /git/blobs, /git/trees and /git/commits answer 422 for genuine validation
+// failures: a malformed path component, an oversized blob, a bad encoding. Those
+// used to be reported as "Something else was writing to your repo at the same
+// time… Nothing was lost. Try again in a moment." with HTTP 503 — a wrong cause
+// plus false hope, on a write that will fail identically forever. The baseline
+// gave a generic 500, which was at least honest.
+
+test('a 422 from blob, tree or commit creation is NOT reported as a concurrency conflict', () => {
+  for (const step of ['blob create', 'tree create', 'commit create']) {
+    const code = classifyWriteFailure(step, 422, ghBody('path contains a malformed path component'), undefined);
+    assert.notEqual(code, 'GH_CONFLICT', `${step} 422 is a validation failure, not a conflict`);
+    assert.equal(code, 'GH_WRITE_FAILED', step);
+  }
+});
+
+test('a 422 on a READ step is not a conflict either', () => {
+  for (const step of ['repo get', 'ref get', 'commit get']) {
+    assert.equal(classifyWriteFailure(step, 422, '', undefined), 'GH_WRITE_FAILED', step);
+  }
+});
+
+test('a validation 422 promises no retry and answers 500, not 503', () => {
+  const err = writeFailure('tree create', 422, ghBody('path contains a malformed path component'), undefined, 'd');
+  assert.equal(err.code, 'GH_WRITE_FAILED');
+  // The false hope that used to ship with this: it must be gone.
+  assert.doesNotMatch(err.userMessage, /Nothing was lost/);
+  assert.doesNotMatch(err.userMessage, /same time/);
+  assert.doesNotMatch(err.fix, /Try again in a moment/);
+  // 503 said "this is transient, come back later" about a permanent failure.
+  assert.equal(githubWriteErrorResponse(err).status, 500);
+});
+
+test('a tree-create 422 reaches the browser as the generic refusal, end to end', async () => {
+  await withFetch(chainFailingAt('tree create', 422, ghBody('path contains a malformed path component')), async () => {
+    await assert.rejects(
+      () => writeGithubFile('tok', 'acme', 'jobs', 'cv.md', 'body', 'msg', { maxAttempts: 1 }),
+      (err) => err instanceof GithubWriteError
+        && err.code === 'GH_WRITE_FAILED'
+        && err.step === 'tree create',
+    );
+  });
 });
 
 // ── The error object ──────────────────────────────────────────────────────────
