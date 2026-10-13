@@ -263,6 +263,16 @@ const SITES = [
     renders: /renderSaveFailure\(result,/,
     nearButtonId: 'apply-profile-btn',
   },
+  {
+    // api/coach.js wired githubWriteErrorResponse into save-mock-session, but the
+    // client did `if (!res.ok) throw new Error(...)` and never read the body —
+    // so every curated sentence was written server-side and discarded.
+    what: 'the mock-session save',
+    fn: 'saveMockSession',
+    elementId: 'mock-save-error',
+    renders: /showSaveFailureAt\('mock-save-error',/,
+    nearButtonId: null,
+  },
 ];
 
 for (const site of SITES) {
@@ -328,13 +338,24 @@ test('no save-failure panel is unselectable or clipped the way the toast was', (
 test('every save-failure element carries the shared class, so none of them can drift', () => {
   for (const id of ['onboarding-save-error', 'onboarding-confirm-save-error', 'memory-error-profile',
     'memory-error-voice', 'memory-error-stories', 'draft-save-error', 'story-delete-error',
-    'story-edit-error', 'wl-error', 'apply-profile-result']) {
-    const m = new RegExp(`<div[^>]*id="${id}"[^>]*>`).exec(html)
-      || new RegExp(`<div[^>]*id="${id}"[^>]*>`).exec(html);
-    assert.ok(m, id);
-    const tag = new RegExp(`<div[^>]*id="${id}"[^>]*>|<div[^>]*class="[^"]*"[^>]*id="${id}"`).exec(html)[0];
-    assert.match(tag + html.slice(html.indexOf(`id="${id}"`) - 200, html.indexOf(`id="${id}"`)), /save-failure/, `${id} is missing the save-failure class`);
+    'story-edit-error', 'wl-error', 'apply-profile-result', 'mock-save-error',
+    'onboarding-write-warning']) {
+    const m = new RegExp(`<div[^>]*\\bid="${id}"[^>]*>`).exec(html);
+    assert.ok(m, `no div with id ${id}`);
+    assert.match(m[0], /class="[^"]*\bsave-failure\b/, `${id} is missing the save-failure class`);
   }
+});
+
+// ── The mock-session save read its response body ──────────────────────────────
+
+test('saveMockSession reads the response body instead of throwing the status away', () => {
+  const fn = extractFunction(html, 'saveMockSession');
+  assert.match(fn, /await res\.json\(\)/, 'the curated sentence lives in the body');
+  // The exact line that made the server-side wiring dead code.
+  assert.doesNotMatch(fn, /if \(!res\.ok\) throw new Error\(`HTTP \$\{res\.status\}`\)/);
+  // The short status line in the 12px button-row span is still there; only the
+  // long reason moved to its own block.
+  assert.match(fn, /saveEl\.textContent = 'Session saved'/);
 });
 
 // ── Short confirmations stay on toasts ────────────────────────────────────────

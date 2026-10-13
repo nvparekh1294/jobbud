@@ -1701,6 +1701,14 @@
             <button class="draft-discard-btn" onclick="exitMock()">Back to Library</button>
             <span id="mock-save-status" style="font-family:'Hanken Grotesk',sans-serif;font-size:12px;color:var(--muted)"></span>
           </div>
+          <!-- Why the session could not be saved. api/coach.js has wired
+               githubWriteErrorResponse into save-mock-session since the write
+               diagnostics landed, but the client only checked res.ok and never
+               read the body, so every one of those sentences was written and
+               thrown away. #mock-save-status is a 12px span in the button row —
+               fine for "Session saved", far too small for a multi-sentence
+               instruction — so the reason gets its own block. -->
+          <div id="mock-save-error" class="setup-check bad save-failure" style="display:none;margin-top:14px;text-align:left"></div>
         </div>
 
       </div>
@@ -6657,17 +6665,29 @@
       completedAt: now,
     };
     const saveEl = document.getElementById('mock-save-status');
+    clearSaveFailureAt('mock-save-error');
     try {
       const res = await fetch('/api/coach?action=save-mock-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
         body: JSON.stringify({ session }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      // `throw new Error(HTTP ${res.status})` here was what made the server's
+      // curated sentence dead code: the body was never read. Read it, and the
+      // reason the session was not saved reaches the user like every other
+      // failed repo write.
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (saveEl) saveEl.textContent = "Couldn't save session";
+        showSaveFailureAt('mock-save-error', data, `Couldn't save this session (HTTP ${res.status}). Your answers and feedback are still on screen.`);
+        console.error('[mock] save session failed:', res.status, data.code || '');
+        return;
+      }
       if (saveEl) saveEl.textContent = 'Session saved';
     } catch (err) {
       console.error('[mock] save session error:', err);
       if (saveEl) saveEl.textContent = "Couldn't save session";
+      showSaveFailureAt('mock-save-error', null, 'Network error — the session did not reach your repo: ' + err.message);
     }
   }
 
