@@ -293,7 +293,13 @@ export async function checkGithubToken(token) {
 // repository-access list, and 404 is also what a wrong name returns. The two are
 // indistinguishable from here, so we say both possibilities in one sentence
 // rather than guessing and sending the user down the wrong path.
-export async function checkGithubRepo(token, repoFullName) {
+// `collect` is an optional plain object the caller may pass in to RECEIVE the
+// repo metadata this check already fetched (currently only `permissions`), so
+// checkGithubWrite below can read it instead of repeating this identical GET.
+// Deliberately an out-parameter rather than part of the returned check: the check
+// object is serialized straight to the browser, and raw GitHub API metadata must
+// never travel in that direction.
+export async function checkGithubRepo(token, repoFullName, collect = null) {
   let res;
   try {
     res = await fetch(`${GITHUB_API}/repos/${repoFullName}`, {
@@ -345,12 +351,140 @@ export async function checkGithubRepo(token, repoFullName) {
   try {
     info = await res.json();
   } catch (_) { /* a body we cannot parse does not change the access answer */ }
+  if (collect) collect.permissions = parsePermissionsObject(info);
   const visibility = info.private === false ? ' It is a PUBLIC repo — JobBud refuses to write personal files to a public repo, so make it private.' : '';
   return check(
     'github:repo',
     visibility === '',
     `Your token can see ${repoFullName}.${visibility}`,
     visibility === '' ? '' : `On GitHub, open ${repoFullName} → Settings → General → Danger Zone → Change visibility → Make private.`,
+  );
+}
+
+// ── GitHub WRITE access ───────────────────────────────────────────────────────
+//
+// WHY THIS CHECK EXISTS. Every GitHub check above is a READ — GET /user, GET
+// /repos/{owner}/{repo}, and the data-file reads below. A token that can read the
+// repo but not write to it therefore passed the ENTIRE setup check green while
+// every Save button in the app failed: "Save to my repo" at the end of
+// onboarding, the Story Bank saves, the Memory saves, the watch-list save. The
+// user had no way to learn the cause, because the only place it was knowable was
+// a 500 whose message said "please try again" about something retrying can never
+// fix.
+//
+// HOW IT ANSWERS WITHOUT WRITING. GET /repos/{owner}/{repo} returns a
+// `permissions` object — `{ admin, maintain, push, triage, pull }` — describing
+// what the AUTHENTICATED TOKEN may do with this repo. `push: true` means it can
+// write contents. No test commit, no scratch branch, nothing to clean up.
+//
+// WHAT WAS VERIFIED about that field, because a false "your token can't write" on
+// a working install would be worse than having no check at all:
+//   • Authenticated, write-capable (classic/OAuth token with `repo` scope, on a
+//     repo the user owns): the object is present and push is true.
+//   • Authenticated, NOT write-capable (same token, a repo the user is not a
+//     collaborator on): the object is present and push is false. So the field
+//     does track real write capability and is not hardcoded optimism.
+//   • UNauthenticated: the key is absent from the response entirely.
+// GitHub's own documented model is that a token's effective access is the
+// INTERSECTION of the user's repository role and the token's own grant, and
+// `permissions` reports that effective access. So `push: false` implies the Git
+// Data API writes in lib/github.js would be refused.
+//
+// DEGRADING GRACEFULLY is therefore the rule here, and it is why the only
+// failure signal accepted is an EXPLICIT boolean false. A missing `permissions`
+// object, a non-object, or a non-boolean `push` reports UNKNOWN as an
+// informational note (ok:true, so it can never raise the "Setup needs attention"
+// banner) rather than accusing a working token. `admin` and `maintain` also count
+// as write — GitHub sets push alongside them, and reading them only ever widens
+// the set of tokens that PASS, never the set that fails.
+//
+// The residual blind spot, stated plainly rather than hidden: a fine-grained PAT
+// with `Contents: Read-only` on a repo its owner administers may report
+// `push: true` from the role side of that intersection. That direction is a
+// MISSED detection, not a false alarm — the user is no worse off than before this
+// check existed, and Item 2's error translation still names the cause at save
+// time. The opposite direction, which would be the harmful one, has no path here:
+// nothing makes GitHub under-report write access on a token that has it.
+
+// Pass through GitHub's permissions object, or null for anything that is not a
+// plain object. Shared with lib/github.js's getRepoInfo, which applies the same
+// rule to the same field.
+function parsePermissionsObject(repoBody) {
+  const perms = repoBody && typeof repoBody === 'object' ? repoBody.permissions : null;
+  if (!perms || typeof perms !== 'object' || Array.isArray(perms)) return null;
+  return perms;
+}
+
+// Decide write capability from GitHub's permissions object.
+//
+// Returns { known, canPush }. `known: false` means GitHub did not give us a
+// usable answer and NO claim may be made in either direction — the caller must
+// report that as informational, never as a failure.
+export function parseRepoPushAccess(permissions) {
+  if (!permissions || typeof permissions !== 'object' || Array.isArray(permissions)) {
+    return { known: false, canPush: false };
+  }
+  const { push, admin, maintain } = permissions;
+  // Any one of the three being an explicit true is a definite yes.
+  if (push === true || admin === true || maintain === true) return { known: true, canPush: true };
+  // Only an explicit boolean false may produce a "cannot write" verdict. A
+  // missing or non-boolean `push` is an unreadable answer, not a negative one.
+  if (push === false) return { known: true, canPush: false };
+  return { known: false, canPush: false };
+}
+
+// The failing copy, kept next to the check so the wording is reviewable in one
+// place. It names the exact GitHub setting and the exact Vercel steps, because a
+// user who has hit this has no other way to find out what to change.
+export const WRITE_FAIL_MESSAGE =
+  "Your GitHub token can read your repo but can't write to it, so Save buttons — " +
+  'including Save to my repo after onboarding — will fail.';
+
+export const WRITE_FAIL_FIX =
+  'In GitHub → Settings → Developer settings → your token, give it **Contents: Read and write** ' +
+  'for your jobbud repo (or use a classic token with the `repo` scope). Then update GH_TOKEN in ' +
+  'Vercel → Settings → Environment Variables, tick Production, and Redeploy.';
+
+// `permissions` is the object checkGithubRepo already collected. When it is not
+// supplied this check makes the GET itself, so the function is usable standalone
+// (and testable) — but runHealthChecks always passes it, so the full run makes no
+// extra round-trip.
+export async function checkGithubWrite(token, repoFullName, permissions = undefined) {
+  const name = 'github:write';
+  const unknown = (why) => check(
+    name,
+    true,
+    `JobBud could not determine whether your GitHub token is allowed to write to ${repoFullName} (${why}). ` +
+    'Reads are working, so the dashboard will load; if a Save button fails, token write access is the first thing to check.',
+    WRITE_FAIL_FIX,
+    true,
+  );
+
+  let perms = permissions;
+  if (perms === undefined) {
+    let res;
+    try {
+      res = await fetch(`${GITHUB_API}/repos/${repoFullName}`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+      });
+    } catch (err) {
+      return unknown(`GitHub could not be reached: ${err.message}`);
+    }
+    if (!res.ok) return unknown(`GitHub answered ${res.status} when asked about your access`);
+    let body = {};
+    try {
+      body = await res.json();
+    } catch (_) { /* unparseable body — same as no answer */ }
+    perms = parsePermissionsObject(body);
+  }
+
+  const { known, canPush } = parseRepoPushAccess(perms);
+  if (!known) return unknown('GitHub did not report a permission level for this token');
+  if (!canPush) return check(name, false, WRITE_FAIL_MESSAGE, WRITE_FAIL_FIX);
+  return check(
+    name,
+    true,
+    `Your GitHub token can write to ${repoFullName}, so the Save buttons will work.`,
   );
 }
 
@@ -511,11 +645,21 @@ export async function runHealthChecks(env = process.env) {
   }
 
   const canQueryRepo = !failed('env:GH_TOKEN') && !failed('env:GH_REPO') && !failed('github:token');
+  // Collects the `permissions` object from checkGithubRepo's response so the
+  // write check below reads the same GET instead of making a second identical one.
+  const repoMeta = {};
   if (canQueryRepo) {
-    checks.push(await checkGithubRepo(token, repoFullName));
+    checks.push(await checkGithubRepo(token, repoFullName, repoMeta));
   }
 
   if (canQueryRepo && !failed('github:repo')) {
+    // Gated exactly like the data-file checks: a token that cannot even SEE the
+    // repo has a more important sentence to read first, and asking "but can it
+    // write?" on top of that would bury it. Note `permissions` is passed through
+    // as `null` when GitHub omitted it, which the check reports as unknown —
+    // `undefined` would instead ask it to re-fetch.
+    checks.push(await checkGithubWrite(token, repoFullName, repoMeta.permissions ?? null));
+
     const [owner, repo] = repoFullName.split('/');
     checks.push(await checkDataFile(token, owner, repo, 'data/radar.json', { companies: {} }, 'Your Radar'));
     checks.push(await checkDataFile(token, owner, repo, 'data/job-status.json', { jobs: {} }, 'Your job pipeline'));

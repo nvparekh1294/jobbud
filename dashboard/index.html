@@ -43,7 +43,21 @@
     #setup-modal h3 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin-bottom: 16px; }
     .setup-check { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; font-size: 13px; line-height: 1.6; }
     .setup-check.bad { border-color: var(--red); }
-    .setup-check .setup-fix { color: var(--muted); margin-top: 6px; }
+    /* Was `.setup-check .setup-fix`. Same declarations, but no longer requires a
+       .setup-check ancestor: renderSaveFailure() renders a fix line into inline
+       notices that have their own container class (#wl-error,
+       #apply-profile-result), and the fix must stay visually distinct from the
+       cause there too. Strictly more general, so the ⚙ Setup Check is unchanged. */
+    .setup-fix { color: var(--muted); margin-top: 6px; }
+    /* Save-failure panels, rendered by renderSaveFailure(). They reuse
+       .setup-check / .setup-fix above — same look as the ⚙ Setup Check, because
+       they carry the same kind of sentence: a cause plus the setting to change.
+       This class only adds what a panel sitting next to a BUTTON needs that a
+       panel inside a modal does not. Text selection is the point (these are
+       instructions to copy), so nothing here touches pointer-events, and
+       `user-select` is restated to be explicit about it. A very long fix gets its
+       own scroll rather than pushing the page around. */
+    .save-failure { max-width: 560px; user-select: text; -webkit-user-select: text; max-height: 45vh; overflow-y: auto; }
     #setup-note { font-size: 12px; color: var(--muted); line-height: 1.6; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
     #jobs-error { display: none; background: var(--amber-bg); color: var(--amber); font-size: 13px; line-height: 1.6; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; }
 
@@ -695,10 +709,21 @@
     .story-modal-header h3 { font-size: 15px; font-weight: 700; margin: 0; }
     .story-modal-close { background: none; border: none; cursor: pointer; font-size: 20px; color: var(--muted); padding: 0; line-height: 1; }
     .story-modal-close:hover { color: var(--text); }
-    .story-modal-body { padding: 16px 20px; flex: 1; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+    /* overflow-y:auto, not hidden: the body now holds the save-failure panel as
+       well as the textarea, and on a short viewport `hidden` would clip the
+       bottom of the textarea instead of letting the pair scroll. A no-op
+       until the panel appears, since a lone textarea never overflows. */
+    .story-modal-body { padding: 16px 20px; flex: 1; overflow-y: auto; display: flex; flex-direction: column; min-height: 0; }
     .story-modal-textarea { flex: 1; width: 100%; min-height: 300px; font-family: 'SF Mono', 'Fira Mono', ui-monospace, monospace; font-size: 12px; line-height: 1.6; padding: 12px; border: 1px solid var(--border); border-radius: 8px; resize: vertical; color: var(--text); background: var(--bg); box-sizing: border-box; }
     .story-modal-footer { padding: 12px 20px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
-    .story-modal-error { font-size: 12px; color: var(--red); flex: 1; }
+    /* No longer the footer's flex spacer — it is a block in the modal body now,
+       so a multi-sentence write failure wraps instead of being squeezed.
+       `color: var(--red)` was dropped here deliberately, not by accident: the
+       only user of this class, #story-edit-error, now also carries
+       `setup-check bad`, so it signals the error through that rule's red BORDER
+       like every other save-failure panel. Red body text on top of it made this
+       one panel louder than the rest for no reason. */
+    .story-modal-error { font-size: 12px; flex-shrink: 0; }
     /* Chat interface */
     .coach-chat-wrap { display: flex; flex-direction: column; height: calc(100vh - 220px); min-height: 400px; max-height: 680px; }
     .chat-messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-right: 4px; }
@@ -1141,7 +1166,11 @@
         <div id="wl-suggestions"></div>
       </div>
 
-      <div class="wl-error" id="wl-error"></div>
+      <!-- Validation messages AND failed saves. The save here is a repo write, so
+           it can return a typed multi-sentence instruction; the setup-check
+           classes give the fix line its own muted style and let a long one
+           scroll, instead of running everything together in red. -->
+      <div class="wl-error setup-check bad save-failure" id="wl-error"></div>
 
       <div class="modal-actions" style="display:flex;gap:10px;justify-content:flex-end;margin-top:22px">
         <button class="aj-btn-secondary" onclick="closeWatchList()">Cancel</button>
@@ -1436,6 +1465,11 @@
           </div>
         </div>
         <div class="loading" id="coach-loading" style="display:none">Loading stories...</div>
+        <!-- Why a delete failed. The delete is optimistic — the story disappears
+             from the list first — so if the repo write is refused, the reason has
+             to stay up next to the list that just re-grew the story, not flash
+             past on a 4-second toast that cannot be copied. -->
+        <div id="story-delete-error" class="setup-check bad save-failure" style="display:none;margin-bottom:12px"></div>
         <div id="coach-stories-list"></div>
         <div class="empty" id="coach-empty" style="display:none">
           No stories yet. Click "New Story" to start building your interview story bank.
@@ -1451,9 +1485,16 @@
           </div>
           <div class="story-modal-body">
             <textarea class="story-modal-textarea" id="story-edit-textarea"></textarea>
+            <!-- Moved here from the footer, where it was a flex:1 span wedged
+                 between the textarea and the buttons. An update-story failure is
+                 a repo write failure: a typed, multi-sentence instruction, and
+                 squeezed onto one footer row it was unreadable. -->
+            <div class="story-modal-error setup-check bad save-failure" id="story-edit-error" style="display:none;margin-top:10px;max-height:30vh"></div>
           </div>
           <div class="story-modal-footer">
-            <span class="story-modal-error" id="story-edit-error"></span>
+            <!-- Spacer, left behind by moving #story-edit-error into the body —
+                 it is what right-aligns the buttons. -->
+            <span style="flex:1"></span>
             <button class="draft-discard-btn" onclick="closeEditStory()">Cancel</button>
             <button class="coach-new-btn" id="story-edit-save-btn" onclick="saveEditedStory()">Save Changes</button>
           </div>
@@ -1478,6 +1519,11 @@
             <button class="draft-save-btn" id="draft-save-btn" onclick="saveStory()">Save to Story Bank</button>
             <button class="draft-discard-btn" onclick="discardDraft()">Discard</button>
           </div>
+          <!-- Why the save failed. Saving a story is a repo write, so a read-only
+               token or an unreachable repo surfaces here as a typed
+               multi-sentence instruction — and the draft is still on screen
+               waiting, so the reason has to stay up with it. -->
+          <div id="draft-save-error" class="setup-check bad save-failure" style="display:none;margin-top:14px"></div>
         </div>
       </div>
 
@@ -1660,6 +1706,14 @@
             <button class="draft-discard-btn" onclick="exitMock()">Back to Library</button>
             <span id="mock-save-status" style="font-family:'Hanken Grotesk',sans-serif;font-size:12px;color:var(--muted)"></span>
           </div>
+          <!-- Why the session could not be saved. api/coach.js has wired
+               githubWriteErrorResponse into save-mock-session since the write
+               diagnostics landed, but the client only checked res.ok and never
+               read the body, so every one of those sentences was written and
+               thrown away. #mock-save-status is a 12px span in the button row —
+               fine for "Session saved", far too small for a multi-sentence
+               instruction — so the reason gets its own block. -->
+          <div id="mock-save-error" class="setup-check bad save-failure" style="display:none;margin-top:14px;text-align:left"></div>
         </div>
 
       </div>
@@ -1687,6 +1741,29 @@
           </div>
           <button class="draft-discard-btn" onclick="exitOnboarding()">Exit</button>
         </div>
+
+        <!-- Write-access warning. Filled in and shown by
+             onboardingRenderWriteNotice() when /api/health reports that the
+             GitHub token cannot write to the repo, which is the one thing that
+             makes the LAST step of this flow ("Save to my repo") fail. It is a
+             NOTICE, not a gate: onboarding runs exactly as before either way,
+             and the Download buttons are unaffected. Reuses the Setup Check
+             panel's own styles so the wording and the look match. Empty and
+             hidden until the probe answers; populated with textContent only.
+
+             It sits OUTSIDE the step panels, like #onboarding-discard-confirm
+             below and #onboarding-resume-confirm beneath this, because it is not
+             a property of any one step. It used to live INSIDE
+             #onboarding-step-input, and onboardingResumeSaved() restores to the
+             step the run was saved on — conversation, companies, download — so
+             on every resumed run the probe fired, the notice was populated, and
+             its parent panel was hidden. The user who was CLOSEST to the save
+             button was the one guaranteed not to be warned. Above the panels it
+             shows on every step and on the resume prompt itself.
+
+             Inside the header's max-width:680px wrapper, so it inherits the
+             column width rather than stating its own. -->
+        <div id="onboarding-write-warning" class="setup-check bad save-failure" style="display:none;margin-bottom:16px"></div>
 
         <!-- Resume-earlier-progress prompt. Shown INSTEAD of the step panels when
              a saved run is found, because startOnboarding would otherwise wipe the
@@ -1912,6 +1989,13 @@
               <button class="draft-save-btn" id="onboarding-save-repo-btn" onclick="onboardingSaveToRepo()">Save to my repo</button>
               <button class="draft-save-btn" onclick="onboardingDone()">Done — Go to Dashboard</button>
             </div>
+            <!-- Why the save failed, next to the button that failed. This used to
+                 be a 3-second toast, which could not carry it: the typed write
+                 failures are ~450-character instructions with GitHub and Vercel
+                 navigation paths in them, and .toast is pointer-events:none, so
+                 the text could not even be copied before it vanished. Filled by
+                 renderSaveFailure() with textContent; ships empty and hidden. -->
+            <div id="onboarding-save-error" class="setup-check bad save-failure" style="display:none;margin-top:14px"></div>
           </div>
         </div>
 
@@ -1928,6 +2012,11 @@
               <button class="story-delete-confirm-btn no" id="onboarding-confirm-stay-btn" onclick="onboardingHideDiscardConfirm()">Keep waiting</button>
               <button class="story-delete-confirm-btn yes" id="onboarding-confirm-discard-btn" onclick="onboardingDiscardAnyway()">Discard anyway</button>
             </div>
+            <!-- Why the save from THIS button failed. The confirm can be raised
+                 from any step, so the download step's own notice may be hidden
+                 when it is on screen. onboardingSaveToRepo writes to exactly one
+                 of the two, never both. -->
+            <div id="onboarding-confirm-save-error" class="setup-check bad save-failure" style="display:none;margin-top:12px"></div>
           </div>
         </div>
       </div>
@@ -1950,6 +2039,12 @@
             <button class="coach-new-btn memory-save-btn" data-file="profile" onclick="saveMemoryFile('profile')">Save</button>
           </div>
           <textarea class="memory-textarea" id="memory-text-profile" placeholder="No profile facts yet — JobBud fills this in after onboarding and as you chat."></textarea>
+          <!-- Why this Save failed. A memory save is a repo write, so a
+               read-only token or an unreachable repo surfaces here as a typed
+               multi-sentence instruction; it used to go out on a 5-second
+               toast. One per block, so the reason sits under the Save button
+               that produced it. -->
+          <div id="memory-error-profile" class="setup-check bad save-failure" style="display:none;margin-top:10px"></div>
           <!-- The search-profile bridge. Editing memory changes how JobBud WRITES
                about you; the titles it SEARCHES for live in config/profile.yml, and
                nothing used to carry a memory edit across to it. -->
@@ -1959,7 +2054,7 @@
               <button class="coach-new-btn" id="apply-profile-btn" onclick="applyMemoryToProfile()">Apply to search profile</button>
               <span class="memory-searchnote-hint">Rebuilds your search profile from the profile memory above. Anything it doesn't mention is left as-is.</span>
             </div>
-            <div id="apply-profile-result" class="memory-searchnote-result" style="display:none"></div>
+            <div id="apply-profile-result" class="memory-searchnote-result save-failure" style="display:none"></div>
           </div>
         </div>
         <div class="memory-block">
@@ -1971,6 +2066,12 @@
             <button class="coach-new-btn memory-save-btn" data-file="voice" onclick="saveMemoryFile('voice')">Save</button>
           </div>
           <textarea class="memory-textarea" id="memory-text-voice" placeholder="No voice rules yet."></textarea>
+          <!-- Why this Save failed. A memory save is a repo write, so a
+               read-only token or an unreachable repo surfaces here as a typed
+               multi-sentence instruction; it used to go out on a 5-second
+               toast. One per block, so the reason sits under the Save button
+               that produced it. -->
+          <div id="memory-error-voice" class="setup-check bad save-failure" style="display:none;margin-top:10px"></div>
         </div>
         <div class="memory-block">
           <div class="memory-block-head">
@@ -1981,6 +2082,12 @@
             <button class="coach-new-btn memory-save-btn" data-file="stories" onclick="saveMemoryFile('stories')">Save</button>
           </div>
           <textarea class="memory-textarea" id="memory-text-stories" placeholder="No stories yet."></textarea>
+          <!-- Why this Save failed. A memory save is a repo write, so a
+               read-only token or an unreachable repo surfaces here as a typed
+               multi-sentence instruction; it used to go out on a 5-second
+               toast. One per block, so the reason sits under the Save button
+               that produced it. -->
+          <div id="memory-error-stories" class="setup-check bad save-failure" style="display:none;margin-top:10px"></div>
         </div>
       </div>
     </div>
@@ -3105,6 +3212,74 @@
     if (_toastTimer) { clearTimeout(_toastTimer); _toastTimer = null; }
     const ms = (duration === undefined) ? 3000 : duration;
     if (ms > 0) _toastTimer = setTimeout(() => el.classList.remove('show'), ms);
+  }
+
+  // ── Persistent inline save failures ──────────────────────────────────────
+  //
+  // WHY THESE ARE NOT TOASTS. The typed GitHub write failures in lib/github.js
+  // are INSTRUCTIONS, not status lines. GH_WRITE_FORBIDDEN alone is ~450
+  // characters naming two GitHub navigation paths and three Vercel steps.
+  // `.toast` cannot carry that: it defaults to 3000ms, has no max-width, and
+  // sets `pointer-events:none`, so the text wraps across six lines, cannot be
+  // selected or copied, and is gone before it can be read. The user this whole
+  // diagnostic exists for was finally told WHY their save failed, then given
+  // three seconds to memorise an uncopyable instruction.
+  //
+  // So a save failure renders into a PERSISTENT element beside the button that
+  // failed — selectable, copyable, staying put until the next save attempt
+  // replaces or clears it, with the cause and the steps as separate lines.
+  // Same `setup-check bad` / `setup-fix` vocabulary as the ⚙ Setup Check panel
+  // and the onboarding write-access notice, so nothing new has to be learned.
+  //
+  // Toasts keep what they are good at: short success and confirmation lines,
+  // where three seconds and no text selection cost nothing.
+
+  // Render a failed-save response into `el` as persistent, selectable text.
+  //
+  // `data` is the parsed response body. The typed failures send `userMessage`
+  // (the cause) and `fix` (the steps) separately; everything else sends a single
+  // `error` or `message`, and older deployments send only the joined `error`.
+  // All three shapes render, and `fallback` covers a body with none of them
+  // (a network error, or an HTML error page).
+  //
+  // textContent only, never innerHTML — these strings arrive over the wire and
+  // are rendered as DATA, exactly as the Setup Check panel treats them.
+  function renderSaveFailure(el, data, fallback) {
+    if (!el) return;
+    el.textContent = '';
+    const d = data && typeof data === 'object' ? data : {};
+    const cause = d.userMessage || d.error || d.message || fallback;
+    const msg = document.createElement('div');
+    msg.textContent = cause;
+    el.appendChild(msg);
+    // Only append the steps when they are not already inside the cause — an
+    // older deployment's `error` is the two joined, and repeating the fix under
+    // itself reads as a bug.
+    if (d.fix && String(cause).indexOf(d.fix) === -1) {
+      const fix = document.createElement('div');
+      fix.className = 'setup-fix';
+      fix.textContent = d.fix;
+      el.appendChild(fix);
+    }
+    // 'block', not '', because some of these elements are hidden by a CSS rule
+    // rather than an inline style — clearing the inline value would re-hide them.
+    el.style.display = 'block';
+  }
+
+  // Take the notice down. Called at the START of each save attempt, so a stale
+  // failure never sits next to a button that has since succeeded.
+  function clearSaveFailure(el) {
+    if (!el) return;
+    el.textContent = '';
+    el.style.display = 'none';
+  }
+
+  // The two above, by element id — the shape nearly every call site wants.
+  function showSaveFailureAt(id, data, fallback) {
+    renderSaveFailure(document.getElementById(id), data, fallback);
+  }
+  function clearSaveFailureAt(id) {
+    clearSaveFailure(document.getElementById(id));
   }
 
   // ── Inline actions (no page navigation) ──────────────────────────────────
@@ -5370,6 +5545,9 @@
     set('memory-text-profile', memoryFiles.profile);
     set('memory-text-voice', memoryFiles.voice);
     set('memory-text-stories', memoryFiles.stories);
+    // Re-entering the tab reloads from the repo, so an earlier failure no longer
+    // describes what is on screen.
+    ['profile', 'voice', 'stories'].forEach(f => clearSaveFailureAt('memory-error-' + f));
     if (loadEl) loadEl.style.display = 'none';
   }
 
@@ -5378,6 +5556,8 @@
     const ta = document.getElementById('memory-text-' + file);
     if (!ta) return;
     const btn = document.querySelector(`.memory-save-btn[data-file="${file}"]`);
+    const errorId = 'memory-error-' + file;
+    clearSaveFailureAt(errorId);
     if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
     try {
       const res = await fetch('/api/memory?action=save-memory', {
@@ -5386,7 +5566,14 @@
         body: JSON.stringify({ file, content: ta.value }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { showToast('Save failed: ' + (data.error || res.status), 5000); return; }
+      // A memory save is a repo write, so it returns the same typed failures as
+      // "Save to my repo": a read-only token, an SSO-blocked repo, a missing
+      // main branch. Those are instructions with GitHub and Vercel paths in
+      // them, and a 5-second toast could neither hold nor be copied from.
+      if (!res.ok) {
+        showSaveFailureAt(errorId, data, `Save failed (HTTP ${res.status}). Try again in a minute.`);
+        return;
+      }
       memoryFiles[file] = ta.value;
       memoryContext = assembleMemoryBlockClient(memoryFiles);
       // Saving profile memory is the moment a user expects their search to change.
@@ -5400,7 +5587,7 @@
         showToast('Memory saved. Applies to your next conversation.');
       }
     } catch (err) {
-      showToast('Network error: ' + err.message, 4000);
+      showSaveFailureAt(errorId, null, 'Network error — the save did not get through: ' + err.message);
     } finally {
       if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
     }
@@ -5423,17 +5610,21 @@
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.error) {
-        const msg = data.error || `HTTP ${res.status}`;
-        if (result) result.textContent = '⚠ ' + msg;
-        showToast('⚠ ' + msg, 7000);
+        // This rewrites config/profile.yml, so a failure here is one of the
+        // typed write failures. It already had a persistent inline home; the
+        // 7-second toast beside it was a second, unreadable copy of the same
+        // 450-character instruction, so it says only that something went wrong
+        // and leaves the instruction to the panel.
+        renderSaveFailure(result, data, `Could not rebuild your search profile (HTTP ${res.status}).`);
+        showToast('⚠ Could not update your search profile — see the note below the button.', 6000);
         return;
       }
       // Server-generated summary lines — inserted as text, never as markup.
-      if (result) result.textContent = (data.summary || []).join('\n');
+      if (result) { result.textContent = (data.summary || []).join('\n'); result.style.display = ''; }
       showToast(data.changed ? '✓ Search profile updated.' : '✓ Search profile already matched your memory.', 5000);
     } catch (err) {
-      if (result) result.textContent = '⚠ Network error: ' + err.message;
-      showToast('Network error: ' + err.message, 5000);
+      renderSaveFailure(result, null, 'Network error — the request did not get through: ' + err.message);
+      showToast('Network error — see the note below the button.', 5000);
     } finally {
       if (btn) { btn.disabled = false; btn.textContent = 'Apply to search profile'; }
     }
@@ -5456,6 +5647,12 @@
     loadEl.style.display = '';
     emptyEl.style.display = 'none';
     listEl.innerHTML = '';
+    // Take down any delete failure from a previous visit. It lives in
+    // #coach-library-view, which switchCoachView shows and hides WITHOUT
+    // clearing — so leaving the library and coming back used to re-show the old
+    // reason beside a list that has since been rebuilt. Before the fetch, not
+    // inside the try: a load that fails must not leave the stale line up either.
+    clearSaveFailureAt('story-delete-error');
     try {
       const res = await fetch('/api/coach?action=get-assets', { headers: { 'X-Dashboard-Password': pw } });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -5561,7 +5758,7 @@
     const errorEl = document.getElementById('story-edit-error');
     const saveBtn = document.getElementById('story-edit-save-btn');
     textarea.value = editingStory.blockContent;
-    errorEl.textContent = '';
+    clearSaveFailure(errorEl);
     saveBtn.disabled = false;
     saveBtn.textContent = 'Save Changes';
     modal.classList.add('open');
@@ -5571,6 +5768,7 @@
   function closeEditStory() {
     editingStory = null;
     document.getElementById('story-edit-modal').classList.remove('open');
+    clearSaveFailureAt('story-edit-error');
   }
 
   async function saveEditedStory() {
@@ -5580,7 +5778,7 @@
     const errorEl  = document.getElementById('story-edit-error');
     saveBtn.disabled = true;
     saveBtn.textContent = 'Saving…';
-    errorEl.textContent = '';
+    clearSaveFailure(errorEl);
     const pw = storedPassword() || '';
     try {
       const res = await fetch('/api/coach?action=update-story', {
@@ -5588,9 +5786,12 @@
         headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
         body: JSON.stringify({ storyId: editingStory.storyId, content: textarea.value }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!data.success) {
-        errorEl.textContent = data.error || 'Save failed';
+        // Already inline rather than a toast, but `errorEl.textContent = data.error`
+        // pushed the cause and all of its steps out as one unbroken string.
+        // renderSaveFailure splits them, and the modal stays open over the edit.
+        renderSaveFailure(errorEl, data, 'Save failed. Your edit is still here — try again.');
         saveBtn.disabled = false;
         saveBtn.textContent = 'Save Changes';
         return;
@@ -5598,7 +5799,7 @@
       closeEditStory();
       loadStories();
     } catch (err) {
-      errorEl.textContent = 'Network error: ' + err.message;
+      renderSaveFailure(errorEl, null, 'Network error — the save did not get through: ' + err.message);
       saveBtn.disabled = false;
       saveBtn.textContent = 'Save Changes';
     }
@@ -5623,17 +5824,23 @@
       : parts[0] + '\n';
     deletingStoryId = null;
     renderStories(storyBankContent);
+    clearSaveFailureAt('story-delete-error');
 
     const pw = storedPassword() || '';
     fetch('/api/coach?action=delete-story', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
       body: JSON.stringify({ storyId }),
-    }).then(r => r.json()).then(data => {
-      if (!data.success) showToast('Delete failed: ' + (data.error || 'unknown error'), 4000);
+    }).then(r => r.json().catch(() => ({}))).then(data => {
+      // Deleting rewrites story-bank.md, so a refusal is one of the typed write
+      // failures — and loadStories() below puts the story straight back, which
+      // on its own looks like a glitch. The reason stays on screen beside it.
+      if (!data.success) {
+        showSaveFailureAt('story-delete-error', data, 'The story could not be deleted, so it is still in your repo.');
+      }
       loadStories();
     }).catch(err => {
-      showToast('Delete error: ' + err.message, 4000);
+      showSaveFailureAt('story-delete-error', null, 'Network error — the delete did not get through, so the story is still in your repo: ' + err.message);
       loadStories();
     });
   }
@@ -5782,6 +5989,7 @@
     const saveBtn = document.getElementById('draft-save-btn');
     saveBtn.disabled = true;
     saveBtn.textContent = 'Saving…';
+    clearSaveFailureAt('draft-save-error');
     const pw = storedPassword() || '';
     try {
       const res = await fetch('/api/coach?action=save-story', {
@@ -5789,9 +5997,12 @@
         headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
         body: JSON.stringify({ storyMarkdown: storyDraft })
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        showToast('Save failed: ' + (data.message || res.status), 5000);
+        // A repo write, so the typed failures land here: read-only token,
+        // SSO-blocked repo, missing main branch. Each is an instruction, not a
+        // status line, and the draft stays on screen while it is read.
+        showSaveFailureAt('draft-save-error', data, `Save failed (HTTP ${res.status}). Your draft is still here — try again.`);
         saveBtn.disabled = false;
         saveBtn.textContent = 'Save to Story Bank';
         return;
@@ -5803,7 +6014,7 @@
       switchCoachView('library');
       loadStories();
     } catch (err) {
-      showToast('Network error: ' + err.message, 5000);
+      showSaveFailureAt('draft-save-error', null, 'Network error — the save did not get through, and your draft is still here: ' + err.message);
       saveBtn.disabled = false;
       saveBtn.textContent = 'Save to Story Bank';
     }
@@ -5813,6 +6024,7 @@
     storyDraft = null;
     document.getElementById('draft-panel').style.display = 'none';
     document.getElementById('draft-content').textContent = '';
+    clearSaveFailureAt('draft-save-error');
   }
 
   // ── Coach Prep ────────────────────────────────────────────────────────────
@@ -6464,17 +6676,29 @@
       completedAt: now,
     };
     const saveEl = document.getElementById('mock-save-status');
+    clearSaveFailureAt('mock-save-error');
     try {
       const res = await fetch('/api/coach?action=save-mock-session', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
         body: JSON.stringify({ session }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      // `throw new Error(HTTP ${res.status})` here was what made the server's
+      // curated sentence dead code: the body was never read. Read it, and the
+      // reason the session was not saved reaches the user like every other
+      // failed repo write.
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (saveEl) saveEl.textContent = "Couldn't save session";
+        showSaveFailureAt('mock-save-error', data, `Couldn't save this session (HTTP ${res.status}). Your answers and feedback are still on screen.`);
+        console.error('[mock] save session failed:', res.status, data.code || '');
+        return;
+      }
       if (saveEl) saveEl.textContent = 'Session saved';
     } catch (err) {
       console.error('[mock] save session error:', err);
       if (saveEl) saveEl.textContent = "Couldn't save session";
+      showSaveFailureAt('mock-save-error', null, 'Network error — the session did not reach your repo: ' + err.message);
     }
   }
 
@@ -6582,6 +6806,14 @@
   // Every step panel, in flow order. Shared by switchOnboardingStep and the
   // resume prompt (which has to hide all of them) so the list cannot drift.
   const ONBOARDING_STEPS = ['input', 'conversation', 'refresh-notes', 'companies', 'generating', 'bulletbank', 'bulletbankchat', 'download'];
+
+  // The two places a "Save to my repo" button exists, and therefore the two
+  // places its failure has to be readable: the download step, and the leave
+  // confirmation (which sits outside the step panels and can be raised from any
+  // of them). The caller says which button it came from, so the notice always
+  // lands under the button the user actually pressed — and never twice, since
+  // the confirm can be open on top of the download step.
+  const ONBOARDING_SAVE_ERROR_IDS = ['onboarding-save-error', 'onboarding-confirm-save-error'];
 
   // ── Onboarding persistence ──
   //
@@ -6706,7 +6938,94 @@
     onboardingLoadPersisted();
   });
 
+  // ── Write-access warning at the DOOR, not at the save button ───────────────
+  //
+  // Onboarding ends in "Save to my repo". If the GitHub token can read the repo
+  // but not write to it, that button fails — AFTER the user has answered the
+  // interview questions and spent five AI generations getting there. Twenty
+  // minutes to learn a fact that was knowable before they typed anything.
+  //
+  // So the check runs when onboarding OPENS and says so up front. Three rules
+  // make it safe:
+  //   1. NON-BLOCKING. Fired and NOT awaited, so the entry path is exactly as
+  //      fast as before. The notice appears a moment later, while the user is
+  //      still reading the first screen.
+  //   2. NON-GATING. It is a sentence on the page. Nothing is disabled, no step
+  //      is withheld, and the Download buttons were never affected — so a user
+  //      who cannot write to their repo can still complete the whole flow and
+  //      take the files away by hand. That is the point of saying it early.
+  //   3. FAILS SOFT. Any network error, auth failure, missing endpoint, or
+  //      unreadable response leaves the notice hidden and onboarding behaving
+  //      precisely as it did before this existed. A diagnostic must never be the
+  //      reason a flow breaks.
+  //
+  // It reuses /api/health rather than inventing an endpoint: github:write is
+  // already a check there, with the message and fix written for a human. The
+  // dashboard renders the server's sentences and never invents its own.
+  let onboardingWriteNotice = null;   // { message, fix } while a real failure is known
+
+  function onboardingRenderWriteNotice() {
+    const el = document.getElementById('onboarding-write-warning');
+    if (!el) return;
+    el.textContent = '';
+    if (!onboardingWriteNotice) { el.style.display = 'none'; return; }
+
+    const msg = document.createElement('div');
+    // textContent, not innerHTML — these strings come over the wire and are
+    // rendered as data, exactly as the Setup Check panel treats them.
+    msg.textContent = onboardingWriteNotice.message;
+    el.appendChild(msg);
+
+    if (onboardingWriteNotice.fix) {
+      const fix = document.createElement('div');
+      fix.className = 'setup-fix';
+      fix.textContent = onboardingWriteNotice.fix;
+      el.appendChild(fix);
+    }
+
+    // The reassurance the health endpoint has no way to know: this flow still
+    // works, and there is a way to finish it.
+    const carryOn = document.createElement('div');
+    carryOn.className = 'setup-fix';
+    carryOn.textContent =
+      'You can carry on with onboarding either way — every step works. '
+      + 'Only "Save to my repo" at the end will fail, and the Download buttons '
+      + 'next to it let you save the files yourself.';
+    el.appendChild(carryOn);
+
+    el.style.display = '';
+  }
+
+  // Fire-and-forget. Never awaited by a caller, never throws.
+  async function onboardingProbeWriteAccess() {
+    try {
+      // fetchHealth de-dupes concurrent runs for the same password, so opening
+      // onboarding while the ⚙ panel is checking shares that one request.
+      const data = await fetchHealth(storedPassword() || '');
+      const w = (data.checks || []).find(c => c.check === 'github:write');
+      // ONLY a real failure speaks. github:write reports `informational: true`
+      // when GitHub did not give a usable answer, and an unknown must stay
+      // silent — warning someone whose setup is fine would be worse than saying
+      // nothing. Same rule for a missing check (an older deployment).
+      if (w && !w.ok && !w.informational) {
+        onboardingWriteNotice = { message: w.message, fix: w.fix || '' };
+      } else {
+        onboardingWriteNotice = null;
+      }
+    } catch (_) {
+      // Fail soft: no notice, no toast, no console noise, onboarding untouched.
+      onboardingWriteNotice = null;
+    }
+    onboardingRenderWriteNotice();
+  }
+
   function startOnboarding(isRefresh) {
+    // Kick the write-access probe off at the door rather than inside the
+    // fresh-start reset below, so it covers the resume-prompt path too — a user
+    // resuming a saved run is just as close to the save button as a user
+    // starting over. Deliberately NOT awaited.
+    onboardingProbeWriteAccess();
+
     // Offer the earlier run back BEFORE resetting anything — the reset below is
     // exactly what would destroy it.
     const saved = onboardingLoadPersisted();
@@ -6804,6 +7123,22 @@
 
     if (step === 'companies') onboardingRestoreCompanies(state.companies);
     onboardingRenderInputNotes();
+    // Re-assert the write-access notice against the current state, exactly as
+    // onboardingFreshStart does. The probe fired in startOnboarding may already
+    // have answered while the resume prompt was up, and a resumed run lands on
+    // whatever step it was saved on — so this is the path where the notice
+    // matters MOST: the user is closer to "Save to my repo" than a fresh start
+    // ever is. (The notice itself lives outside the step panels now, which is
+    // what makes it visible on a non-input step at all.)
+    onboardingRenderWriteNotice();
+    // And take down the PREVIOUS attempt's save failure, exactly as
+    // onboardingFreshStart does. A save that failed leaves its panel populated;
+    // "Done" preserves the DOM and keeps the persisted run (only a SUCCESSFUL
+    // save calls onboardingClearPersisted), so resuming lands the user back on
+    // the download step still being told their token cannot write — about a
+    // token they may have fixed in the meantime. Both ids, matching what
+    // onboardingSaveToRepo clears at the start of every attempt.
+    ONBOARDING_SAVE_ERROR_IDS.forEach(clearSaveFailureAt);
     switchOnboardingStep(step);
     switchCoachView('onboarding');
 
@@ -6859,6 +7194,9 @@
     onboardingChatLog = [];
     onboardingHideDiscardConfirm();
     onboardingHideResumePrompt();
+    // A save failure from the PREVIOUS run would otherwise still be sitting on
+    // the download step when this run reaches it.
+    ONBOARDING_SAVE_ERROR_IDS.forEach(clearSaveFailureAt);
 
     // The chat pane is plain DOM, so a second run in the same session would
     // otherwise open on the previous run's messages.
@@ -6880,6 +7218,11 @@
     if (resumePane) resumePane.style.display = 'none';
 
     onboardingRenderInputNotes({ checking: true });
+    // Re-assert the write-access notice against the current state. The probe
+    // started in startOnboarding may already have answered (a second run in the
+    // same session), or may still be in flight — either way this keeps the DOM
+    // and `onboardingWriteNotice` in agreement instead of relying on leftovers.
+    onboardingRenderWriteNotice();
     switchOnboardingStep('input');
     switchCoachView('onboarding');
 
@@ -7340,13 +7683,19 @@
     companyRowsAdd('wl-rows', name, careersUrl);
   }
 
+  // Validation messages are short strings; a failed save arrives as a typed
+  // write failure whose `fix` runs to several sentences. Both go to the same
+  // persistent element, and renderSaveFailure keeps the cause and the steps on
+  // separate lines so the long one stays readable rather than becoming a
+  // paragraph of run-together instructions.
   function watchListShowError(msg) {
-    const el = document.getElementById('wl-error');
-    if (el) { el.textContent = msg; el.style.display = 'block'; }
+    renderSaveFailure(document.getElementById('wl-error'), { error: msg }, msg);
+  }
+  function watchListShowSaveFailure(data, fallback) {
+    renderSaveFailure(document.getElementById('wl-error'), data, fallback);
   }
   function watchListClearError() {
-    const el = document.getElementById('wl-error');
-    if (el) { el.textContent = ''; el.style.display = 'none'; }
+    clearSaveFailure(document.getElementById('wl-error'));
   }
 
   function closeWatchList() {
@@ -7517,7 +7866,7 @@
       });
       const gen = await genRes.json().catch(() => ({}));
       if (!genRes.ok || gen.error || !gen.portalsYml) {
-        watchListShowError(gen.error || 'Could not read those URLs. Check them and try again.');
+        watchListShowSaveFailure(gen, 'Could not read those URLs. Check them and try again.');
         return;
       }
 
@@ -7526,7 +7875,10 @@
       });
       const saved = await saveRes.json().catch(() => ({}));
       if (!saveRes.ok || !saved.success) {
-        watchListShowError(saved.error || 'Could not save your watch list. Please try again.');
+        // save-onboarding is a repo WRITE, so this is where a read-only token,
+        // an SSO-blocked repo or a missing main branch surfaces — each a typed,
+        // multi-sentence instruction, not a one-liner.
+        watchListShowSaveFailure(saved, 'Could not save your watch list. Please try again.');
         return;
       }
 
@@ -8083,18 +8435,35 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
   function onboardingHideDiscardConfirm() {
     const el = document.getElementById('onboarding-discard-confirm');
     if (el) el.style.display = 'none';
+    // The notice belongs to this confirm's Save button. Taking the confirm down
+    // and leaving the failure behind would re-show it on the next open.
+    clearSaveFailureAt('onboarding-confirm-save-error');
   }
 
   // Save the generated files straight to the user's repo. The server refuses if
   // the repo is public (these files hold personal background), so a public-repo
   // response surfaces a clear message and the download buttons remain available.
-  async function onboardingSaveToRepo() {
+  //
+  // A FAILURE IS NOT A TOAST. This is the one button the whole write-diagnostics
+  // change exists for, and its typed failures are ~450-character instructions
+  // containing GitHub and Vercel navigation paths. `showToast` gave the user
+  // three seconds to memorise one, with `pointer-events:none` so it could not
+  // even be selected to copy. It renders into a persistent inline panel beside
+  // the button instead, cause and steps as separate lines. The short
+  // nothing-to-save and success lines stay on toasts, which suit them.
+  async function onboardingSaveToRepo(opts) {
     if (!onboardingResult) {
       showToast('No content to save. Please generate your profile first.');
       return;
     }
+    const errorId = (opts && opts.from === 'confirm')
+      ? 'onboarding-confirm-save-error'
+      : 'onboarding-save-error';
     const btn = document.getElementById('onboarding-save-repo-btn');
     const pw = storedPassword() || '';
+    // Clear BOTH, so a failure left over from the other button is never read as
+    // belonging to this attempt.
+    ONBOARDING_SAVE_ERROR_IDS.forEach(clearSaveFailureAt);
     if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
     try {
       const r = await fetch('/api/coach?action=save-onboarding', {
@@ -8102,7 +8471,7 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
         headers: { 'Content-Type': 'application/json', 'X-Dashboard-Password': pw },
         body: JSON.stringify(onboardingResult),
       });
-      const d = await r.json();
+      const d = await r.json().catch(() => ({}));
       if (r.ok && d.success) {
         onboardingSaved = true;
         onboardingHideDiscardConfirm();
@@ -8111,10 +8480,10 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
         onboardingClearPersisted();
         showToast(`Saved to your repo: ${(d.saved || []).join(', ')}`);
       } else {
-        showToast(d.error || 'Could not save to your repo. Use the download buttons instead.');
+        showSaveFailureAt(errorId, d, 'Could not save to your repo. Use the download buttons instead.');
       }
     } catch (e) {
-      showToast('Could not save to your repo. Use the download buttons instead.');
+      showSaveFailureAt(errorId, null, 'Could not save to your repo — the request did not get through. Check your connection and try again, or use the download buttons above.');
     } finally {
       if (btn) { btn.disabled = false; btn.textContent = 'Save to my repo'; }
     }
@@ -8158,7 +8527,9 @@ After 4-6 substantive exchanges, output [ONBOARDING_READY] on its own line — t
 
   // "Save to my repo" from inside the warning: once the save lands, leaving is safe.
   async function onboardingSaveFromConfirm() {
-    await onboardingSaveToRepo();
+    await onboardingSaveToRepo({ from: 'confirm' });
+    // On failure the confirm stays open with the reason under its own Save
+    // button — leaving would discard the files the user just tried to keep.
     if (onboardingSaved) onboardingLeaveOnboarding();
   }
 

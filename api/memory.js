@@ -28,7 +28,7 @@
 // Pure logic (assembly, capping, prompts, parsing) lives in lib/memory.mjs so it
 // is unit-tested in isolation. This file is the thin I/O shell.
 
-import { readGithubText, writeGithubFile, assertRepoPrivate, RepoPublicError } from '../lib/github.js';
+import { readGithubText, writeGithubFile, assertRepoPrivate, RepoPublicError, githubWriteErrorResponse } from '../lib/github.js';
 import { safeEqual } from '../lib/auth.mjs';
 import {
   MEMORY_KEYS,
@@ -104,6 +104,13 @@ async function handleSaveMemory(req, res, githubToken, owner, repo) {
       return res.status(403).json({ error: err.message, code: 'REPO_PUBLIC' });
     }
     console.error('[memory] save-memory error:', err);
+    // "Something went wrong. Please try again." was the vaguest message in the
+    // app and the one least able to help: a read-only GH_TOKEN produced it on
+    // every Save, forever. A typed write failure names the cause instead. Only
+    // curated copy crosses this line — GitHub's raw body stays in the
+    // console.error above (see lib/github.js).
+    const gh = githubWriteErrorResponse(err);
+    if (gh) return res.status(gh.status).json(gh.body);
     return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }
@@ -215,6 +222,17 @@ async function handleUpdateMemory(req, res, githubToken, owner, repo) {
       return res.status(403).json({ error: err.message, code: 'REPO_PUBLIC' });
     }
     console.error('[memory] update-memory error:', err);
+    // Deliberately still 200: the dashboard fires this and does NOT await it, so
+    // there is no user-facing response to improve and a non-2xx here would only
+    // break that documented contract. What DOES change is that the skip reason now
+    // carries the typed code, so "memory silently stopped updating" is greppable
+    // in the Vercel logs as writeAccess=GH_WRITE_FORBIDDEN rather than as a bare
+    // stack trace. The code is a fixed enum from lib/github.js, never wire data.
+    const gh = githubWriteErrorResponse(err);
+    if (gh) {
+      console.error(`[memory] update-memory: writes are failing with ${gh.body.code} — memory will stay stale until that is fixed`);
+      return res.status(200).json({ updated: [], skipped: true, reason: 'error', code: gh.body.code });
+    }
     return res.status(200).json({ updated: [], skipped: true, reason: 'error' });
   }
 }
